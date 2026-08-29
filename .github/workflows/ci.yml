@@ -1,0 +1,28 @@
+name: core-ci
+
+on:
+  push:
+    branches:
+      - main
+      - feature/e1-hms-service-binding
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  foundation:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install pinned toolchain
+        run: npm install --no-save --ignore-scripts typescript@5.9.2 wrangler@4.127.1
+      - name: Typecheck and tests
+        run: npm run qa
+      - name: Validate Cloudflare Worker config
+        run: npx wrangler deploy --dry-run
