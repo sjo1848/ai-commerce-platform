@@ -24,6 +24,31 @@ test("webchat vertical slice returns structured availability", async () => {
   assert.equal(r.usage.events.some((event) => event.kind === "tool_call"), true);
 });
 
+test("webchat vertical slice returns structured quote", async () => {
+  const r = runtime();
+  const handler = createWebchatHandler(r);
+  const response = await post(handler, { message: "Cotizame room-102 del 2026-09-10 al 2026-09-12" });
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.ok(body.sessionId);
+  assert.equal(body.data.roomId, "room-102");
+  assert.equal(body.data.nights, 2);
+  assert.equal(body.data.nightlyRateCents, 82000);
+  assert.equal(body.data.totalCents, 164000);
+  assert.equal(body.data.currency, "ARS");
+  assert.equal(r.audit.events.some((event) => event.toolId === "hms.getQuote" && event.status === "succeeded"), true);
+});
+
+test("quote intent cannot invent a room identifier", async () => {
+  const r = runtime();
+  const handler = createWebchatHandler(r);
+  const response = await post(handler, { message: "¿Cuánto sale del 2026-09-10 al 2026-09-12?" });
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.match(body.message, /identificador de la habitación/i);
+  assert.equal(r.audit.events.length, 0);
+});
+
 test("webchat session continues only within same tenant/actor", async () => {
   const r = runtime();
   const handler = createWebchatHandler(r);
