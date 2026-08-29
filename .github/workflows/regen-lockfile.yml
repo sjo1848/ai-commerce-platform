@@ -1,5 +1,6 @@
 name: Regenerate lockfile
 
+# One-shot reproducibility helper. Remove after package-lock.json is committed.
 on:
   push:
     branches:
