@@ -11,8 +11,9 @@ function extractGuests(message: string): number | undefined {
 }
 
 function extractRoomId(message: string): string | undefined {
-  const uuid = message.match(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/i)?.[0];
-  if (uuid) return uuid;
+  // HMS identifiers are UUID-shaped but are not required to encode an RFC UUID version/variant.
+  const hmsId = message.match(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i)?.[0];
+  if (hmsId) return hmsId;
   return message.match(/\broom-[a-z0-9_-]+\b/i)?.[0];
 }
 
