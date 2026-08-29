@@ -7,12 +7,13 @@ import { PolicyEngine } from "./policy.js";
 import { InMemorySessionStore, SessionManager } from "./session.js";
 import { TenantResolver } from "./tenant-resolver.js";
 import { ToolRegistry } from "./tool-registry.js";
-import type { Actor, Channel, ExecutionContext, Tenant } from "./types.js";
+import type { Actor, Channel, ExecutionContext, Tenant, ToolDefinition } from "./types.js";
 import { InMemoryUsageSink } from "./usage.js";
 import { FakeHmsAdapter } from "../adapters/fake-hms.js";
 
 export type RuntimeConfig = {
   tenants: readonly Tenant[];
+  tools?: readonly ToolDefinition<any, any>[];
   now?: () => Date;
 };
 
@@ -32,9 +33,17 @@ export class AgentCoreRuntime {
   constructor(config: RuntimeConfig) {
     this.tenantResolver = new TenantResolver(config.tenants);
     this.now = config.now ?? (() => new Date());
-    const hms = new FakeHmsAdapter();
-    this.registry.register(hms.checkAvailabilityTool());
-    this.registry.register(hms.getQuoteTool());
+
+    if (config.tools) {
+      for (const tool of config.tools) this.registry.register(tool);
+    } else {
+      // Phase-1 reproducibility: the fake remains the default only when no real
+      // vertical tools are injected by the deployment runtime.
+      const hms = new FakeHmsAdapter();
+      this.registry.register(hms.checkAvailabilityTool());
+      this.registry.register(hms.getQuoteTool());
+    }
+
     this.executor = new AgentCoreExecutor(this.registry, this.policy, this.audit, this.usage, this.idempotency);
     this.orchestrator = new ChatOrchestrator(new DeterministicModelRouter(), this.registry, this.executor, this.usage, this.audit);
   }
