@@ -1,25 +1,41 @@
+import { HmsServiceBindingAdapter, type HmsRpcService } from "./adapters/hms-service-binding.js";
 import { AgentCoreRuntime } from "./core/runtime.js";
 import { createWebchatHandler } from "./webchat/handler.js";
 
-const runtime = new AgentCoreRuntime({
-  tenants: [
-    {
-      id: "hotel-demo",
-      slug: "hotel-demo",
-      status: "active",
-      allowedToolIds: ["hms.checkAvailability", "hms.getQuote"],
-      toolPolicies: {
-        "hms.checkAvailability": "auto",
-        "hms.getQuote": "auto",
-      },
-    },
-  ],
-});
+type Env = {
+  HMS: HmsRpcService;
+};
 
-const handle = createWebchatHandler(runtime);
+const tenant = {
+  id: "hotel-demo",
+  slug: "hotel-demo",
+  status: "active" as const,
+  allowedToolIds: ["hms.checkAvailability", "hms.getQuote"],
+  toolPolicies: {
+    "hms.checkAvailability": "auto" as const,
+    "hms.getQuote": "auto" as const,
+  },
+};
+
+let handle: ((request: Request) => Promise<Response>) | undefined;
+
+function handler(env: Env): (request: Request) => Promise<Response> {
+  if (handle) return handle;
+
+  const hms = new HmsServiceBindingAdapter(env.HMS, {
+    // Trusted deployment mapping. User/model input cannot choose this hotel id.
+    "hotel-demo": { hotelId: "10000000-0000-0000-0000-000000000001" },
+  });
+  const runtime = new AgentCoreRuntime({
+    tenants: [tenant],
+    tools: [hms.checkAvailabilityTool(), hms.getQuoteTool()],
+  });
+  handle = createWebchatHandler(runtime, { fixedTenantId: "hotel-demo" });
+  return handle;
+}
 
 export default {
-  fetch(request: Request): Promise<Response> {
-    return handle(request);
+  fetch(request: Request, env: Env): Promise<Response> {
+    return handler(env)(request);
   },
 };
