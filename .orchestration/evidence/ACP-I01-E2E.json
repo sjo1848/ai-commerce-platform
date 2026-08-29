@@ -1,0 +1,79 @@
+{
+  "status": 200,
+  "body": {
+    "message": "Operación completada.",
+    "sessionId": "c6b7d417-7934-4cf8-a76d-59747526f27a",
+    "data": {
+      "source": "fake-hms",
+      "truth": "transactional",
+      "checkIn": "2026-09-10",
+      "checkOut": "2026-09-12",
+      "guests": 2,
+      "rooms": [
+        {
+          "id": "room-102",
+          "roomNumber": "102",
+          "roomType": "Standard",
+          "capacity": 3,
+          "priceCents": 82000,
+          "currency": "ARS"
+        },
+        {
+          "id": "room-201",
+          "roomNumber": "201",
+          "roomType": "Suite",
+          "capacity": 4,
+          "priceCents": 120000,
+          "currency": "ARS"
+        }
+      ]
+    }
+  },
+  "audit": [
+    {
+      "timestamp": "2026-08-29T13:30:00.000Z",
+      "requestId": "3f8a22bc-cb56-4eaa-8f13-bd1b250b6e89",
+      "tenantId": "hotel-demo",
+      "actorId": "anonymous",
+      "sessionId": "c6b7d417-7934-4cf8-a76d-59747526f27a",
+      "toolId": "hms.checkAvailability",
+      "status": "allowed"
+    },
+    {
+      "timestamp": "2026-08-29T13:30:00.000Z",
+      "requestId": "3f8a22bc-cb56-4eaa-8f13-bd1b250b6e89",
+      "tenantId": "hotel-demo",
+      "actorId": "anonymous",
+      "sessionId": "c6b7d417-7934-4cf8-a76d-59747526f27a",
+      "toolId": "hms.checkAvailability",
+      "status": "succeeded"
+    }
+  ],
+  "usage": [
+    {
+      "timestamp": "2026-08-29T13:30:00.000Z",
+      "tenantId": "hotel-demo",
+      "sessionId": "c6b7d417-7934-4cf8-a76d-59747526f27a",
+      "kind": "message",
+      "units": 1,
+      "estimatedCostUsd": 0
+    },
+    {
+      "timestamp": "2026-08-29T13:30:00.000Z",
+      "tenantId": "hotel-demo",
+      "sessionId": "c6b7d417-7934-4cf8-a76d-59747526f27a",
+      "kind": "model_route",
+      "units": 1,
+      "estimatedCostUsd": 0
+    },
+    {
+      "timestamp": "2026-08-29T13:30:00.000Z",
+      "tenantId": "hotel-demo",
+      "sessionId": "c6b7d417-7934-4cf8-a76d-59747526f27a",
+      "kind": "tool_call",
+      "units": 1,
+      "estimatedCostUsd": 0,
+      "label": "hms.checkAvailability"
+    }
+  ]
+}

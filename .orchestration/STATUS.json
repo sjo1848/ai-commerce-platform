@@ -1,0 +1,13 @@
+{
+  "phase": "PHASE_1_AGENT_CORE",
+  "runtime_status": "TECHNICAL_PASS",
+  "resume_authorized": false,
+  "active_task": null,
+  "last_completed_task": "ACP-I01",
+  "last_completed_head": "a37e41827e5e1195258e0b42ab11653acea8ec4e",
+  "current_substage": "1.8_CLOSED",
+  "next_action": "PHASE_2_HMS_PRODUCT_ACCEPTANCE_GATE",
+  "stop_reason": "AUTHORIZED_PHASE_1_SCOPE_COMPLETE",
+  "external_review": { "required": false },
+  "event": { "id": "ACP-I01-TECHNICAL-PASS", "type": "PHASE_COMPLETE", "seq": 3 }
+}
