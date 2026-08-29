@@ -8,7 +8,12 @@
     {
       "binding": "HMS",
       "service": "hms-cloudflare-api-staging",
-      "entrypoint": "AgentHmsService"
+      "entrypoint": "AgentHmsService",
+      "props": {
+        "clientId": "ai-commerce-platform",
+        "permissions": ["availability.read", "quote.read"],
+        "allowedHotelIds": ["10000000-0000-0000-0000-000000000001"]
+      }
     }
   ]
 }
