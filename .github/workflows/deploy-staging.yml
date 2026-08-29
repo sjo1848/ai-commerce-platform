@@ -1,0 +1,120 @@
+name: Deploy AI Commerce staging
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - acceptance/staging
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-commerce-staging
+  cancel-in-progress: false
+
+jobs:
+  deploy-and-e1-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      WORKER_NAME: ai-commerce-agent-core
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install locked toolchain
+        run: npm ci
+
+      - name: Foundation gate
+        run: npm run qa
+
+      - name: Verify Cloudflare credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_API_TOKEN"
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          npx wrangler whoami
+
+      - name: Validate and deploy Agent Core Worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler deploy --dry-run
+          npx wrangler deploy
+
+      - name: Resolve workers.dev URL
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain")"
+          subdomain="$(printf '%s' "$payload" | node -e '
+            const fs=require("fs");
+            const p=JSON.parse(fs.readFileSync(0,"utf8"));
+            if (!p?.success || !p?.result?.subdomain) process.exit(2);
+            process.stdout.write(p.result.subdomain);
+          ')"
+          echo "AI_COMMERCE_STAGING_URL=https://$WORKER_NAME.$subdomain.workers.dev" >> "$GITHUB_ENV"
+
+      - name: E1 real availability through HMS Service Binding
+        shell: bash
+        run: |
+          set -euo pipefail
+          response="$(curl -fsS --max-time 20 \
+            -H 'content-type: application/json' \
+            -H 'x-request-id: e1-staging-availability' \
+            -X POST "$AI_COMMERCE_STAGING_URL/api/chat" \
+            --data '{"message":"disponibilidad 2027-01-15 2027-01-17 para 1 persona"}')"
+          printf '%s' "$response" > /tmp/e1-availability.json
+          node - <<'NODE'
+          const fs = require('fs');
+          const body = JSON.parse(fs.readFileSync('/tmp/e1-availability.json', 'utf8'));
+          if (!body.sessionId) throw new Error('E1 availability missing sessionId');
+          if (body?.data?.source !== 'hms') throw new Error('E1 availability did not come from HMS');
+          if (body?.data?.truth !== 'transactional') throw new Error('E1 availability is not transactional truth');
+          if (!Array.isArray(body?.data?.rooms) || body.data.rooms.length < 1) throw new Error('E1 availability returned no rooms');
+          const roomId = body.data.rooms[0]?.id;
+          if (typeof roomId !== 'string' || !roomId) throw new Error('E1 availability missing room id');
+          fs.appendFileSync(process.env.GITHUB_ENV, `E1_SESSION_ID=${body.sessionId}\nE1_ROOM_ID=${roomId}\n`);
+          NODE
+
+      - name: E1 real quote through same HMS Service Binding
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(E1_ROOM_ID="$E1_ROOM_ID" E1_SESSION_ID="$E1_SESSION_ID" node -e '
+            process.stdout.write(JSON.stringify({
+              message: `cotizame ${process.env.E1_ROOM_ID} del 2027-01-15 al 2027-01-17`,
+              sessionId: process.env.E1_SESSION_ID
+            }));
+          ')"
+          response="$(curl -fsS --max-time 20 \
+            -H 'content-type: application/json' \
+            -H 'x-request-id: e1-staging-quote' \
+            -X POST "$AI_COMMERCE_STAGING_URL/api/chat" \
+            --data "$payload")"
+          printf '%s' "$response" > /tmp/e1-quote.json
+          E1_ROOM_ID="$E1_ROOM_ID" node - <<'NODE'
+          const fs = require('fs');
+          const body = JSON.parse(fs.readFileSync('/tmp/e1-quote.json', 'utf8'));
+          if (body?.data?.source !== 'hms') throw new Error('E1 quote did not come from HMS');
+          if (body?.data?.truth !== 'transactional') throw new Error('E1 quote is not transactional truth');
+          if (body?.data?.roomId !== process.env.E1_ROOM_ID) throw new Error('E1 quote room differs from availability room');
+          if (!Number.isInteger(body?.data?.nights) || body.data.nights !== 2) throw new Error('E1 quote nights mismatch');
+          if (!Number.isInteger(body?.data?.totalCents) || body.data.totalCents <= 0) throw new Error('E1 quote total is invalid');
+          if (body?.data?.currency !== 'ARS') throw new Error('E1 quote currency mismatch');
+          NODE
+
+      - name: E1 staging handoff
+        run: |
+          echo "E1 REAL PASS: webchat -> Agent Core -> Service Binding -> HMS -> D1"
+          echo "AI_COMMERCE_STAGING_URL=$AI_COMMERCE_STAGING_URL"
+          echo "E1_ROOM_ID=$E1_ROOM_ID"
