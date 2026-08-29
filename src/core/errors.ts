@@ -5,6 +5,8 @@ export type CoreErrorCode =
   | "TENANT_MISMATCH"
   | "SESSION_EXPIRED"
   | "FORBIDDEN"
+  | "NOT_FOUND"
+  | "CONFLICT"
   | "TOOL_NOT_FOUND"
   | "TOOL_NOT_ALLOWED"
   | "APPROVAL_REQUIRED"
