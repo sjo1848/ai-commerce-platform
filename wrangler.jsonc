@@ -3,5 +3,12 @@
   "name": "ai-commerce-agent-core",
   "main": "src/worker.ts",
   "compatibility_date": "2026-08-29",
-  "workers_dev": true
+  "workers_dev": true,
+  "services": [
+    {
+      "binding": "HMS",
+      "service": "hms-cloudflare-api-staging",
+      "entrypoint": "AgentHmsService"
+    }
+  ]
 }
