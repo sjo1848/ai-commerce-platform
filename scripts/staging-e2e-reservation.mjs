@@ -3,11 +3,13 @@ import assert from "node:assert/strict";
 const baseUrl = process.env.AI_COMMERCE_STAGING_URL?.replace(/\/$/, "");
 assert(baseUrl, "AI_COMMERCE_STAGING_URL is required");
 
+// Staging guest identity is now server-bound from trusted tenant+actor context.
+// This value is used only to verify the authoritative HMS result; it is never
+// sent as model/user input.
 const guestId = process.env.ACP25_GUEST_ID || "12000000-0000-0000-0000-000000000001";
-const conflictGuestId = process.env.ACP25_CONFLICT_GUEST_ID || "12000000-0000-0000-0000-000000000002";
 const runId = process.env.GITHUB_RUN_ID || "local";
 const runAttempt = process.env.GITHUB_RUN_ATTEMPT || "1";
-const prefix = `acp25-${runId}-${runAttempt}`;
+const prefix = `acp26-${runId}-${runAttempt}`;
 let requestSeq = 0;
 
 function isoDate(ms) {
@@ -108,12 +110,14 @@ try {
   roomId = initial.body.data.rooms[0]?.id;
   assert.ok(roomId, "availability returned room without id");
 
-  const createMessage = `reservar habitación ${roomId} huésped ${guestId} del ${start} al ${end}`;
+  // No guest UUID is supplied. The canonical reservation plan must inject the
+  // trusted staging guest identity from tenant+actor before HITL fingerprinting.
+  const createMessage = `reservar habitación ${roomId} del ${start} al ${end}`;
   const created = await approvedMutation({ message: createMessage, sessionId, idempotencyKey: createKey });
   const createdData = created.body?.data;
   assertHmsTransactional(createdData, "create");
   assert.equal(createdData?.roomId, roomId, "create room mismatch");
-  assert.equal(createdData?.guestId, guestId, "create guest mismatch");
+  assert.equal(createdData?.guestId, guestId, "create must use server-bound guest identity");
   assert.equal(createdData?.start, start, "create start mismatch");
   assert.equal(createdData?.end, end, "create end mismatch");
   assert.equal(createdData?.status, "CONFIRMED", "create status mismatch");
@@ -127,7 +131,11 @@ try {
   assert.equal(replay.body?.data?.bookingId, bookingId, "create replay booking mismatch");
   assert.equal(replay.body?.data?.replayed, true, "second create must be authoritative HMS replay");
 
-  const conflictMessage = `reservar habitación ${roomId} huésped ${conflictGuestId} del ${start} al ${end}`;
+  // Preserve the downstream idempotency conflict invariant without attempting
+  // to spoof guest identity. Same operation token + different canonical dates
+  // must conflict authoritatively in HMS.
+  const conflictEnd = addDays(end, 1);
+  const conflictMessage = `reservar habitación ${roomId} del ${start} al ${conflictEnd}`;
   await approvedMutation({
     message: conflictMessage,
     sessionId,
@@ -157,13 +165,15 @@ try {
   cleanupComplete = true;
 
   console.log(JSON.stringify({
-    event: "ACP_2_5_E2E_PASS",
+    event: "ACP_2_6_E2E_PASS",
     start,
     end,
     roomId,
     bookingId,
+    guestIdentity: "server_bound",
     checks: [
       "hitl_required",
+      "server_bound_guest_identity",
       "create",
       "authoritative_create_replay",
       "same_token_payload_conflict",
@@ -188,12 +198,12 @@ try {
       assert.equal(cleanup.body?.data?.bookingId, bookingId, "best-effort cleanup booking mismatch");
       assert.equal(cleanup.body?.data?.status, "CANCELLED", "best-effort cleanup status mismatch");
       cleanupComplete = true;
-      console.error("ACP 2.5 best-effort cleanup completed after a failed assertion.");
+      console.error("ACP 2.6 best-effort cleanup completed after a failed assertion.");
     } catch (cleanupError) {
-      console.error("ACP 2.5 best-effort cleanup failed:", cleanupError);
+      console.error("ACP 2.6 best-effort cleanup failed:", cleanupError);
     }
   }
 }
 
 if (primaryError) throw primaryError;
-assert.equal(cleanupComplete, true, "ACP 2.5 E2E exited without confirmed cleanup");
+assert.equal(cleanupComplete, true, "ACP 2.6 E2E exited without confirmed cleanup");
