@@ -65,6 +65,10 @@ function schemaProperties(schema: JsonSchema | undefined): ReadonlySet<string> |
   return new Set(Object.keys(properties));
 }
 
+function schemaRequires(schema: JsonSchema | undefined, field: string): boolean {
+  return Array.isArray(schema?.required) && schema.required.includes(field);
+}
+
 function hasUnknownTopLevelInput(input: Record<string, unknown>, tool: ToolDescriptor): boolean {
   const allowed = schemaProperties(tool.inputSchema);
   if (!allowed) return false;
@@ -90,6 +94,21 @@ function clarificationDecision(value: Record<string, unknown>): { reason: Clarif
   const missing = [...new Set(value.missing)];
   if (!missing.every((item): item is ClarificationField => typeof item === "string" && CLARIFICATION_FIELDS.includes(item as ClarificationField))) return undefined;
   return { reason: value.clarificationReason as ClarificationReason, missing };
+}
+
+function isReservationIntent(message: string): boolean {
+  if (/\b(cancelar|cancela|anular|anula)\b/i.test(message) && /\b(reserva|booking)\b/i.test(message)) return false;
+  return /\b(reservar|reserv[aá]|confirmar\s+(?:la\s+)?reserva|hacer\s+(?:una\s+)?reserva)\b/i.test(message);
+}
+
+function clarificationContradictsCapability(
+  message: string,
+  clarification: { reason: ClarificationReason; missing: ClarificationField[] },
+  tools: readonly ToolDescriptor[],
+): boolean {
+  if (clarification.reason !== "missing" || !clarification.missing.includes("guests") || !isReservationIntent(message)) return false;
+  const reservationTool = tools.find((tool) => tool.id === "hms.createReservation");
+  return Boolean(reservationTool && !schemaRequires(reservationTool.inputSchema, "guests"));
 }
 
 function clarificationMessage(reason: ClarificationReason, missing: readonly ClarificationField[]): string {
@@ -127,7 +146,7 @@ function capabilityRequirements(tools: readonly ToolDescriptor[]): string {
   }
   if (ids.has("hms.createReservation")) {
     rules.push(
-      "hms.createReservation: use only for reservation intent with a grounded room/selection + dates. Guest identity is server-bound and MUST NOT be requested as a UUID or supplied in model input. Approval is external to the model.",
+      "hms.createReservation: use only for reservation intent. Critical arguments are a grounded room/selection + dates ONLY. Guest count is NOT a reservation argument and MUST NEVER be requested or listed as missing for this capability. Guest identity is server-bound and MUST NOT be requested as a UUID or supplied in model input. Approval is external to the model. Do not inherit the guests requirement from a previous availability step.",
     );
   }
   if (ids.has("hms.cancelReservation")) {
@@ -172,13 +191,15 @@ export class LLMModelRouter implements ModelRouter {
     const system = [
       "You are the planning layer for a hotel assistant. You interpret Argentine Spanish naturally but you do not execute operations or write factual answers.",
       "Return only the structured route required by the JSON schema.",
-      "FIRST identify the user's current intent. THEN apply the critical arguments for that specific capability. Never borrow requirements from a later step in the journey.",
+      "FIRST identify the user's current intent. THEN apply the critical arguments for that specific capability. Never borrow requirements from a later or earlier step in the journey.",
       "Capability-specific routing rules:",
       requirements || "(no capabilities)",
       "Important negative rule: an availability/search request NEVER needs a room, selection or booking. If dates and guests are present, route directly to hms.checkAvailability.",
+      "Important negative rule: a reservation request NEVER needs guest count when hms.createReservation does not expose guests in its input schema. If room and dates are grounded, route directly to hms.createReservation and let external policy require approval.",
       "Interpret ordinary date phrasing. Example: 'del 15 al 17 de enero de 2027' means checkIn=2027-01-15 and checkOut=2027-01-17.",
       "Example: 'Hola, somos dos y queremos quedarnos del 15 al 17 de enero de 2027. ¿Tenés algo disponible?' => kind=tool, toolId=hms.checkAvailability, input={checkIn:'2027-01-15',checkOut:'2027-01-17',guests:2}, clarificationReason=none, missing=[].",
       "Example after an HMS availability result: '¿Cuánto sale la primera?' => hms.getQuote using the first roomId and the same dates from conversation history.",
+      "Example reservation with server-bound identity: 'reservar habitación 11000000-0000-0000-0000-000000000001 del 2032-01-10 al 2032-01-12' => kind=tool, toolId=hms.createReservation, input={roomId:'11000000-0000-0000-0000-000000000001',checkIn:'2032-01-10',checkOut:'2032-01-12'}, clarificationReason=none, missing=[]. Do NOT ask how many guests.",
       "For kind=tool: select one visible tool and supply only grounded business arguments; set clarificationReason=none and missing=[].",
       "For kind=message: do not answer in prose. Classify why execution cannot proceed using clarificationReason and missing fields; toolId must be empty and input must be {}.",
       "Use clarificationReason=missing when critical information for the CURRENT capability is absent, ambiguous when a reference needed by the CURRENT capability cannot be resolved safely, unsupported when no visible capability fits.",
@@ -219,6 +240,9 @@ export class LLMModelRouter implements ModelRouter {
       if (value.kind === "message") {
         if (value.toolId !== "" || !isRecord(value.input) || Object.keys(value.input).length !== 0 || clarification.reason === "none") {
           return this.fallbackRoute("invalid_message_route", message, context, availableTools, conversation);
+        }
+        if (clarificationContradictsCapability(message, clarification, availableTools)) {
+          return this.fallbackRoute("non_required_reservation_guests_clarification", message, context, availableTools, conversation);
         }
         return { kind: "message", message: clarificationMessage(clarification.reason, clarification.missing) };
       }
