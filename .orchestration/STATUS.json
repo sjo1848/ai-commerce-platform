@@ -3,41 +3,45 @@
   "runtime_status": "HUMAN_GATE",
   "resume_authorized": false,
   "active_task": "ACP-2.6-LLM-MODEL-ROUTER",
-  "last_completed_task": "ACP-2.6-CONVERSATIONAL-STAGING-E2E",
-  "last_completed_head": "6ea974c725b6ca288da8501ef28f5a2f11d2a5fa",
+  "last_completed_task": "ACP-2.6.9-HUMAN-PRODUCT-ACCEPTANCE-REWORK",
+  "last_completed_head": "aa8f2ae1562cb67094714efb5cfeb29777c843ec",
   "current_substage": "2.6.9_HUMAN_PRODUCT_ACCEPTANCE",
   "next_action": "HUMAN_PRODUCT_ACCEPTANCE_ACP_2_6",
-  "stop_reason": "TECHNICAL_GATES_PASS_AWAITING_HUMAN_PRODUCT_VERDICT",
+  "stop_reason": "AUTOMATED_CRITIC_AND_STAGING_REWORK_GATES_PASS_AWAITING_HUMAN_PRODUCT_VERDICT",
   "product_decision": {
     "id": "DEC-002",
     "decision": "CONSOLIDATE_AI_EXPERIENCE_IN_HMS_BEFORE_SECOND_VERTICAL",
     "phase_3_alquileres_blocked_until_2_6_accept": true
   },
   "last_gate": {
-    "task": "ACP-2.6-CONVERSATIONAL-STAGING-E2E",
-    "type": "TECHNICAL_AND_INDEPENDENT_REVIEW",
+    "task": "ACP-2.6.9-HUMAN-PRODUCT-ACCEPTANCE-REWORK",
+    "type": "TECHNICAL_REWORK_AND_INDEPENDENT_REVIEW",
     "verdict": "PASS",
-    "closure_path": ".orchestration/evidence/ACP-2.6.8-REAL-MODEL-STAGING.md"
+    "closure_path": ".orchestration/evidence/ACP-2.6.9-REWORK-CLOSURE.md"
   },
   "2_6_evidence": {
-    "runtime_artifact": "3468026011170f7bb9106d1a2b7e6d1ecf2d7cdd",
-    "artifact_ci_run": 33319324060,
+    "runtime_artifact": "9ec9f062dfdc8ad9a73bb2646338d932b77c4c19",
+    "artifact_ci_run": 33322906416,
+    "foundation_tests": "84/84_PASS",
     "pre_critic": "PASS",
     "independent_critic": "PASS",
-    "integration_head": "97522064a63d7dfb3d9691414b52c1fe5da5d12b",
-    "post_merge_ci_run": 33319393065,
-    "staging_head": "6ea974c725b6ca288da8501ef28f5a2f11d2a5fa",
-    "staging_deploy_run": 33319422840,
-    "foundation_tests": "75/75_PASS",
+    "integration_head": "38ed24aa272e9e75e1ee0a62c0dab37019a5b408",
+    "post_merge_ci_run": 33322945318,
+    "staging_head": "aa8f2ae1562cb67094714efb5cfeb29777c843ec",
+    "staging_deploy_run": 33322986328,
+    "staging_deploy_result": "PASS",
     "e1_natural_same_session": "PASS",
-    "real_model_evaluator": "5/5_PASS",
-    "natural_correctness": 1,
-    "safety": true,
-    "evaluator_model_inferences": 7,
-    "evaluator_model_fallbacks": 0,
+    "structured_conversation_state": "PASS",
+    "ordinal_room_grounding": "PASS",
+    "known_fact_reuse": "PASS",
+    "missing_required_field_clarification": "PASS",
+    "real_model_evaluator": "PASS",
     "e2_controlled_reservation": "PASS",
     "guest_identity": "SERVER_BOUND",
-    "inventory_restored": true
+    "hitl": "PASS",
+    "idempotency_and_ownership": "PASS",
+    "inventory_restored": true,
+    "staging_handoff": "PASS"
   },
   "2_6_contract": ".orchestration/contracts/ACP-2.6-LLM-MODEL-ROUTER.md",
   "2_6_sequence": [
@@ -54,7 +58,9 @@
   "human_gate": {
     "type": "PRODUCT_ACCEPTANCE",
     "required_verdicts": ["ACCEPT", "REWORK"],
-    "verdict": null
+    "verdict": null,
+    "previous_verdict": "REWORK",
+    "rework_technical_status": "PASS"
   },
   "constraints": {
     "environment": "staging_only",
@@ -67,8 +73,8 @@
     "human_approval_required_for_mutations": true
   },
   "event": {
-    "id": "ACP-2.6.8-TECHNICAL-PASS-OPEN-2.6.9",
+    "id": "ACP-2.6.9-REWORK-TECHNICAL-PASS-RETURN-HUMAN-GATE",
     "type": "HUMAN_GATE",
-    "seq": 10
+    "seq": 11
   }
 }
