@@ -4,8 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "build": "tsc -p tsconfig.json",
+    "types:generate": "wrangler types",
+    "typecheck": "npm run types:generate && tsc -p tsconfig.json --noEmit",
+    "build": "npm run types:generate && tsc -p tsconfig.json",
     "test": "npm run build && node --test test/*.test.mjs",
     "qa": "npm run typecheck && npm test",
     "wrangler:dry-run": "wrangler deploy --dry-run"
