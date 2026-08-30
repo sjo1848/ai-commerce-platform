@@ -93,6 +93,7 @@ test("bundle schema is model-visible without guest identity and exact bundle is 
   const bundle = tools.find((tool) => tool.id === "hms.createReservationBundle");
   assert.ok(bundle);
   assert.equal(Object.hasOwn(bundle.inputSchema.properties, "guestId"), false);
+  assert.equal(bundle.idempotencyMode, "core");
   assert.deepEqual(bundle.inputSchema.required, ["roomIds", "checkIn", "checkOut"]);
 
   const raw = {
@@ -105,11 +106,12 @@ test("bundle schema is model-visible without guest identity and exact bundle is 
     ],
   };
   const { context, fingerprint } = await approval(runtime, actor, raw, "bundle-parent");
-  const result = await runtime.executor.execute("hms.createReservationBundle", raw, context, {
+  const meta = {
     idempotencyKey: "bundle-parent",
     humanApproved: true,
     approvedOperationFingerprint: fingerprint,
-  });
+  };
+  const result = await runtime.executor.execute("hms.createReservationBundle", raw, context, meta);
 
   assert.equal(result.status, "CONFIRMED");
   assert.equal(result.bookings.length, 2);
@@ -118,6 +120,10 @@ test("bundle schema is model-visible without guest identity and exact bundle is 
   assert.ok(calls.creates.every((call) => call.guestId === trustedGuestId));
   assert.match(calls.creates[0].notes, /3 huéspedes/i);
   assert.match(calls.creates[0].notes, /no valida capacidad/i);
+
+  const replay = await runtime.executor.execute("hms.createReservationBundle", raw, context, meta);
+  assert.deepEqual(replay, result);
+  assert.equal(calls.creates.length, 2, "parent replay must not re-enter child HMS creates");
 });
 
 test("bundle approval fingerprint changes when the exact room bundle changes", async () => {
@@ -127,15 +133,16 @@ test("bundle approval fingerprint changes when the exact room bundle changes", a
   assert.notEqual(first.fingerprint, second.fingerprint);
 });
 
-test("bundle partial create failure compensates prior room and never reports partial confirmation", async () => {
+test("bundle partial create failure compensates prior room and replays terminal compensated result", async () => {
   const { runtime, actor, calls } = setup({ failRoomId: room101 });
   const raw = { roomIds: [room102, room101], checkIn: "2034-02-10", checkOut: "2034-02-12" };
   const { context, fingerprint } = await approval(runtime, actor, raw, "bundle-compensate");
-  const result = await runtime.executor.execute("hms.createReservationBundle", raw, context, {
+  const meta = {
     idempotencyKey: "bundle-compensate",
     humanApproved: true,
     approvedOperationFingerprint: fingerprint,
-  });
+  };
+  const result = await runtime.executor.execute("hms.createReservationBundle", raw, context, meta);
 
   assert.equal(result.status, "FAILED_COMPENSATED");
   assert.deepEqual(result.bookings, []);
@@ -143,6 +150,11 @@ test("bundle partial create failure compensates prior room and never reports par
   assert.equal(calls.cancels.length, 1);
   assert.equal(calls.cancels[0].operationToken, "bundle-compensate:room:1");
   assert.deepEqual(result.compensatedBookingIds, ["13000000-0000-0000-0000-000000000102"]);
+
+  const replay = await runtime.executor.execute("hms.createReservationBundle", raw, context, meta);
+  assert.deepEqual(replay, result);
+  assert.equal(calls.creates.length, 2, "compensated parent replay must not create again");
+  assert.equal(calls.cancels.length, 1, "compensated parent replay must not compensate twice");
 });
 
 test("bundle partial failure with failed compensation fails closed as an exceptional state", async () => {
