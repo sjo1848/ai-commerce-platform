@@ -7,15 +7,21 @@
   "last_completed_head": "43b9d75371ed29604509537dac898e059534fbcb",
   "current_substage": "2.5_CONTROLLED_SIDE_EFFECT",
   "work_branch": "feature/acp-2-5-controlled-reservation",
-  "artifact_head": "cec61660187969923da7ae34af524b094e9e762d",
-  "next_action": "INDEPENDENT_CRITIC_ON_FROZEN_ACP_2_5_ARTIFACT",
+  "artifact_head": "3d1a08376b9581dfc1fc159a6bf3b0733996fa61",
+  "next_action": "INDEPENDENT_CRITIC_ON_FINAL_ACP_2_5_ARTIFACT",
   "stop_reason": "PRECRITIC_PASS_AWAITING_EXTERNAL_REVIEW",
   "external_review": {
     "required": true,
     "last_audited_head": null,
     "last_verdict": null,
-    "artifact_head": "cec61660187969923da7ae34af524b094e9e762d",
+    "artifact_head": "3d1a08376b9581dfc1fc159a6bf3b0733996fa61",
     "review_path": ".orchestration/evidence/ACP-2.5-PRECRITIC.md"
+  },
+  "controls": {
+    "exact_operation_approval": true,
+    "durable_reservation_ownership": true,
+    "original_create_token_for_cancel": true,
+    "downstream_replay_audit": true
   },
   "constraints": {
     "environment": "staging_only",
@@ -26,8 +32,8 @@
     "human_approval_required": true
   },
   "event": {
-    "id": "ACP-2.5-PRECRITIC-PASS",
+    "id": "ACP-2.5-FINAL-PRECRITIC-PASS",
     "type": "EXTERNAL_REVIEW",
-    "seq": 5
+    "seq": 6
   }
 }
