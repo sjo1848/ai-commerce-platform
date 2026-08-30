@@ -11,7 +11,7 @@ import {
 } from "./conversation-state.js";
 import type { AgentCoreExecutor } from "./executor.js";
 import type { ModelResponder } from "./model-responder.js";
-import type { ModelRouter, ExecutionContext, ModelConversationTurn, ToolExecutionMeta, ToolPlan } from "./types.js";
+import type { ModelRouter, ExecutionContext, ModelConversationTurn, ToolDescriptor, ToolExecutionMeta, ToolPlan } from "./types.js";
 import type { ToolRegistry } from "./tool-registry.js";
 import type { UsageSink } from "./usage.js";
 
@@ -23,6 +23,39 @@ export type ChatResult = {
 
 function modelVisibleConversation(turns: readonly ModelConversationTurn[]): ModelConversationTurn[] {
   return turns.filter((turn) => turn.toolId !== CONVERSATION_STATE_TOOL_ID).slice(-12);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isMissingRequiredValue(value: unknown): boolean {
+  return value === undefined || value === null || (typeof value === "string" && value.trim() === "");
+}
+
+function missingRequiredBusinessFields(tool: ToolDescriptor, input: unknown): string[] {
+  const required = Array.isArray(tool.inputSchema?.required)
+    ? tool.inputSchema.required.filter((field): field is string => typeof field === "string")
+    : [];
+  if (required.length === 0) return [];
+  const raw = isRecord(input) ? input : {};
+  return required.filter((field) => isMissingRequiredValue(raw[field]));
+}
+
+function missingRequiredClarification(fields: readonly string[]): string {
+  const missing = new Set(fields);
+  const datesMissing = missing.has("checkIn") || missing.has("checkOut");
+  const guestsMissing = missing.has("guests");
+  const roomMissing = missing.has("roomId");
+  const bookingMissing = missing.has("bookingId");
+
+  if (datesMissing && guestsMissing) return "Necesito saber las fechas y cuántas personas son.";
+  if (roomMissing && datesMissing) return "Necesito saber qué habitación elegís y para qué fechas.";
+  if (datesMissing) return "¿Para qué fechas sería?";
+  if (guestsMissing) return "¿Para cuántas personas sería?";
+  if (roomMissing) return "¿Qué habitación u opción querés elegir?";
+  if (bookingMissing) return "¿Qué reserva querés usar? Necesito identificarla de forma inequívoca.";
+  return "Me falta información necesaria para continuar con seguridad.";
 }
 
 export class ChatOrchestrator {
@@ -85,6 +118,16 @@ export class ChatOrchestrator {
     }
 
     const plan: ToolPlan = { toolId: route.plan.toolId, input: enrichPlanInputFromState(route.plan.toolId, route.plan.input, nextState) };
+    const visibleTool = tools.find((tool) => tool.id === plan.toolId);
+    if (visibleTool) {
+      const missing = missingRequiredBusinessFields(visibleTool, plan.input);
+      if (missing.length > 0) {
+        const clarification = missingRequiredClarification(missing);
+        await this.conversation.append(context.session.id, { role: "assistant", content: clarification });
+        return { message: clarification, sessionId: context.session.id };
+      }
+    }
+
     return this.executePlan(plan, context, trustedMeta);
   }
 }
