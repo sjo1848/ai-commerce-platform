@@ -37,10 +37,12 @@ const tenant = {
 };
 
 const stagingIdentity = {
-  guestIdByActor: {
-    // Synthetic HMS staging guest. This mapping is trusted deployment config,
-    // not a model/user argument; production identity onboarding remains out of 2.6 scope.
-    "visitor-demo": "12000000-0000-0000-0000-000000000001",
+  guestIdByTenantActor: {
+    "hotel-demo": {
+      // Synthetic HMS staging guest. This mapping is trusted deployment config,
+      // not a model/user argument; production identity onboarding remains out of 2.6 scope.
+      "visitor-demo": "12000000-0000-0000-0000-000000000001",
+    },
   },
 };
 
