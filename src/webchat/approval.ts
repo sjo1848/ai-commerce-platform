@@ -1,3 +1,5 @@
+import type { ToolPlan } from "../core/types.js";
+
 export type ApprovalChallengeInput = {
   sessionId: string;
   tenantId: string;
@@ -8,6 +10,7 @@ export type ApprovalChallengeInput = {
 
 export type ApprovalChallengeIssueInput = ApprovalChallengeInput & {
   operationFingerprint: string;
+  plan: ToolPlan;
 };
 
 export type ApprovalChallenge = {
@@ -17,6 +20,7 @@ export type ApprovalChallenge = {
 
 export type ApprovalConsumption = {
   operationFingerprint: string;
+  plan: ToolPlan;
 };
 
 export type StoredApprovalChallenge = {
@@ -26,6 +30,7 @@ export type StoredApprovalChallenge = {
   actorId: string;
   fingerprint: string;
   operationFingerprint: string;
+  plan: ToolPlan;
   expiresAt: string;
 };
 
@@ -50,6 +55,10 @@ function validOperationFingerprint(value: string): boolean {
   return /^[0-9a-f]{64}$/.test(value);
 }
 
+function validPlan(plan: ToolPlan): boolean {
+  return Boolean(plan && typeof plan.toolId === "string" && plan.toolId.trim() && Object.prototype.hasOwnProperty.call(plan, "input"));
+}
+
 export class InMemoryApprovalStore implements ApprovalStore {
   private readonly pending = new Map<string, StoredApprovalChallenge>();
 
@@ -60,6 +69,7 @@ export class InMemoryApprovalStore implements ApprovalStore {
 
   async issue(input: ApprovalChallengeIssueInput): Promise<ApprovalChallenge> {
     if (!validOperationFingerprint(input.operationFingerprint)) throw new Error("Invalid approval operation fingerprint");
+    if (!validPlan(input.plan)) throw new Error("Invalid approval plan");
     const token = crypto.randomUUID();
     const expiresAt = new Date(this.now().getTime() + this.ttlMs).toISOString();
     this.pending.set(token, {
@@ -69,6 +79,7 @@ export class InMemoryApprovalStore implements ApprovalStore {
       actorId: input.actorId,
       fingerprint: await approvalFingerprint(input),
       operationFingerprint: input.operationFingerprint,
+      plan: structuredClone(input.plan),
       expiresAt,
     });
     return { token, expiresAt };
@@ -87,6 +98,6 @@ export class InMemoryApprovalStore implements ApprovalStore {
       && pending.fingerprint === await approvalFingerprint(input);
     if (!matches) return null;
     this.pending.delete(input.token);
-    return { operationFingerprint: pending.operationFingerprint };
+    return { operationFingerprint: pending.operationFingerprint, plan: structuredClone(pending.plan) };
   }
 }
