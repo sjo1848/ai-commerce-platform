@@ -93,7 +93,7 @@ export class DeterministicModelRouter implements ModelRouter {
 
     if (quoteIntent && dates.length >= 2) {
       if (!roomId) {
-        return { kind: "message", message: "Para cotizar necesito identificar la habitación además de las fechas." };
+        return { kind: "message", message: "Para cotizar necesito el identificador de la habitación además de las fechas." };
       }
       if (!availableTools.some((tool) => tool.id === "hms.getQuote")) {
         return { kind: "message", message: "La cotización no está habilitada para este negocio." };
