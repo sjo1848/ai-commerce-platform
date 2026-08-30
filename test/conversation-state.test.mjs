@@ -6,6 +6,7 @@ import { AgentCoreRuntime } from "../dist/core/runtime.js";
 import { InMemorySessionStore } from "../dist/core/session.js";
 
 const roomId = "11000000-0000-0000-0000-000000000001";
+const secondRoomId = "11000000-0000-0000-0000-000000000002";
 const tenant = {
   id: "hotel-demo",
   slug: "hotel-demo",
@@ -27,7 +28,7 @@ function tools(executions) {
       },
       async execute(input) {
         executions.push({ toolId: "hms.checkAvailability", input: structuredClone(input) });
-        return { source: "hms", truth: "transactional", start: input.checkIn, end: input.checkOut, rooms: [{ id: roomId, roomNumber: "101" }] };
+        return { source: "hms", truth: "transactional", start: input.checkIn, end: input.checkOut, rooms: [{ id: roomId, roomNumber: "101" }, { id: secondRoomId, roomNumber: "102" }] };
       },
     },
     {
@@ -71,7 +72,7 @@ test("dates survive a clarification turn and are not requested again when guests
   assert.deepEqual(executions[0].input, { guests: 2, checkIn: "2027-01-15", checkOut: "2027-01-17" });
 });
 
-test("authoritative availability candidates plus a model selection become reusable quote state", async () => {
+test("ordinal model selection is resolved server-side against authoritative availability order", async () => {
   const executions = [];
   let call = 0;
   const model = {
@@ -80,8 +81,8 @@ test("authoritative availability candidates plus a model selection become reusab
       if (call === 1) {
         return { kind: "tool", plan: { toolId: "hms.checkAvailability", input: { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 2 } }, statePatch: { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 2 } };
       }
-      assert.ok(state.availabilityRoomIds.includes(roomId));
-      return { kind: "tool", plan: { toolId: "hms.getQuote", input: {} }, statePatch: { selectedRoomId: roomId } };
+      assert.deepEqual(state.availabilityRoomIds, [roomId, secondRoomId]);
+      return { kind: "tool", plan: { toolId: "hms.getQuote", input: {} }, statePatch: { selectedRoomIndex: 1 } };
     },
   };
   const runtime = new AgentCoreRuntime({ tenants: [tenant], tools: tools(executions), model });
@@ -92,11 +93,14 @@ test("authoritative availability candidates plus a model selection become reusab
   assert.deepEqual(executions[1].input, { roomId, checkIn: "2027-01-15", checkOut: "2027-01-17" });
 });
 
-test("model cannot persist a selected room that was not returned by authoritative availability", () => {
-  const current = { stay: { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 2 }, availabilityRoomIds: [roomId] };
-  const next = applyConversationStatePatch(current, { selectedRoomId: "22000000-0000-0000-0000-000000000099" });
-  assert.equal(next.selectedRoomId, undefined);
-  assert.deepEqual(next.availabilityRoomIds, [roomId]);
+test("model cannot persist a selected room or ordinal outside authoritative availability", () => {
+  const current = { stay: { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 2 }, availabilityRoomIds: [roomId, secondRoomId] };
+  const fakeId = applyConversationStatePatch(current, { selectedRoomId: "22000000-0000-0000-0000-000000000099" });
+  assert.equal(fakeId.selectedRoomId, undefined);
+  const outOfRange = applyConversationStatePatch(current, { selectedRoomIndex: 3 });
+  assert.equal(outOfRange.selectedRoomId, undefined);
+  const validSecond = applyConversationStatePatch(current, { selectedRoomIndex: 2 });
+  assert.equal(validSecond.selectedRoomId, secondRoomId);
 });
 
 test("conversation-backed state survives runtime replacement and internal snapshots never enter model history", async () => {
