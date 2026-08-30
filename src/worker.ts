@@ -10,6 +10,7 @@ import {
 } from "./cloudflare/session-durable-object.js";
 import { DeterministicModelRouter } from "./core/deterministic-model.js";
 import { LLMModelRouter } from "./core/llm-model.js";
+import { LLMGroundedResponder } from "./core/model-responder.js";
 import { AgentCoreRuntime } from "./core/runtime.js";
 import { createWebchatHandler } from "./webchat/handler.js";
 
@@ -42,16 +43,16 @@ function handler(env: Env): (request: Request) => Promise<Response> {
   const hms = new HmsServiceBindingAdapter(env.HMS, {
     "hotel-demo": { hotelId: "10000000-0000-0000-0000-000000000001" },
   }, reservationOperations);
-  const model = new LLMModelRouter(
-    new WorkersAiModelProvider(env.AI),
-    new DeterministicModelRouter(),
-  );
+  const provider = new WorkersAiModelProvider(env.AI);
+  const model = new LLMModelRouter(provider, new DeterministicModelRouter());
+  const responder = new LLMGroundedResponder(provider);
   const runtime = new AgentCoreRuntime({
     tenants: [tenant],
     tools: hmsAgentTools(hms),
     sessionStore: new DurableObjectSessionStore(env.SESSIONS),
     conversationStore: new DurableObjectConversationStore(env.SESSIONS),
     model,
+    responder,
   });
   handle = createWebchatHandler(runtime, {
     fixedTenantId: "hotel-demo",
