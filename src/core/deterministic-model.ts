@@ -70,7 +70,7 @@ export class DeterministicModelRouter implements ModelRouter {
     const roomId = explicitRoomId ?? state?.selectedRoomId;
     const quoteIntent = lower.includes("cotiz") || lower.includes("precio") || lower.includes("tarifa") || lower.includes("cuánto") || lower.includes("cuanto");
     if (quoteIntent && dates.length >= 2) {
-      if (!roomId) return { kind: "message", message: "Para cotizar necesito identificar la habitación." };
+      if (!roomId) return { kind: "message", message: "Para cotizar necesito el identificador de la habitación además de las fechas." };
       if (!availableTools.some((tool) => tool.id === "hms.getQuote")) return { kind: "message", message: "La cotización no está habilitada para este negocio." };
       return { kind: "tool", plan: { toolId: "hms.getQuote", input: { roomId, checkIn: dates[0], checkOut: dates[1] } } };
     }
