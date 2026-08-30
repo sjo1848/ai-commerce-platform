@@ -33,10 +33,14 @@ export class AgentCoreExecutor {
       throw new CoreError("TOOL_NOT_ALLOWED", "Tool execution denied", 403);
     }
     if (policy.decision === "approval_required") {
-      await this.audit.record({ ...auditBase, status: "approval_required", detail: policy.reason });
-      throw new CoreError("APPROVAL_REQUIRED", "Human approval is required", 409);
+      if (!meta.humanApproved) {
+        await this.audit.record({ ...auditBase, status: "approval_required", detail: policy.reason });
+        throw new CoreError("APPROVAL_REQUIRED", "Human approval is required", 409);
+      }
+      await this.audit.record({ ...auditBase, status: "allowed", detail: `human_approval_confirmed:${policy.reason}` });
+    } else {
+      await this.audit.record({ ...auditBase, status: "allowed" });
     }
-    await this.audit.record({ ...auditBase, status: "allowed" });
 
     const validated = tool.validateInput(rawInput);
     if (!validated.ok) {
@@ -45,6 +49,7 @@ export class AgentCoreExecutor {
     }
 
     const hasSideEffect = tool.sideEffect !== "none";
+    const coreIdempotency = hasSideEffect && tool.idempotencyMode !== "downstream";
     const fingerprint = stableStringify(validated.value);
     const rawKey = meta.idempotencyKey?.trim();
     const key = rawKey ? `${context.tenant.id}:${rawKey}` : undefined;
@@ -53,7 +58,7 @@ export class AgentCoreExecutor {
       throw new CoreError("IDEMPOTENCY_REQUIRED", "Idempotency key required for side-effect tool", 400);
     }
 
-    if (hasSideEffect && key) {
+    if (coreIdempotency && key) {
       const existing = this.idempotency.get(key);
       if (existing) {
         if (
@@ -81,8 +86,8 @@ export class AgentCoreExecutor {
     });
 
     try {
-      const result = await tool.execute(validated.value, context);
-      if (hasSideEffect && key) {
+      const result = await tool.execute(validated.value, context, meta);
+      if (coreIdempotency && key) {
         this.idempotency.put(key, {
           tenantId: context.tenant.id,
           actorId: context.actor.id,
