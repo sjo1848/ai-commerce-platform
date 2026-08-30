@@ -5,7 +5,7 @@ import type { AgentCoreRuntime } from "../core/runtime.js";
 const HTML = `<!doctype html>
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>AI Commerce Webchat</title></head>
 <body><main><h1>Asistente</h1><form id="f"><input id="m" maxlength="2000" placeholder="Ej: disponibilidad 2027-02-10 a 2027-02-12 para 2 personas"><button>Enviar</button></form><pre id="o"></pre></main>
-<script>let sessionId;document.getElementById('f').addEventListener('submit',async(e)=>{e.preventDefault();const message=document.getElementById('m').value;const operationKey=crypto.randomUUID();const send=async(approved=false)=>{const headers={'content-type':'application/json','Idempotency-Key':operationKey};if(approved)headers['x-human-approval']='confirmed';const r=await fetch('/api/chat',{method:'POST',headers,body:JSON.stringify({message,sessionId})});const j=await r.json();sessionId=j.sessionId||sessionId;if(r.status===409&&j?.error?.code==='APPROVAL_REQUIRED'&&!approved&&confirm('Esta acción modificará una reserva en HMS. ¿Confirmar?'))return send(true);document.getElementById('o').textContent=JSON.stringify(j,null,2);};await send();});</script></body></html>`;
+<script>let sessionId;document.getElementById('f').addEventListener('submit',async(e)=>{e.preventDefault();const message=document.getElementById('m').value;const operationKey=crypto.randomUUID();const send=async(path)=>{const r=await fetch(path,{method:'POST',headers:{'content-type':'application/json','Idempotency-Key':operationKey},body:JSON.stringify({message,sessionId})});const j=await r.json();sessionId=j.sessionId||sessionId;if(path==='/api/chat'&&r.status===409&&j?.error?.code==='APPROVAL_REQUIRED'&&confirm('Esta acción modificará una reserva en HMS. ¿Confirmar?'))return send('/api/approve');document.getElementById('o').textContent=JSON.stringify(j,null,2);};await send('/api/chat');});</script></body></html>`;
 
 function json(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
@@ -22,7 +22,9 @@ export function createWebchatHandler(runtime: AgentCoreRuntime, config: WebchatH
   return async function handle(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === "GET" && url.pathname === "/") return new Response(HTML, { headers: { "content-type": "text/html; charset=utf-8" } });
-    if (request.method !== "POST" || url.pathname !== "/api/chat") return json({ error: { code: "NOT_FOUND" } }, 404);
+    const approvalRoute = request.method === "POST" && url.pathname === "/api/approve";
+    const chatRoute = request.method === "POST" && url.pathname === "/api/chat";
+    if (!approvalRoute && !chatRoute) return json({ error: { code: "NOT_FOUND" } }, 404);
 
     const requestId = request.headers.get("x-request-id")?.trim() || crypto.randomUUID();
     let stage = "request";
@@ -33,6 +35,9 @@ export function createWebchatHandler(runtime: AgentCoreRuntime, config: WebchatH
       const contentType = request.headers.get("content-type") ?? "";
       if (!contentType.toLowerCase().includes("application/json")) throw new CoreError("BAD_REQUEST", "JSON body required", 415);
       const body = await request.json() as Record<string, unknown>;
+      if (approvalRoute && (typeof body.sessionId !== "string" || !body.sessionId.trim())) {
+        throw new CoreError("BAD_REQUEST", "Approval requires an existing session", 400);
+      }
       const tenantId = config.fixedTenantId ?? request.headers.get("x-tenant-id") ?? "";
       const actorId = config.fixedActorId ?? (request.headers.get("x-actor-id")?.trim() || "anonymous");
       const actor: Actor = {
@@ -50,9 +55,7 @@ export function createWebchatHandler(runtime: AgentCoreRuntime, config: WebchatH
         ...(request.headers.get("idempotency-key")?.trim()
           ? { idempotencyKey: request.headers.get("idempotency-key")!.trim() }
           : {}),
-        ...(request.headers.get("x-human-approval")?.trim().toLowerCase() === "confirmed"
-          ? { humanApproved: true }
-          : {}),
+        ...(approvalRoute ? { humanApproved: true } : {}),
       };
 
       stage = "create_context";
