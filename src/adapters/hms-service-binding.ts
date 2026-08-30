@@ -224,6 +224,7 @@ export class HmsServiceBindingAdapter {
 
         for (let index = 0; index < input.roomIds.length; index += 1) {
           const roomId = input.roomIds[index];
+          if (!roomId) throw new CoreError("BAD_REQUEST", "Multi-room reservation contains an empty room", 400);
           const token = childOperationToken(parentToken, index);
           const allocation = input.allocations?.find((item) => item.roomId === roomId);
           const allocationNote = allocation ? `Distribución declarada: ${allocation.guests} huésped${allocation.guests === 1 ? "" : "es"}. HMS no valida capacidad por habitación.` : undefined;
