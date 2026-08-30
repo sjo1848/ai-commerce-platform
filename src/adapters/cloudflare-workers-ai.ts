@@ -5,9 +5,14 @@ export interface WorkersAiBinding {
   readonly aiGatewayLogId?: string;
 }
 
+const DEFAULT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+
 export type WorkersAiModelProviderOptions = {
   model?: string;
   gatewayId?: string;
+  /** Marginal token pricing; intentionally adapter config because provider prices change independently from Core. */
+  inputPerMillionUsd?: number;
+  outputPerMillionUsd?: number;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -21,14 +26,20 @@ function numberField(value: unknown): number | undefined {
 export class WorkersAiModelProvider implements ModelProvider {
   readonly model: string;
   readonly gatewayId: string;
+  readonly inputPerMillionUsd?: number;
+  readonly outputPerMillionUsd?: number;
 
   constructor(
     private readonly ai: WorkersAiBinding,
     options: WorkersAiModelProviderOptions = {},
   ) {
     // Strong enough for natural Spanish/tool planning while remaining available on Workers Free.
-    this.model = options.model ?? "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+    this.model = options.model ?? DEFAULT_MODEL;
     this.gatewayId = options.gatewayId ?? "default";
+    // Cloudflare Workers AI public pricing verified 2026-08-30 for the default model.
+    // Custom models must supply their own rates to avoid silently stale estimates.
+    this.inputPerMillionUsd = options.inputPerMillionUsd ?? (this.model === DEFAULT_MODEL ? 0.293 : undefined);
+    this.outputPerMillionUsd = options.outputPerMillionUsd ?? (this.model === DEFAULT_MODEL ? 2.253 : undefined);
   }
 
   async completeStructured(request: StructuredModelRequest): Promise<StructuredModelResult> {
@@ -67,12 +78,22 @@ export class WorkersAiModelProvider implements ModelProvider {
       const usage = isRecord(raw.usage) ? raw.usage : {};
       const inputTokens = numberField(usage.input_tokens) ?? numberField(usage.prompt_tokens);
       const outputTokens = numberField(usage.output_tokens) ?? numberField(usage.completion_tokens);
+      const inputCost = inputTokens !== undefined && this.inputPerMillionUsd !== undefined
+        ? (inputTokens / 1_000_000) * this.inputPerMillionUsd
+        : undefined;
+      const outputCost = outputTokens !== undefined && this.outputPerMillionUsd !== undefined
+        ? (outputTokens / 1_000_000) * this.outputPerMillionUsd
+        : undefined;
+      const estimatedCostUsd = inputCost !== undefined || outputCost !== undefined
+        ? (inputCost ?? 0) + (outputCost ?? 0)
+        : undefined;
       return {
         value,
         model: this.model,
         ...(inputTokens !== undefined ? { inputTokens } : {}),
         ...(outputTokens !== undefined ? { outputTokens } : {}),
         latencyMs: Date.now() - started,
+        ...(estimatedCostUsd !== undefined ? { estimatedCostUsd } : {}),
         ...(this.ai.aiGatewayLogId ? { logId: this.ai.aiGatewayLogId } : {}),
       };
     } catch (error) {
