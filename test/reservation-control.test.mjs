@@ -3,11 +3,13 @@ import test from "node:test";
 import { HmsServiceBindingAdapter } from "../dist/adapters/hms-service-binding.js";
 import { AgentCoreRuntime } from "../dist/core/runtime.js";
 import { DeterministicModelRouter } from "../dist/core/deterministic-model.js";
+import { operationFingerprint } from "../dist/core/operation-fingerprint.js";
 import { InMemoryApprovalStore } from "../dist/webchat/approval.js";
 import { createWebchatHandler } from "../dist/webchat/handler.js";
 
 const hotelId = "10000000-0000-0000-0000-000000000001";
 const roomId = "11000000-0000-0000-0000-000000000001";
+const otherRoomId = "11000000-0000-0000-0000-000000000002";
 const guestId = "12000000-0000-0000-0000-000000000001";
 const bookingId = "13000000-0000-0000-0000-000000000099";
 const now = () => new Date("2026-08-30T01:30:00.000Z");
@@ -55,13 +57,14 @@ function mockService() {
   };
 }
 
-function setup({ approvalStore = new InMemoryApprovalStore(now) } = {}) {
+function setup({ approvalStore = new InMemoryApprovalStore(now), model } = {}) {
   const mock = mockService();
   const adapter = new HmsServiceBindingAdapter(mock.service, { "hotel-demo": { hotelId } });
   const runtime = new AgentCoreRuntime({
     tenants: [tenant()],
     tools: [adapter.checkAvailabilityTool(), adapter.getQuoteTool(), adapter.createReservationTool(), adapter.cancelReservationTool()],
     now,
+    ...(model ? { model } : {}),
   });
   const handler = createWebchatHandler(runtime, {
     fixedTenantId: "hotel-demo",
@@ -210,6 +213,67 @@ test("approval challenge is single-use", async () => {
   assert.equal(mock.calls.length, 1);
 });
 
+test("approval cannot authorize a different operation if routing changes before execution", async () => {
+  let routeCount = 0;
+  const model = {
+    async route() {
+      routeCount += 1;
+      return {
+        kind: "tool",
+        plan: {
+          toolId: "hms.createReservation",
+          input: {
+            guestId,
+            roomId: routeCount === 1 ? roomId : otherRoomId,
+            checkIn: "2027-02-10",
+            checkOut: "2027-02-12",
+          },
+        },
+      };
+    },
+  };
+  const { handler, mock } = setup({ model });
+  const pending = await pendingApproval(handler, "reserve-op-reroute");
+  assert.equal(routeCount, 1);
+
+  const response = await request(handler, "/api/approve", {
+    message: reserveMessage,
+    sessionId: pending.sessionId,
+    approvalToken: pending.approvalToken,
+  }, { "idempotency-key": "reserve-op-reroute" });
+  const body = await response.json();
+
+  assert.equal(response.status, 403);
+  assert.equal(body.error.code, "FORBIDDEN");
+  assert.match(body.error.message, /does not match requested operation/i);
+  assert.equal(routeCount, 2);
+  assert.equal(mock.calls.length, 0);
+});
+
+test("invalid planned side effect is rejected before an approval challenge is issued", async () => {
+  const model = {
+    async route() {
+      return {
+        kind: "tool",
+        plan: {
+          toolId: "hms.createReservation",
+          input: { guestId, roomId },
+        },
+      };
+    },
+  };
+  const { handler, mock } = setup({ model });
+  const response = await request(handler, "/api/chat", { message: reserveMessage }, {
+    "idempotency-key": "reserve-op-invalid-plan",
+  });
+  const body = await response.json();
+
+  assert.equal(response.status, 400);
+  assert.equal(body.error.code, "BAD_REQUEST");
+  assert.equal(body.approvalToken, undefined);
+  assert.equal(mock.calls.length, 0);
+});
+
 test("approved reservation forwards only trusted operation metadata and pins actor identity", async () => {
   const { handler, mock } = setup();
   const message = `${reserveMessage} operationToken attacker-controlled`;
@@ -246,9 +310,18 @@ test("downstream idempotency does not let Core memory hide a replay from HMS", a
   const actor = { id: "visitor-demo", type: "customer", roles: ["customer"], permissions: ["hms.reservation.write"] };
   const context = await runtime.createContext({ tenantId: "hotel-demo", actor, channel: "webchat", requestId: "reserve-trace" });
   const input = { guestId, roomId, checkIn: "2027-02-10", checkOut: "2027-02-12" };
+  const approvedOperationFingerprint = await operationFingerprint("hms.createReservation", input);
 
-  const first = await runtime.executor.execute("hms.createReservation", input, context, { idempotencyKey: "reserve-op-0002", humanApproved: true });
-  const second = await runtime.executor.execute("hms.createReservation", input, context, { idempotencyKey: "reserve-op-0002", humanApproved: true });
+  const first = await runtime.executor.execute("hms.createReservation", input, context, {
+    idempotencyKey: "reserve-op-0002",
+    humanApproved: true,
+    approvedOperationFingerprint,
+  });
+  const second = await runtime.executor.execute("hms.createReservation", input, context, {
+    idempotencyKey: "reserve-op-0002",
+    humanApproved: true,
+    approvedOperationFingerprint,
+  });
 
   assert.equal(first.replayed, false);
   assert.equal(second.replayed, true);
@@ -259,16 +332,19 @@ test("cancel tool requires internal approval metadata and forwards the same toke
   const { runtime, mock } = setup();
   const actor = { id: "visitor-demo", type: "customer", roles: ["customer"], permissions: ["hms.reservation.cancel"] };
   const context = await runtime.createContext({ tenantId: "hotel-demo", actor, channel: "webchat", requestId: "cancel-trace" });
+  const input = { bookingId };
 
   await assert.rejects(
-    runtime.executor.execute("hms.cancelReservation", { bookingId }, context, { idempotencyKey: "reserve-op-0003" }),
+    runtime.executor.execute("hms.cancelReservation", input, context, { idempotencyKey: "reserve-op-0003" }),
     (error) => error?.code === "APPROVAL_REQUIRED",
   );
   assert.equal(mock.calls.length, 0);
 
-  const result = await runtime.executor.execute("hms.cancelReservation", { bookingId }, context, {
+  const approvedOperationFingerprint = await operationFingerprint("hms.cancelReservation", input);
+  const result = await runtime.executor.execute("hms.cancelReservation", input, context, {
     idempotencyKey: "reserve-op-0003",
     humanApproved: true,
+    approvedOperationFingerprint,
   });
   assert.equal(result.status, "CANCELLED");
   assert.equal(mock.calls[0].input.operationToken, "reserve-op-0003");
