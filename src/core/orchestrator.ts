@@ -2,6 +2,7 @@ import { CoreError } from "./errors.js";
 import type { AuditSink } from "./audit.js";
 import { serializeToolResult, type ConversationStore } from "./conversation.js";
 import type { AgentCoreExecutor } from "./executor.js";
+import type { ModelResponder } from "./model-responder.js";
 import type { ModelRouter, ExecutionContext, ToolExecutionMeta, ToolPlan } from "./types.js";
 import type { ToolRegistry } from "./tool-registry.js";
 import type { UsageSink } from "./usage.js";
@@ -15,6 +16,7 @@ export type ChatResult = {
 export class ChatOrchestrator {
   constructor(
     private readonly model: ModelRouter,
+    private readonly responder: ModelResponder,
     private readonly registry: ToolRegistry,
     private readonly executor: AgentCoreExecutor,
     private readonly usage: UsageSink,
@@ -49,7 +51,8 @@ export class ChatOrchestrator {
       toolId: plan.toolId,
       content: serializeToolResult(data),
     });
-    const message = "Operación completada.";
+    const groundedContext = await this.conversation.list(context.session.id, 12);
+    const message = await this.responder.compose({ toolId: plan.toolId, data, conversation: groundedContext });
     await this.conversation.append(context.session.id, { role: "assistant", content: message });
     return { message, sessionId: context.session.id, data };
   }
