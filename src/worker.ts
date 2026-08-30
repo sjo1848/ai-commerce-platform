@@ -3,6 +3,7 @@ import { hmsAgentTools } from "./adapters/hms-agent-tools.js";
 import { WorkersAiModelProvider, type WorkersAiBinding } from "./adapters/cloudflare-workers-ai.js";
 import {
   DurableObjectApprovalStore,
+  DurableObjectConversationStore,
   DurableObjectReservationOperationStore,
   DurableObjectSessionStore,
   SessionDurableObject,
@@ -49,6 +50,7 @@ function handler(env: Env): (request: Request) => Promise<Response> {
     tenants: [tenant],
     tools: hmsAgentTools(hms),
     sessionStore: new DurableObjectSessionStore(env.SESSIONS),
+    conversationStore: new DurableObjectConversationStore(env.SESSIONS),
     model,
   });
   handle = createWebchatHandler(runtime, {
