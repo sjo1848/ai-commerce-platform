@@ -1,3 +1,5 @@
+import type { ConversationState, ConversationStatePatch } from "./conversation-state.js";
+
 export type TenantStatus = "active" | "suspended";
 export type Channel = "webchat" | "whatsapp" | "email";
 export type ActorType = "customer" | "staff" | "system";
@@ -87,8 +89,8 @@ export type ToolPlan = {
 };
 
 export type ModelRouteResult =
-  | { kind: "tool"; plan: ToolPlan }
-  | { kind: "message"; message: string };
+  | { kind: "tool"; plan: ToolPlan; statePatch?: ConversationStatePatch }
+  | { kind: "message"; message: string; statePatch?: ConversationStatePatch };
 
 export type ModelConversationTurn = {
   role: "user" | "assistant" | "tool";
@@ -102,6 +104,7 @@ export interface ModelRouter {
     context: ExecutionContext,
     availableTools: readonly ToolDescriptor[],
     conversation?: readonly ModelConversationTurn[],
+    state?: Readonly<ConversationState>,
   ): Promise<ModelRouteResult>;
 }
 
