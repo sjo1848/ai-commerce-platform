@@ -94,6 +94,7 @@ export function applyConversationStatePatch(current: ConversationState, patch: C
   if (validSelectionIndex(patch.selectedRoomIndex)) {
     const candidate = next.availabilityRoomIds[patch.selectedRoomIndex - 1];
     if (candidate) next.selectedRoomId = candidate;
+    else delete next.selectedRoomId;
   } else {
     const selected = stringField(patch.selectedRoomId);
     if (selected && next.availabilityRoomIds.includes(selected)) next.selectedRoomId = selected;
