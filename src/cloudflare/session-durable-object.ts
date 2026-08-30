@@ -3,6 +3,7 @@ import type { SessionStore } from "../core/session.js";
 import type { Session } from "../core/types.js";
 
 const SESSION_KEY = "session";
+const SESSION_URL = "https://session.internal/session";
 
 function isSession(value: unknown): value is Session {
   if (!value || typeof value !== "object") return false;
@@ -15,32 +16,52 @@ function isSession(value: unknown): value is Session {
     && typeof session.expiresAt === "string";
 }
 
+function parseSessionJson(raw: string): Session {
+  const value: unknown = JSON.parse(raw);
+  if (!isSession(value)) throw new Error("Invalid stored session payload");
+  return value;
+}
+
 /**
  * One Durable Object instance represents one opaque Agent Core session.
- * Public methods are invoked only through the namespace binding from the
- * Agent Core Worker; no Internet route is exposed for this object.
+ * The object is reachable only through the Worker binding; this fetch handler
+ * is an internal transport and does not create an Internet route.
+ * SQLite synchronous KV stores canonical JSON to avoid cross-isolate
+ * structured-clone differences at the session boundary.
  */
 export class SessionDurableObject extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
   }
 
-  async getSession(): Promise<Session | undefined> {
-    const value = await this.ctx.storage.get<unknown>(SESSION_KEY);
-    if (value === undefined) return undefined;
-    if (!isSession(value)) throw new Error("Session storage contains invalid data");
-    if (this.ctx.id.name && value.id !== this.ctx.id.name) {
-      throw new Error("Session storage id does not match Durable Object name");
-    }
-    return value;
-  }
+  override async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    if (url.pathname !== "/session") return new Response(null, { status: 404 });
 
-  async putSession(session: Session): Promise<void> {
-    if (!isSession(session)) throw new Error("Invalid session payload");
-    if (this.ctx.id.name && session.id !== this.ctx.id.name) {
-      throw new Error("Session id does not match Durable Object name");
+    if (request.method === "GET") {
+      const raw = this.ctx.storage.kv.get<string>(SESSION_KEY);
+      if (raw === undefined) return new Response(null, { status: 404 });
+      const session = parseSessionJson(raw);
+      if (this.ctx.id.name && session.id !== this.ctx.id.name) {
+        throw new Error("Session storage id does not match Durable Object name");
+      }
+      return new Response(raw, {
+        status: 200,
+        headers: { "content-type": "application/json; charset=utf-8" },
+      });
     }
-    await this.ctx.storage.put(SESSION_KEY, session);
+
+    if (request.method === "PUT") {
+      const raw = await request.text();
+      const session = parseSessionJson(raw);
+      if (this.ctx.id.name && session.id !== this.ctx.id.name) {
+        return new Response(null, { status: 409 });
+      }
+      this.ctx.storage.kv.put(SESSION_KEY, JSON.stringify(session));
+      return new Response(null, { status: 204 });
+    }
+
+    return new Response(null, { status: 405 });
   }
 }
 
@@ -50,10 +71,19 @@ export class DurableObjectSessionStore implements SessionStore {
   ) {}
 
   async get(id: string): Promise<Session | undefined> {
-    return this.namespace.getByName(id).getSession();
+    const response = await this.namespace.getByName(id).fetch(SESSION_URL);
+    if (response.status === 404) return undefined;
+    if (!response.ok) throw new Error(`Session storage read failed (${response.status})`);
+    return parseSessionJson(await response.text());
   }
 
   async put(session: Session): Promise<void> {
-    await this.namespace.getByName(session.id).putSession(session);
+    if (!isSession(session)) throw new Error("Invalid session payload");
+    const response = await this.namespace.getByName(session.id).fetch(new Request(SESSION_URL, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(session),
+    }));
+    if (!response.ok) throw new Error(`Session storage write failed (${response.status})`);
   }
 }
