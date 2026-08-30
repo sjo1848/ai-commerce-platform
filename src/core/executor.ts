@@ -8,6 +8,10 @@ import type { ToolRegistry } from "./tool-registry.js";
 import type { ExecutionContext, ToolExecutionMeta } from "./types.js";
 import type { UsageSink } from "./usage.js";
 
+function isAuthoritativeDownstreamReplay(result: unknown): boolean {
+  return result !== null && typeof result === "object" && (result as Record<string, unknown>).replayed === true;
+}
+
 export class AgentCoreExecutor {
   constructor(
     private readonly registry: ToolRegistry,
@@ -20,23 +24,13 @@ export class AgentCoreExecutor {
   async execute(toolId: string, rawInput: unknown, context: ExecutionContext, meta: ToolExecutionMeta = {}): Promise<unknown> {
     const tool = this.registry.get(toolId);
     const policy = this.policy.evaluate(tool, context);
-    const auditBase = {
-      timestamp: context.now,
-      requestId: context.requestId,
-      tenantId: context.tenant.id,
-      actorId: context.actor.id,
-      sessionId: context.session.id,
-      toolId,
-    };
+    const auditBase = { timestamp: context.now, requestId: context.requestId, tenantId: context.tenant.id, actorId: context.actor.id, sessionId: context.session.id, toolId };
 
     if (policy.decision === "deny") {
       await this.audit.record({ ...auditBase, status: "denied", detail: policy.reason });
       throw new CoreError("TOOL_NOT_ALLOWED", "Tool execution denied", 403);
     }
 
-    // A Human Gate must approve a concrete valid operation, not just a message.
-    // Validate only after policy has established that the caller may reach this
-    // tool boundary, but before issuing any approval challenge.
     const validated = tool.validateInput(rawInput);
     if (!validated.ok) {
       await this.audit.record({ ...auditBase, status: "failed", detail: "input_validation" });
@@ -71,12 +65,7 @@ export class AgentCoreExecutor {
     if (coreIdempotency && key) {
       const existing = this.idempotency.get(key);
       if (existing) {
-        if (
-          existing.tenantId !== context.tenant.id ||
-          existing.actorId !== context.actor.id ||
-          existing.toolId !== toolId ||
-          existing.fingerprint !== fingerprint
-        ) {
+        if (existing.tenantId !== context.tenant.id || existing.actorId !== context.actor.id || existing.toolId !== toolId || existing.fingerprint !== fingerprint) {
           await this.audit.record({ ...auditBase, status: "failed", detail: "idempotency_conflict" });
           throw new CoreError("IDEMPOTENCY_CONFLICT", "Idempotency key was used for a different operation", 409);
         }
@@ -85,28 +74,15 @@ export class AgentCoreExecutor {
       }
     }
 
-    await this.usage.record({
-      timestamp: context.now,
-      tenantId: context.tenant.id,
-      sessionId: context.session.id,
-      kind: "tool_call",
-      units: 1,
-      estimatedCostUsd: 0,
-      label: toolId,
-    });
+    await this.usage.record({ timestamp: context.now, tenantId: context.tenant.id, sessionId: context.session.id, kind: "tool_call", units: 1, estimatedCostUsd: 0, label: toolId });
 
     try {
       const result = await tool.execute(validated.value, context, meta);
       if (coreIdempotency && key) {
-        this.idempotency.put(key, {
-          tenantId: context.tenant.id,
-          actorId: context.actor.id,
-          toolId,
-          fingerprint,
-          result,
-        });
+        this.idempotency.put(key, { tenantId: context.tenant.id, actorId: context.actor.id, toolId, fingerprint, result });
       }
-      await this.audit.record({ ...auditBase, status: "succeeded" });
+      const downstreamReplay = tool.idempotencyMode === "downstream" && isAuthoritativeDownstreamReplay(result);
+      await this.audit.record({ ...auditBase, status: downstreamReplay ? "replayed" : "succeeded", ...(downstreamReplay ? { detail: "downstream_authoritative_replay" } : {}) });
       return result;
     } catch (error) {
       await this.audit.record({ ...auditBase, status: "failed", detail: error instanceof Error ? error.message : "unknown" });
