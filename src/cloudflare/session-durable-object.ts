@@ -5,6 +5,8 @@ import {
   approvalFingerprint,
   type ApprovalChallenge,
   type ApprovalChallengeInput,
+  type ApprovalChallengeIssueInput,
+  type ApprovalConsumption,
   type ApprovalStore,
   type StoredApprovalChallenge,
 } from "../webchat/approval.js";
@@ -41,6 +43,8 @@ function isStoredApproval(value: unknown): value is StoredApprovalChallenge {
     && typeof item.actorId === "string"
     && typeof item.fingerprint === "string"
     && /^[0-9a-f]{64}$/.test(item.fingerprint)
+    && typeof item.operationFingerprint === "string"
+    && /^[0-9a-f]{64}$/.test(item.operationFingerprint)
     && typeof item.expiresAt === "string"
     && Number.isFinite(Date.parse(item.expiresAt));
 }
@@ -64,7 +68,8 @@ function approvalKey(token: string): string {
  *
  * Approval challenges live in the same per-session object. Consume is
  * serialized by the Durable Object, making a challenge single-use even when
- * two approval requests race.
+ * two approval requests race. Successful consumption returns the exact
+ * server-issued operation fingerprint that was approved.
  */
 export class SessionDurableObject extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
@@ -138,7 +143,10 @@ export class SessionDurableObject extends DurableObject<Env> {
       }
 
       this.ctx.storage.kv.delete(key);
-      return new Response(null, { status: 204 });
+      return new Response(JSON.stringify({ operationFingerprint: approval.operationFingerprint }), {
+        status: 200,
+        headers: { "content-type": "application/json; charset=utf-8" },
+      });
     }
 
     return new Response(null, { status: 404 });
@@ -175,7 +183,7 @@ export class DurableObjectApprovalStore implements ApprovalStore {
     private readonly ttlMs = 5 * 60 * 1000,
   ) {}
 
-  async issue(input: ApprovalChallengeInput): Promise<ApprovalChallenge> {
+  async issue(input: ApprovalChallengeIssueInput): Promise<ApprovalChallenge> {
     const token = crypto.randomUUID();
     const expiresAt = new Date(this.now().getTime() + this.ttlMs).toISOString();
     const stored: StoredApprovalChallenge = {
@@ -184,6 +192,7 @@ export class DurableObjectApprovalStore implements ApprovalStore {
       tenantId: input.tenantId,
       actorId: input.actorId,
       fingerprint: await approvalFingerprint(input),
+      operationFingerprint: input.operationFingerprint,
       expiresAt,
     };
     const response = await this.namespace.getByName(input.sessionId).fetch(new Request(APPROVAL_URL, {
@@ -195,7 +204,7 @@ export class DurableObjectApprovalStore implements ApprovalStore {
     return { token, expiresAt };
   }
 
-  async consume(input: ApprovalChallengeInput & { token: string }): Promise<boolean> {
+  async consume(input: ApprovalChallengeInput & { token: string }): Promise<ApprovalConsumption | null> {
     const response = await this.namespace.getByName(input.sessionId).fetch(new Request(APPROVAL_CONSUME_URL, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -206,8 +215,11 @@ export class DurableObjectApprovalStore implements ApprovalStore {
         fingerprint: await approvalFingerprint(input),
       }),
     }));
-    if (response.status === 204) return true;
-    if ([404, 409, 410].includes(response.status)) return false;
-    throw new Error(`Approval storage consume failed (${response.status})`);
+    if ([404, 409, 410].includes(response.status)) return null;
+    if (!response.ok) throw new Error(`Approval storage consume failed (${response.status})`);
+    const payload = await response.json() as Record<string, unknown>;
+    const operationFingerprint = typeof payload.operationFingerprint === "string" ? payload.operationFingerprint : "";
+    if (!/^[0-9a-f]{64}$/.test(operationFingerprint)) throw new Error("Approval storage returned an invalid operation fingerprint");
+    return { operationFingerprint };
   }
 }
