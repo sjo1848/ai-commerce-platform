@@ -20,7 +20,7 @@ const tools = [{
 }];
 
 function toolRoute(input) {
-  return { kind: "tool", toolId: "hms.checkAvailability", input, clarificationReason: "none", missing: [] };
+  return { kind: "tool", toolId: "hms.checkAvailability", input, clarificationReason: "none", missing: [], statePatch: {} };
 }
 
 test("successful LLM routing records model, token, latency and cost telemetry", async () => {
@@ -87,14 +87,7 @@ test("grounded response facts stay deterministic while LLM only chooses bounded 
   const provider = {
     async completeStructured() {
       if (fail) throw new Error("provider down");
-      return {
-        value: { style: "warm", nextStep: "quote" },
-        model: "test-model",
-        inputTokens: 80,
-        outputTokens: 12,
-        latencyMs: 40,
-        estimatedCostUsd: 0.00005,
-      };
+      return { value: { style: "warm", nextStep: "quote" }, model: "test-model", inputTokens: 80, outputTokens: 12, latencyMs: 40, estimatedCostUsd: 0.00005 };
     },
   };
   const responder = new LLMGroundedResponder(provider, undefined, usage);
@@ -118,7 +111,6 @@ test("response model cannot inject unsupported operational facts or an unsafe ne
   const usage = new InMemoryUsageSink();
   const provider = {
     async completeStructured() {
-      // Free-form hallucination fields are structurally invalid and must never reach the guest.
       return { value: { style: "warm", nextStep: "reserve", message: "Incluye desayuno gratis por $1" }, model: "evil-model", latencyMs: 1 };
     },
   };
