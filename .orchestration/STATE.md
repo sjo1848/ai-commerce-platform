@@ -1,72 +1,47 @@
 # AI Commerce Platform — Agent Core State
 
-Phase: `ACP INTEGRATION — PHASE 2.5`
-Task: `ACP-2.5-CONTROLLED-RESERVATION`
-Status: `HUMAN_GATE`
-Current sub-stage: `2.5 — HUMAN PRODUCT ACCEPTANCE`
-Substantive ACP artifact: `3d1a08376b9581dfc1fc159a6bf3b0733996fa61`
-Final ACP staging-validation candidate: `98ede44ed97764c9835d818290167903686f3b4e`
-ACP main integration head: `e9c9221f0fa5e7b78a0ee96598e864135037d847`
-ACP acceptance/staging deploy head: `fb1391635e5b848d6590e3f71047937637310ea8`
-HMS substantive artifact: `70fae5c902af557eadc2802ba773f44b9f95fd46`
-HMS acceptance/staging deploy head: `5f92e5b92c6b77564a5a74176303d99a9739d90d`
+Phase: `ACP INTEGRATION — PHASE 2.6`
+Task: `ACP-2.6-LLM-MODEL-ROUTER`
+Status: `PLANNING_AUTHORIZED`
+Current sub-stage: `2.6.1 — CONVERSATIONAL ACCEPTANCE CORPUS`
 
-## Authoritative result
-The authorized staging-only supervised reservation increment is technically complete and has passed the complete automated gate chain. It is now stopped at the required Human Product Acceptance gate; sub-stage 2.5 must not be marked complete without an explicit human `ACCEPT` verdict.
+## Last closed gate
+`ACP-2.5-CONTROLLED-RESERVATION` — `PRODUCT_ACCEPTED / CLOSED`.
+Human verdict: `ACCEPT`.
+Closure evidence: `.orchestration/evidence/ACP-2.5-CLOSURE.md`.
 
-## Independent Critic
-- ACP final candidate `98ede44ed97764c9835d818290167903686f3b4e`: PASS; no blocking P0/P1/P2 remains.
-- HMS artifact `70fae5c902af557eadc2802ba773f44b9f95fd46`: PASS; no blocking P0/P1/P2 remains.
-- Historical blocking review threads were resolved only after their final-artifact fixes/evidence were verified.
+Accepted 2.5 evidence remains anchored to:
+- ACP product artifact `3d1a08376b9581dfc1fc159a6bf3b0733996fa61`;
+- ACP final staging candidate `98ede44ed97764c9835d818290167903686f3b4e` — Independent Critic PASS;
+- HMS artifact `70fae5c902af557eadc2802ba773f44b9f95fd46` — Independent Critic PASS;
+- HMS staging deploy `33301324856` — PASS;
+- ACP staging deploy `33301384087` — E1 + E2 PASS;
+- Human Product Acceptance — ACCEPT.
 
-## Staging evidence
-### HMS
-`Deploy HMS staging` run `33301324856` — SUCCESS on `5f92e5b92c6b77564a5a74176303d99a9739d90d`:
-- Cloudflare credentials / D1 access: PASS;
-- remote D1 migrations including `0018_agent_mutation_provenance.sql`: PASS;
-- staging seed integrity: PASS;
-- API Worker deploy: PASS;
-- Web Worker deploy: PASS;
-- anonymous Access fail-closed probe: PASS.
+## Product decision after acceptance
+Do not move to Fase 3 — Alquileres yet.
 
-### AI Commerce Platform
-`Deploy AI Commerce staging` run `33301384087` — SUCCESS on `fb1391635e5b848d6590e3f71047937637310ea8`:
-- Foundation gate: PASS;
-- Agent Core deploy/readiness: PASS;
-- E1 immediate same-session availability + quote: PASS;
-- E2 controlled reservation HITL + cleanup: PASS.
+The current HMS staging flow proves governed tool execution and reversible side effects but still uses `DeterministicModelRouter` as the primary language interpreter. The next increment must make HMS feel like the product thesis: a natural, contextual AI agent that can plan tool use without gaining authority over trusted operational controls.
 
-E2 verifies the live synthetic flow:
-1. reservation attempt is blocked until explicit HITL approval;
-2. approved create produces one confirmed HMS staging booking;
-3. identical create replay returns the same booking with authoritative HMS replay semantics;
-4. same operation token with different payload conflicts;
-5. reserved room-night disappears from transactional availability;
-6. separately approved cancellation recovers and uses the original trusted create token;
-7. cancellation replay is safe and authoritative;
-8. room availability is restored after cancellation;
-9. best-effort approved cleanup exists for partial E2 failure paths.
+Drive decision: `DEC-002 — Consolidar experiencia IA en HMS antes de segunda vertical`.
+Execution contract: `.orchestration/contracts/ACP-2.6-LLM-MODEL-ROUTER.md`.
+
+## 2.6 execution sequence
+1. `2.6.1` Freeze a conversational + adversarial acceptance corpus before implementation.
+2. `2.6.2` Introduce provider-independent Model Provider Adapter + `LLMModelRouter`; keep deterministic router as fallback/test fixture.
+3. `2.6.3` Enforce strict structured tool planning and server-side revalidation.
+4. `2.6.4` Add safe operational conversation context for multi-turn references without making LLM memory authoritative.
+5. `2.6.5` Add minimal clarification behavior and natural response composition grounded in tool results.
+6. `2.6.6` Instrument model usage, latency, cost and safe timeout/fallback behavior.
+7. `2.6.7` Run adversarial QA and Independent Critic on the frozen artifact.
+8. `2.6.8` Run real-model conversational E2E against HMS staging through reserve/cancel + cleanup.
+9. `2.6.9` Return to Human Product Acceptance.
+
+## Non-negotiable architecture
+The LLM may interpret, plan, clarify and compose. It may not choose trusted tenant/hotel/actor context, permissions, approval metadata, operation tokens or arbitrary tools. Tool Registry, validation, Policy Engine, HITL, idempotency, audit, ownership and HMS transactional truth remain deterministic and authoritative.
+
+## Gate to Fase 3
+Fase 3 — Alquileres remains blocked until ACP 2.6 closes with `Human Product Acceptance: ACCEPT`. The second vertical must then reuse the same Agent Core + LLM Model Router; only domain adapter/tool/truth semantics should materially change.
 
 ## Boundaries still in force
-Forbidden without a new Human Gate:
-- production cutover;
-- real customer data;
-- payment/financial mutation;
-- paid-resource expansion;
-- autonomous writes without the configured approval boundary;
-- broader mutation tools beyond the ACP 2.5 contract.
-
-## Current gate — Human Product Acceptance
-Required human verdict: `ACCEPT` or `REWORK` on the supervised staging reservation flow.
-
-If `ACCEPT`:
-- mark roadmap 2.5 complete;
-- publish final 2.5 closure evidence;
-- advance execution authority to the next roadmap boundary (Fase 3 — Alquileres) without changing the frozen product thesis.
-
-If `REWORK`:
-- record concrete product finding(s);
-- reopen bounded ACP/HMS 2.5 work only as required;
-- rerun QA/Critic/staging evidence before returning to this gate.
-
-No production-readiness or market-validation claim is made by this technical increment.
+No production cutover, real customer data, payments, paid-resource expansion, WhatsApp requirement, broader autonomous writes or second-vertical implementation is authorized by 2.6 planning.
