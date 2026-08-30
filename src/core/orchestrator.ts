@@ -1,5 +1,6 @@
 import { CoreError } from "./errors.js";
 import type { AuditSink } from "./audit.js";
+import { serializeToolResult, type ConversationStore } from "./conversation.js";
 import type { AgentCoreExecutor } from "./executor.js";
 import type { ModelRouter, ExecutionContext, ToolExecutionMeta, ToolPlan } from "./types.js";
 import type { ToolRegistry } from "./tool-registry.js";
@@ -18,6 +19,7 @@ export class ChatOrchestrator {
     private readonly executor: AgentCoreExecutor,
     private readonly usage: UsageSink,
     private readonly audit: AuditSink,
+    private readonly conversation: ConversationStore,
     private readonly maxMessageChars = 2_000,
     private readonly maxToolCalls = 2,
   ) {}
@@ -42,7 +44,14 @@ export class ChatOrchestrator {
 
     // Approval and idempotency are trusted channel/runtime metadata; the plan cannot set them.
     const data = await this.executor.execute(plan.toolId, plan.input, context, trustedMeta);
-    return { message: "Operación completada.", sessionId: context.session.id, data };
+    await this.conversation.append(context.session.id, {
+      role: "tool",
+      toolId: plan.toolId,
+      content: serializeToolResult(data),
+    });
+    const message = "Operación completada.";
+    await this.conversation.append(context.session.id, { role: "assistant", content: message });
+    return { message, sessionId: context.session.id, data };
   }
 
   async executeApprovedPlan(plan: ToolPlan, context: ExecutionContext, trustedMeta: ToolExecutionMeta): Promise<ChatResult> {
@@ -57,6 +66,8 @@ export class ChatOrchestrator {
     if (!normalized) throw new CoreError("BAD_REQUEST", "Message is required", 400);
     if (normalized.length > this.maxMessageChars) throw new CoreError("LIMIT_EXCEEDED", "Message too long", 413);
 
+    const priorConversation = await this.conversation.list(context.session.id, 12);
+    await this.conversation.append(context.session.id, { role: "user", content: normalized });
     await this.usage.record({
       timestamp: context.now,
       tenantId: context.tenant.id,
@@ -75,8 +86,11 @@ export class ChatOrchestrator {
       units: 1,
       estimatedCostUsd: 0,
     });
-    const route = await this.model.route(normalized, context, tools);
-    if (route.kind === "message") return { message: route.message, sessionId: context.session.id };
+    const route = await this.model.route(normalized, context, tools, priorConversation);
+    if (route.kind === "message") {
+      await this.conversation.append(context.session.id, { role: "assistant", content: route.message });
+      return { message: route.message, sessionId: context.session.id };
+    }
     return this.executePlan(route.plan, context, trustedMeta);
   }
 }
