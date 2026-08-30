@@ -1,9 +1,13 @@
 import { HmsServiceBindingAdapter, type HmsRpcService } from "./adapters/hms-service-binding.js";
+import { DurableObjectSessionStore, SessionDurableObject } from "./cloudflare/session-durable-object.js";
 import { AgentCoreRuntime } from "./core/runtime.js";
 import { createWebchatHandler } from "./webchat/handler.js";
 
+export { SessionDurableObject };
+
 type Env = {
   HMS: HmsRpcService;
+  SESSIONS: DurableObjectNamespace<SessionDurableObject>;
 };
 
 const tenant = {
@@ -29,6 +33,7 @@ function handler(env: Env): (request: Request) => Promise<Response> {
   const runtime = new AgentCoreRuntime({
     tenants: [tenant],
     tools: [hms.checkAvailabilityTool(), hms.getQuoteTool()],
+    sessionStore: new DurableObjectSessionStore(env.SESSIONS),
   });
   handle = createWebchatHandler(runtime, { fixedTenantId: "hotel-demo" });
   return handle;
