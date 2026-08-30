@@ -19,12 +19,16 @@ const tools = [{
   inputSchema: { type: "object", additionalProperties: false, properties: { checkIn: { type: "string" }, checkOut: { type: "string" }, guests: { type: "integer" } }, required: ["checkIn", "checkOut", "guests"] },
 }];
 
+function toolRoute(input) {
+  return { kind: "tool", toolId: "hms.checkAvailability", input, clarificationReason: "none", missing: [] };
+}
+
 test("successful LLM routing records model, token, latency and cost telemetry", async () => {
   const usage = new InMemoryUsageSink();
   const provider = {
     async completeStructured() {
       return {
-        value: { kind: "tool", toolId: "hms.checkAvailability", input: { checkIn: "2034-02-10", checkOut: "2034-02-12", guests: 2 }, message: "" },
+        value: toolRoute({ checkIn: "2034-02-10", checkOut: "2034-02-12", guests: 2 }),
         model: "test-model",
         inputTokens: 120,
         outputTokens: 30,
@@ -60,7 +64,7 @@ test("invalid model plan records both paid inference and explicit fallback reaso
   const provider = {
     async completeStructured() {
       return {
-        value: { kind: "tool", toolId: "hms.checkAvailability", input: { checkIn: "2034-02-10", checkOut: "2034-02-12", guests: 2, operationToken: "attacker" }, message: "" },
+        value: toolRoute({ checkIn: "2034-02-10", checkOut: "2034-02-12", guests: 2, operationToken: "attacker" }),
         model: "test-model",
         inputTokens: 100,
         outputTokens: 20,
