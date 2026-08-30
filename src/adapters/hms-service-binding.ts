@@ -2,6 +2,7 @@ import { CoreError } from "../core/errors.js";
 import type {
   ExecutionContext,
   ToolDefinition,
+  ToolExecutionMeta,
   ValidationResult,
 } from "../core/types.js";
 
@@ -47,6 +48,22 @@ export type HmsRpcQuoteData = {
   traceId: string;
 };
 
+export type HmsRpcReservationData = {
+  source: "hms";
+  truth: "transactional";
+  hotelId: string;
+  bookingId: string;
+  guestId: string;
+  roomId: string;
+  start: string;
+  end: string;
+  status: string;
+  totalCents: number;
+  currency: "ARS";
+  replayed: boolean;
+  traceId: string;
+};
+
 export type HmsRpcErrorCode =
   | "VALIDATION_ERROR"
   | "FORBIDDEN"
@@ -68,6 +85,16 @@ export interface HmsRpcService {
     context: HmsRpcContext,
     input: { roomId: string; start: string; end: string },
   ): Promise<HmsRpcResult<HmsRpcQuoteData>>;
+
+  createReservation(
+    context: HmsRpcContext,
+    input: { operationToken: string; guestId: string; roomId: string; start: string; end: string; notes?: string | null },
+  ): Promise<HmsRpcResult<HmsRpcReservationData>>;
+
+  cancelReservation(
+    context: HmsRpcContext,
+    input: { operationToken: string; bookingId: string },
+  ): Promise<HmsRpcResult<HmsRpcReservationData>>;
 }
 
 export type HmsTenantRoute = {
@@ -86,6 +113,18 @@ type QuoteInput = {
   roomId: string;
   checkIn: string;
   checkOut: string;
+};
+
+type CreateReservationInput = {
+  guestId: string;
+  roomId: string;
+  checkIn: string;
+  checkOut: string;
+  notes?: string | null;
+};
+
+type CancelReservationInput = {
+  bookingId: string;
 };
 
 export type LiveAvailabilityResult = HmsRpcAvailabilityData & {
@@ -127,6 +166,12 @@ function rpcContext(context: ExecutionContext, routes: HmsTenantRoutes): HmsRpcC
     sessionId: context.session.id,
     traceId: context.requestId,
   };
+}
+
+function operationToken(meta: ToolExecutionMeta): string {
+  const key = meta.idempotencyKey?.trim();
+  if (!key) throw new CoreError("IDEMPOTENCY_REQUIRED", "Idempotency key required for reservation operation", 400);
+  return key;
 }
 
 function unwrap<T>(result: HmsRpcResult<T>): T {
@@ -207,6 +252,73 @@ export class HmsServiceBindingAdapter {
       execute: async (input, context) => unwrap(await this.service.getQuote(
         rpcContext(context, this.routes),
         { roomId: input.roomId, start: input.checkIn, end: input.checkOut },
+      )),
+    };
+  }
+
+  public createReservationTool(): ToolDefinition<CreateReservationInput, HmsRpcReservationData> {
+    return {
+      id: "hms.createReservation",
+      primitive: "RESERVE",
+      description: "Crea una reserva confirmada en HMS usando inventario transaccional e idempotencia persistente downstream.",
+      risk: "write",
+      sideEffect: "reversible",
+      idempotencyMode: "downstream",
+      requiredPermissions: ["hms.reservation.write"],
+      validateInput(input: unknown): ValidationResult<CreateReservationInput> {
+        if (!input || typeof input !== "object") return { ok: false, message: "Invalid reservation input" };
+        const value = input as Record<string, unknown>;
+        if (typeof value.guestId !== "string" || !value.guestId.trim()) return { ok: false, message: "guestId is required" };
+        if (typeof value.roomId !== "string" || !value.roomId.trim()) return { ok: false, message: "roomId is required" };
+        if (typeof value.checkIn !== "string" || typeof value.checkOut !== "string" || !validRange(value.checkIn, value.checkOut)) {
+          return { ok: false, message: "Invalid date range" };
+        }
+        if (value.notes != null && (typeof value.notes !== "string" || value.notes.trim().length > 500)) {
+          return { ok: false, message: "notes length is invalid" };
+        }
+        return {
+          ok: true,
+          value: {
+            guestId: value.guestId.trim(),
+            roomId: value.roomId.trim(),
+            checkIn: value.checkIn,
+            checkOut: value.checkOut,
+            ...(typeof value.notes === "string" ? { notes: value.notes.trim() || null } : {}),
+          },
+        };
+      },
+      execute: async (input, context, meta) => unwrap(await this.service.createReservation(
+        rpcContext(context, this.routes),
+        {
+          operationToken: operationToken(meta),
+          guestId: input.guestId,
+          roomId: input.roomId,
+          start: input.checkIn,
+          end: input.checkOut,
+          ...(input.notes !== undefined ? { notes: input.notes } : {}),
+        },
+      )),
+    };
+  }
+
+  public cancelReservationTool(): ToolDefinition<CancelReservationInput, HmsRpcReservationData> {
+    return {
+      id: "hms.cancelReservation",
+      primitive: "CANCEL",
+      description: "Cancela de forma controlada una reserva creada por la misma operación idempotente en HMS.",
+      risk: "write",
+      sideEffect: "irreversible",
+      idempotencyMode: "downstream",
+      requiredPermissions: ["hms.reservation.cancel"],
+      validateInput(input: unknown): ValidationResult<CancelReservationInput> {
+        if (!input || typeof input !== "object") return { ok: false, message: "Invalid cancellation input" };
+        const value = input as Record<string, unknown>;
+        if (typeof value.bookingId !== "string" || !value.bookingId.trim()) return { ok: false, message: "bookingId is required" };
+        return { ok: true, value: { bookingId: value.bookingId.trim() } };
+      },
+      execute: async (input, context, meta) => unwrap(await this.service.cancelReservation(
+        rpcContext(context, this.routes),
+        { operationToken: operationToken(meta), bookingId: input.bookingId },
       )),
     };
   }
