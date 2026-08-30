@@ -3,6 +3,7 @@ import type { AuditSink } from "./audit.js";
 import { serializeToolResult, type ConversationStore } from "./conversation.js";
 import {
   applyConversationStatePatch,
+  CONVERSATION_STATE_TOOL_ID,
   enrichPlanInputFromState,
   InMemoryConversationStateStore,
   updateConversationStateFromTool,
@@ -10,7 +11,7 @@ import {
 } from "./conversation-state.js";
 import type { AgentCoreExecutor } from "./executor.js";
 import type { ModelResponder } from "./model-responder.js";
-import type { ModelRouter, ExecutionContext, ToolExecutionMeta, ToolPlan } from "./types.js";
+import type { ModelRouter, ExecutionContext, ModelConversationTurn, ToolExecutionMeta, ToolPlan } from "./types.js";
 import type { ToolRegistry } from "./tool-registry.js";
 import type { UsageSink } from "./usage.js";
 
@@ -19,6 +20,10 @@ export type ChatResult = {
   sessionId: string;
   data?: unknown;
 };
+
+function modelVisibleConversation(turns: readonly ModelConversationTurn[]): ModelConversationTurn[] {
+  return turns.filter((turn) => turn.toolId !== CONVERSATION_STATE_TOOL_ID).slice(-12);
+}
 
 export class ChatOrchestrator {
   constructor(
@@ -47,7 +52,7 @@ export class ChatOrchestrator {
     const before = await this.conversationState.get(context.session.id);
     await this.conversationState.put(context.session.id, updateConversationStateFromTool(before, plan.toolId, plan.input, data));
     await this.conversation.append(context.session.id, { role: "tool", toolId: plan.toolId, content: serializeToolResult(data) });
-    const groundedContext = await this.conversation.list(context.session.id, 12);
+    const groundedContext = modelVisibleConversation(await this.conversation.list(context.session.id, 32));
     const message = await this.responder.compose({ toolId: plan.toolId, data, conversation: groundedContext, context });
     await this.conversation.append(context.session.id, { role: "assistant", content: message });
     return { message, sessionId: context.session.id, data };
@@ -63,7 +68,7 @@ export class ChatOrchestrator {
     if (!normalized) throw new CoreError("BAD_REQUEST", "Message is required", 400);
     if (normalized.length > this.maxMessageChars) throw new CoreError("LIMIT_EXCEEDED", "Message too long", 413);
 
-    const priorConversation = await this.conversation.list(context.session.id, 12);
+    const priorConversation = modelVisibleConversation(await this.conversation.list(context.session.id, 32));
     const priorState = await this.conversationState.get(context.session.id);
     await this.conversation.append(context.session.id, { role: "user", content: normalized });
     await this.usage.record({ timestamp: context.now, tenantId: context.tenant.id, sessionId: context.session.id, kind: "message", units: 1, estimatedCostUsd: 0 });
