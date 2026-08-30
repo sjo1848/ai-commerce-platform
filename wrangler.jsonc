@@ -15,5 +15,19 @@
         "allowedHotelIds": ["10000000-0000-0000-0000-000000000001"]
       }
     }
-  ]
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "SESSIONS",
+        "class_name": "SessionDurableObject"
+      }
+    ]
+  },
+  "exports": {
+    "SessionDurableObject": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    }
+  }
 }

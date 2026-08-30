@@ -87,7 +87,7 @@ function liveRuntime(service, routes, tenants = [tenant("tenant-a")]) {
 test("trusted tenant route determines the HMS hotel and user input cannot override it", async () => {
   const mock = mockService();
   const runtime = liveRuntime(mock.service, { "tenant-a": { hotelId: hotelA } });
-  const context = runtime.createContext({ tenantId: "tenant-a", actor, channel: "webchat", requestId: "trace-a" });
+  const context = await runtime.createContext({ tenantId: "tenant-a", actor, channel: "webchat", requestId: "trace-a" });
 
   const result = await runtime.executor.execute(
     "hms.checkAvailability",
@@ -117,8 +117,8 @@ test("different platform tenants route to different HMS hotels without tool inpu
     [tenant("tenant-a"), tenant("tenant-b")],
   );
 
-  const contextA = runtime.createContext({ tenantId: "tenant-a", actor, channel: "webchat", requestId: "trace-a" });
-  const contextB = runtime.createContext({ tenantId: "tenant-b", actor: { ...actor, id: "visitor-2" }, channel: "webchat", requestId: "trace-b" });
+  const contextA = await runtime.createContext({ tenantId: "tenant-a", actor, channel: "webchat", requestId: "trace-a" });
+  const contextB = await runtime.createContext({ tenantId: "tenant-b", actor: { ...actor, id: "visitor-2" }, channel: "webchat", requestId: "trace-b" });
 
   await runtime.executor.execute("hms.checkAvailability", { checkIn: "2026-09-10", checkOut: "2026-09-12", guests: 1 }, contextA);
   await runtime.executor.execute("hms.checkAvailability", { checkIn: "2026-09-10", checkOut: "2026-09-12", guests: 1 }, contextB);
@@ -129,7 +129,7 @@ test("different platform tenants route to different HMS hotels without tool inpu
 test("missing trusted tenant route fails closed before RPC", async () => {
   const mock = mockService();
   const runtime = liveRuntime(mock.service, {});
-  const context = runtime.createContext({ tenantId: "tenant-a", actor, channel: "webchat" });
+  const context = await runtime.createContext({ tenantId: "tenant-a", actor, channel: "webchat" });
 
   await assert.rejects(
     runtime.executor.execute("hms.checkAvailability", { checkIn: "2026-09-10", checkOut: "2026-09-12", guests: 1 }, context),
@@ -148,7 +148,7 @@ test("HMS structured conflict remains a normalized Core conflict", async () => {
     },
   };
   const runtime = liveRuntime(service, { "tenant-a": { hotelId: hotelA } });
-  const context = runtime.createContext({ tenantId: "tenant-a", actor, channel: "webchat" });
+  const context = await runtime.createContext({ tenantId: "tenant-a", actor, channel: "webchat" });
 
   await assert.rejects(
     runtime.executor.execute("hms.getQuote", { roomId: "room-101", checkIn: "2026-09-10", checkOut: "2026-09-12" }, context),

@@ -1,4 +1,5 @@
 dist/
 coverage/
+worker-configuration.d.ts
 .DS_Store
 *.log

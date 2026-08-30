@@ -46,21 +46,21 @@ test("orchestrator rejects model plan for non-visible tool", async () => {
   const r = runtime();
   const maliciousModel = { route: async () => ({ kind: "tool", plan: { toolId: "admin.deleteTenant", input: {} } }) };
   const orchestrator = new ChatOrchestrator(maliciousModel, r.registry, r.executor, r.usage, r.audit);
-  const ctx = r.createContext({ tenantId: "hotel-a", actor, channel: "webchat" });
+  const ctx = await r.createContext({ tenantId: "hotel-a", actor, channel: "webchat" });
   await assert.rejects(() => orchestrator.chat("hello", ctx), (e) => e instanceof CoreError && e.code === "TOOL_NOT_ALLOWED");
   assert.equal(r.audit.events.at(-1).detail, "model_requested_non_visible_tool");
 });
 
 test("adapter errors are normalized and audited without leaking internals", async () => {
   const r = runtime();
-  const ctx = r.createContext({ tenantId: "hotel-a", actor, channel: "webchat" });
+  const ctx = await r.createContext({ tenantId: "hotel-a", actor, channel: "webchat" });
   await assert.rejects(() => r.executor.execute("hms.getQuote", { roomId: "missing", checkIn: "2026-09-01", checkOut: "2026-09-02" }, ctx), (e) => e instanceof CoreError && e.code === "TOOL_EXECUTION_FAILED" && !e.message.includes("Room not found"));
   assert.equal(r.audit.events.at(-1).status, "failed");
 });
 
 test("message length limit fails before model/tool execution", async () => {
   const r = runtime();
-  const ctx = r.createContext({ tenantId: "hotel-a", actor, channel: "webchat" });
+  const ctx = await r.createContext({ tenantId: "hotel-a", actor, channel: "webchat" });
   await assert.rejects(() => r.orchestrator.chat("x".repeat(2001), ctx), (e) => e instanceof CoreError && e.code === "LIMIT_EXCEEDED");
   assert.equal(r.audit.events.length, 0);
   assert.equal(r.usage.events.length, 0);
