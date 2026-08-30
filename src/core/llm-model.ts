@@ -1,4 +1,5 @@
 import type { ModelProvider } from "./model-provider.js";
+import { recordModelFallback, recordModelInference } from "./model-telemetry.js";
 import type {
   ExecutionContext,
   JsonSchema,
@@ -7,6 +8,7 @@ import type {
   ModelRouter,
   ToolDescriptor,
 } from "./types.js";
+import type { UsageSink } from "./usage.js";
 
 const TRUSTED_FIELDS = new Set([
   "tenantid",
@@ -78,7 +80,19 @@ export class LLMModelRouter implements ModelRouter {
   public constructor(
     private readonly provider: ModelProvider,
     private readonly fallback: ModelRouter,
+    private readonly usage?: UsageSink,
   ) {}
+
+  private async fallbackRoute(
+    reason: string,
+    message: string,
+    context: ExecutionContext,
+    availableTools: readonly ToolDescriptor[],
+    conversation: readonly ModelConversationTurn[],
+  ): Promise<ModelRouteResult> {
+    await recordModelFallback(this.usage, context, "agent_core_route", reason);
+    return this.fallback.route(message, context, availableTools, conversation);
+  }
 
   async route(
     message: string,
@@ -119,35 +133,36 @@ export class LLMModelRouter implements ModelRouter {
         temperature: 0.1,
         label: "agent_core_route",
       });
+      await recordModelInference(this.usage, context, "agent_core_route", result);
       const value = result.value;
-      if (!isRecord(value)) return this.fallback.route(message, context, availableTools, conversation);
+      if (!isRecord(value)) return this.fallbackRoute("invalid_response_shape", message, context, availableTools, conversation);
 
       const keys = Object.keys(value);
       if (keys.some((key) => !["kind", "toolId", "input", "message"].includes(key))) {
-        return this.fallback.route(message, context, availableTools, conversation);
+        return this.fallbackRoute("unexpected_top_level_field", message, context, availableTools, conversation);
       }
-      if (hasTrustedField(value)) return this.fallback.route(message, context, availableTools, conversation);
+      if (hasTrustedField(value)) return this.fallbackRoute("trusted_field_attempt", message, context, availableTools, conversation);
 
       if (value.kind === "message") {
         const response = typeof value.message === "string" ? value.message.trim() : "";
-        if (!response) return this.fallback.route(message, context, availableTools, conversation);
+        if (!response) return this.fallbackRoute("empty_clarification", message, context, availableTools, conversation);
         return { kind: "message", message: response };
       }
 
       if (value.kind !== "tool" || typeof value.toolId !== "string" || !isRecord(value.input)) {
-        return this.fallback.route(message, context, availableTools, conversation);
+        return this.fallbackRoute("invalid_tool_plan_shape", message, context, availableTools, conversation);
       }
       const tool = availableTools.find((candidate) => candidate.id === value.toolId);
-      if (!tool) return this.fallback.route(message, context, availableTools, conversation);
+      if (!tool) return this.fallbackRoute("non_visible_tool", message, context, availableTools, conversation);
       if (hasUnknownTopLevelInput(value.input, tool)) {
-        return this.fallback.route(message, context, availableTools, conversation);
+        return this.fallbackRoute("unknown_tool_argument", message, context, availableTools, conversation);
       }
       if (JSON.stringify(value.input).length > 8_000) {
-        return this.fallback.route(message, context, availableTools, conversation);
+        return this.fallbackRoute("tool_input_too_large", message, context, availableTools, conversation);
       }
       return { kind: "tool", plan: { toolId: tool.id, input: value.input } };
     } catch {
-      return this.fallback.route(message, context, availableTools, conversation);
+      return this.fallbackRoute("provider_failure", message, context, availableTools, conversation);
     }
   }
 }
