@@ -19,6 +19,12 @@ export class ToolRegistry {
     const allowed = new Set(tenant.allowedToolIds);
     return [...this.tools.values()]
       .filter((tool) => allowed.has(tool.id) && tenant.toolPolicies?.[tool.id] !== "deny")
-      .map(({ id, primitive, description, risk }) => ({ id, primitive, description, risk }));
+      .map(({ id, primitive, description, risk, inputSchema }) => ({
+        id,
+        primitive,
+        description,
+        risk,
+        ...(inputSchema ? { inputSchema } : {}),
+      }));
   }
 }
