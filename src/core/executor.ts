@@ -41,7 +41,7 @@ export class AgentCoreExecutor {
       const plannedOperationFingerprint = await operationFingerprint(toolId, validated.value);
       if (!meta.humanApproved) {
         await this.audit.record({ ...auditBase, status: "approval_required", detail: policy.reason });
-        throw new ApprovalRequiredError(plannedOperationFingerprint);
+        throw new ApprovalRequiredError(plannedOperationFingerprint, { toolId, input: validated.value });
       }
       if (meta.approvedOperationFingerprint !== plannedOperationFingerprint) {
         await this.audit.record({ ...auditBase, status: "denied", detail: "approval_operation_mismatch" });
