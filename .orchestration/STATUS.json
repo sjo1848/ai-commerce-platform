@@ -1,67 +1,49 @@
 {
   "phase": "ACP_INTEGRATION_PHASE_2_6",
-  "runtime_status": "HUMAN_GATE",
-  "resume_authorized": false,
-  "active_task": "ACP-2.6-LLM-MODEL-ROUTER",
-  "last_completed_task": "ACP-2.6.9-HUMAN-PRODUCT-ACCEPTANCE-REWORK",
+  "runtime_status": "REWORK_IMPLEMENTATION",
+  "resume_authorized": true,
+  "active_task": "ACP-2.6.9-REWORK-RECEPTIONIST",
+  "last_completed_task": "ACP-2.6.9-REWORK-STRUCTURED-CONVERSATION-STATE",
   "last_completed_head": "aa8f2ae1562cb67094714efb5cfeb29777c843ec",
-  "current_substage": "2.6.9_HUMAN_PRODUCT_ACCEPTANCE",
-  "next_action": "HUMAN_PRODUCT_ACCEPTANCE_ACP_2_6",
-  "stop_reason": "AUTOMATED_CRITIC_AND_STAGING_REWORK_GATES_PASS_AWAITING_HUMAN_PRODUCT_VERDICT",
+  "current_substage": "2.6.9_R2_RECEPTIONIST_CONVERSATION",
+  "next_action": "IMPLEMENT_NATURAL_RECEPTIONIST_MULTI_ROOM_AND_PARTY_MEMORY",
+  "stop_reason": null,
   "product_decision": {
     "id": "DEC-002",
     "decision": "CONSOLIDATE_AI_EXPERIENCE_IN_HMS_BEFORE_SECOND_VERTICAL",
     "phase_3_alquileres_blocked_until_2_6_accept": true
   },
-  "last_gate": {
-    "task": "ACP-2.6.9-HUMAN-PRODUCT-ACCEPTANCE-REWORK",
-    "type": "TECHNICAL_REWORK_AND_INDEPENDENT_REVIEW",
-    "verdict": "PASS",
-    "closure_path": ".orchestration/evidence/ACP-2.6.9-REWORK-CLOSURE.md"
-  },
-  "2_6_evidence": {
-    "runtime_artifact": "9ec9f062dfdc8ad9a73bb2646338d932b77c4c19",
-    "artifact_ci_run": 33322906416,
-    "foundation_tests": "84/84_PASS",
-    "pre_critic": "PASS",
-    "independent_critic": "PASS",
-    "integration_head": "38ed24aa272e9e75e1ee0a62c0dab37019a5b408",
-    "post_merge_ci_run": 33322945318,
-    "staging_head": "aa8f2ae1562cb67094714efb5cfeb29777c843ec",
-    "staging_deploy_run": 33322986328,
-    "staging_deploy_result": "PASS",
-    "e1_natural_same_session": "PASS",
-    "structured_conversation_state": "PASS",
-    "ordinal_room_grounding": "PASS",
-    "known_fact_reuse": "PASS",
-    "missing_required_field_clarification": "PASS",
-    "real_model_evaluator": "PASS",
-    "e2_controlled_reservation": "PASS",
-    "guest_identity": "SERVER_BOUND",
-    "hitl": "PASS",
-    "idempotency_and_ownership": "PASS",
-    "inventory_restored": true,
-    "staging_handoff": "PASS"
-  },
-  "2_6_contract": ".orchestration/contracts/ACP-2.6-LLM-MODEL-ROUTER.md",
-  "2_6_sequence": [
-    "2.6.1_CONVERSATIONAL_ACCEPTANCE_CORPUS",
-    "2.6.2_MODEL_PROVIDER_ADAPTER",
-    "2.6.3_STRUCTURED_TOOL_PLANNING",
-    "2.6.4_OPERATIONAL_CONVERSATION_CONTEXT",
-    "2.6.5_CLARIFICATION_AND_RESPONSE_COMPOSITION",
-    "2.6.6_USAGE_LATENCY_COST_FALLBACK",
-    "2.6.7_ADVERSARIAL_QA_AND_INDEPENDENT_CRITIC",
-    "2.6.8_CONVERSATIONAL_STAGING_E2E",
-    "2.6.9_HUMAN_PRODUCT_ACCEPTANCE"
-  ],
   "human_gate": {
     "type": "PRODUCT_ACCEPTANCE",
-    "required_verdicts": ["ACCEPT", "REWORK"],
-    "verdict": null,
     "previous_verdict": "REWORK",
-    "rework_technical_status": "PASS"
+    "findings": [
+      "CONVERSATION_NOT_FLUID_OR_HUMAN_LIKE",
+      "GREETING_TONE_BRUSQUE",
+      "GUEST_COUNTS_NOT_RELIABLY_REUSED",
+      "MULTI_ROOM_RESERVATION_101_102_UNSUPPORTED"
+    ],
+    "verdict": null
   },
+  "rework_contract": ".orchestration/contracts/ACP-2.6.9-REWORK-RECEPTIONIST.md",
+  "root_cause": {
+    "raw_model_primary_bottleneck": false,
+    "current_model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "fixed_response_templates": true,
+    "single_room_state": true,
+    "single_room_reservation_tool": true
+  },
+  "rework_scope": [
+    "SOCIAL_HOSPITALITY_CONVERSATION",
+    "NATURAL_GROUNDED_RESPONSE_WITH_FACT_GUARD",
+    "DURABLE_PARTY_COMPOSITION",
+    "AUTHORITATIVE_ROOM_NUMBER_GROUNDING",
+    "MULTI_ROOM_SELECTION",
+    "COMPOSITE_MULTI_ROOM_RESERVATION_HITL_IDEMPOTENCY_COMPENSATION",
+    "ADVERSARIAL_QA",
+    "INDEPENDENT_CRITIC",
+    "REAL_MODEL_STAGING_E2E",
+    "HUMAN_PRODUCT_ACCEPTANCE"
+  ],
   "constraints": {
     "environment": "staging_only",
     "production": false,
@@ -73,8 +55,8 @@
     "human_approval_required_for_mutations": true
   },
   "event": {
-    "id": "ACP-2.6.9-REWORK-TECHNICAL-PASS-RETURN-HUMAN-GATE",
-    "type": "HUMAN_GATE",
-    "seq": 11
+    "id": "ACP-2.6.9-R2-HUMAN-REWORK-RECEPTIONIST",
+    "type": "REWORK",
+    "seq": 12
   }
 }

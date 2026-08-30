@@ -30,7 +30,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isMissingRequiredValue(value: unknown): boolean {
-  return value === undefined || value === null || (typeof value === "string" && value.trim() === "");
+  return value === undefined || value === null || (typeof value === "string" && value.trim() === "") || (Array.isArray(value) && value.length === 0);
 }
 
 function missingRequiredBusinessFields(tool: ToolDescriptor, input: unknown): string[] {
@@ -46,16 +46,26 @@ function missingRequiredClarification(fields: readonly string[]): string {
   const missing = new Set(fields);
   const datesMissing = missing.has("checkIn") || missing.has("checkOut");
   const guestsMissing = missing.has("guests");
-  const roomMissing = missing.has("roomId");
+  const roomMissing = missing.has("roomId") || missing.has("roomIds");
   const bookingMissing = missing.has("bookingId");
 
-  if (datesMissing && guestsMissing) return "Necesito saber las fechas y cuántas personas son.";
-  if (roomMissing && datesMissing) return "Necesito saber qué habitación elegís y para qué fechas.";
-  if (datesMissing) return "¿Para qué fechas sería?";
-  if (guestsMissing) return "¿Para cuántas personas sería?";
-  if (roomMissing) return "¿Qué habitación u opción querés elegir?";
-  if (bookingMissing) return "¿Qué reserva querés usar? Necesito identificarla de forma inequívoca.";
-  return "Me falta información necesaria para continuar con seguridad.";
+  if (datesMissing && guestsMissing) return "Claro. ¿Para qué fechas sería y cuántas personas son?";
+  if (roomMissing && datesMissing) return "Perfecto. ¿Qué habitación o habitaciones preferís y para qué fechas sería?";
+  if (datesMissing) return "Claro, ¿para qué fechas sería?";
+  if (guestsMissing) return "Perfecto, ¿para cuántas personas sería?";
+  if (roomMissing) return "Perfecto. ¿Qué habitación o habitaciones querés reservar?";
+  if (bookingMissing) return "Para no equivocarme, tenés más de una reserva activa. ¿Cuál querés cancelar?";
+  return "Me falta un dato para poder seguir. ¿Me contás un poco más?";
+}
+
+function planInputWithSafeState(toolId: string, input: unknown, state: Awaited<ReturnType<ConversationStateStore["get"]>>): unknown {
+  // With multiple active bookings, a generic cancellation must remain ambiguous.
+  // Never let the primary/current booking silently stand in for the whole set.
+  if (toolId === "hms.cancelReservation" && (state.activeBookingIds?.length ?? 0) > 1) {
+    const explicit = isRecord(input) && typeof input.bookingId === "string" && input.bookingId.trim();
+    if (!explicit) return input;
+  }
+  return enrichPlanInputFromState(toolId, input, state);
 }
 
 export class ChatOrchestrator {
@@ -117,7 +127,7 @@ export class ChatOrchestrator {
       return { message: route.message, sessionId: context.session.id };
     }
 
-    const plan: ToolPlan = { toolId: route.plan.toolId, input: enrichPlanInputFromState(route.plan.toolId, route.plan.input, nextState) };
+    const plan: ToolPlan = { toolId: route.plan.toolId, input: planInputWithSafeState(route.plan.toolId, route.plan.input, nextState) };
     const visibleTool = tools.find((tool) => tool.id === plan.toolId);
     if (visibleTool) {
       const missing = missingRequiredBusinessFields(visibleTool, plan.input);

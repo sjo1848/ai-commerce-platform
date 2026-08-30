@@ -45,7 +45,8 @@ test("quote intent cannot invent a room identifier", async () => {
   const response = await post(handler, { message: "¿Cuánto sale del 2026-09-10 al 2026-09-12?" });
   assert.equal(response.status, 200);
   const body = await response.json();
-  assert.match(body.message, /identificador de la habitación/i);
+  assert.match(body.message, /(?:de qué|qué) habitación/i);
+  assert.doesNotMatch(body.message, /room-[a-z0-9_-]+|[0-9a-f]{8}-[0-9a-f-]{27,}/i);
   assert.equal(r.audit.events.length, 0);
 });
 

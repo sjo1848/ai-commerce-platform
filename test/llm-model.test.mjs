@@ -81,7 +81,7 @@ test("LLM router converts structured missing-field decision into deterministic c
   const p = provider(messageRoute("missing", ["dates"]));
   const fb = fallback();
   const router = new LLMModelRouter(p, fb);
-  assert.deepEqual(await router.route("¿Tenés para dos?", context, tools), { kind: "message", message: "¿Para qué fechas sería?", statePatch: {} });
+  assert.deepEqual(await router.route("¿Tenés para dos?", context, tools), { kind: "message", message: "Claro, ¿para qué fechas sería?", statePatch: {} });
   assert.equal(fb.calls, 0);
 });
 
