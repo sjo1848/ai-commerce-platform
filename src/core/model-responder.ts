@@ -1,10 +1,13 @@
 import type { ModelProvider } from "./model-provider.js";
-import type { JsonSchema, ModelConversationTurn } from "./types.js";
+import { recordModelFallback, recordModelInference } from "./model-telemetry.js";
+import type { ExecutionContext, JsonSchema, ModelConversationTurn } from "./types.js";
+import type { UsageSink } from "./usage.js";
 
 export type GroundedResponseInput = {
   toolId: string;
   data: unknown;
   conversation: readonly ModelConversationTurn[];
+  context: ExecutionContext;
 };
 
 export interface ModelResponder {
@@ -63,7 +66,13 @@ export class LLMGroundedResponder implements ModelResponder {
   constructor(
     private readonly provider: ModelProvider,
     private readonly fallback: ModelResponder = new DeterministicGroundedResponder(),
+    private readonly usage?: UsageSink,
   ) {}
+
+  private async fallbackResponse(input: GroundedResponseInput, reason: string): Promise<string> {
+    await recordModelFallback(this.usage, input.context, "agent_core_grounded_response", reason);
+    return this.fallback.compose(input);
+  }
 
   async compose(input: GroundedResponseInput): Promise<string> {
     const data = JSON.stringify(input.data);
@@ -92,12 +101,15 @@ export class LLMGroundedResponder implements ModelResponder {
         temperature: 0.2,
         label: "agent_core_grounded_response",
       });
-      if (!isRecord(result.value) || typeof result.value.message !== "string") return this.fallback.compose(input);
+      await recordModelInference(this.usage, input.context, "agent_core_grounded_response", result);
+      if (!isRecord(result.value) || typeof result.value.message !== "string") {
+        return this.fallbackResponse(input, "invalid_response_shape");
+      }
       const message = result.value.message.trim();
-      if (!message || message.length > 1_200) return this.fallback.compose(input);
+      if (!message || message.length > 1_200) return this.fallbackResponse(input, "invalid_response_message");
       return message;
     } catch {
-      return this.fallback.compose(input);
+      return this.fallbackResponse(input, "provider_failure");
     }
   }
 }
