@@ -1,13 +1,32 @@
 {
-  "phase": "PHASE_1_AGENT_CORE",
-  "runtime_status": "TECHNICAL_PASS",
-  "resume_authorized": false,
-  "active_task": null,
-  "last_completed_task": "ACP-I01",
-  "last_completed_head": "a37e41827e5e1195258e0b42ab11653acea8ec4e",
-  "current_substage": "1.8_CLOSED",
-  "next_action": "PHASE_2_HMS_PRODUCT_ACCEPTANCE_GATE",
-  "stop_reason": "AUTHORIZED_PHASE_1_SCOPE_COMPLETE",
-  "external_review": { "required": false },
-  "event": { "id": "ACP-I01-TECHNICAL-PASS", "type": "PHASE_COMPLETE", "seq": 3 }
+  "phase": "ACP_INTEGRATION_PHASE_2_5",
+  "runtime_status": "PRECRITIC_REVALIDATION",
+  "resume_authorized": true,
+  "active_task": "ACP-2.5-CONTROLLED-RESERVATION",
+  "last_completed_task": "ACP-2.4-E1-REAL",
+  "last_completed_head": "43b9d75371ed29604509537dac898e059534fbcb",
+  "current_substage": "2.5_CONTROLLED_SIDE_EFFECT",
+  "work_branch": "feature/acp-2-5-controlled-reservation",
+  "artifact_head": "cec61660187969923da7ae34af524b094e9e762d",
+  "next_action": "RUN_EXACT_ARTIFACT_GATES_AND_PUBLISH_PRECRITIC",
+  "stop_reason": null,
+  "external_review": {
+    "required": true,
+    "last_audited_head": null,
+    "last_verdict": null,
+    "review_path": null
+  },
+  "constraints": {
+    "environment": "staging_only",
+    "production": false,
+    "real_data": false,
+    "payment_mutation": false,
+    "paid_expansion": false,
+    "human_approval_required": true
+  },
+  "event": {
+    "id": "ACP-2.5-PRECRITIC-REVALIDATION",
+    "type": "TASK_ACTIVE",
+    "seq": 4
+  }
 }
