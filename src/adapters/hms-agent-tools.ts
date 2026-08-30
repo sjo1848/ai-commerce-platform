@@ -144,6 +144,10 @@ function createReservationBundleTool(
   const base = adapter.createReservationBundleTool();
   return {
     ...base,
+    // The bundle is one user-approved operation. Core-level idempotency makes the
+    // parent terminal result replayable and prevents re-entering child writes after
+    // a compensated partial failure. Child HMS calls remain independently idempotent.
+    idempotencyMode: "core",
     inputSchema: reservationBundleSchema,
     validateInput(input, context) {
       const trusted = canonicalTrustedReservationInput(input, context, identity);
