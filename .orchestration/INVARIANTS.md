@@ -1,12 +1,30 @@
-# Phase 1 Invariants
+# AI Commerce Platform — Invariant Registry
 
-- I-01 Tenant identity comes from trusted runtime/channel context, never user message/body claims.
-- I-02 Session identity is bound to tenant + actor and fails closed on mismatch/expiry.
-- I-03 Model output can request only tools visible in the tenant-scoped registry.
-- I-04 Policy evaluation is authoritative before tool execution.
-- I-05 Side-effect tools require idempotency keys and conflicts fail closed.
-- I-06 Every attempted allowed/denied/approval/failure/replay tool call is auditable.
-- I-07 Core contains no direct HMS/Alquileres persistence logic.
-- I-08 User-facing errors do not leak adapter/internal failure messages.
-- I-09 Money in the fake HMS vertical slice remains integer cents.
-- I-10 Phase 1 performs no paid/cloud production action.
+## Foundation / Phase 1
+- `I-01` Tenant identity comes from trusted runtime/channel context, never user message/body claims.
+- `I-02` Session identity is bound to tenant + actor and fails closed on mismatch/expiry.
+- `I-03` Model output can request only tools visible in the tenant-scoped registry.
+- `I-04` Policy evaluation is authoritative before tool execution.
+- `I-05` Side-effect tools require idempotency keys and conflicts fail closed.
+- `I-06` Every attempted allowed/denied/approval/failure/replay tool call is auditable.
+- `I-07` Core contains no direct HMS/Alquileres persistence logic.
+- `I-08` User-facing errors do not leak adapter/internal failure messages.
+- `I-09` Money remains integer cents across commerce tool contracts.
+- `I-10` No production or paid-resource action is implicit in technical acceptance.
+
+## ACP 2.5 — Controlled Reservation
+- `ACP25-AUTH-001` Reservation and cancellation tools require authoritative policy approval; user/model-supplied approval metadata cannot bypass policy.
+- `ACP25-HITL-001` Approval challenge is server-issued and bound to session, tenant, actor, message, idempotency key and the exact validated `toolId + input` operation fingerprint.
+- `ACP25-HITL-002` Approval challenges expire and are single-use; concurrent/replayed consume cannot authorize a second mutation.
+- `ACP25-HITL-003` A rerouted or otherwise changed tool operation after approval fails closed before any RPC mutation; invalid tool input cannot receive an approval challenge.
+- `ACP25-IDEMP-001` Every reservation side effect requires a trusted request idempotency key; create forwards it to HMS only as trusted `operationToken` execution metadata.
+- `ACP25-IDEMP-002` Downstream HMS idempotency is authoritative; Core does not cache away a replay/conflict that HMS must observe.
+- `ACP25-AUDIT-001` An authoritative downstream `replayed: true` result is recorded as `replayed` in Core audit rather than as a fresh success.
+- `ACP25-TENANT-001` Tenant→hotel routing and staging actor identity are server-side trusted configuration and cannot be selected by model/user input.
+- `ACP25-BOUNDARY-001` Core accesses HMS only through the Service Binding adapter and contains no booking persistence logic.
+- `ACP25-CLEANUP-001` Successful create binds booking ownership to the original create operation token in trusted server-side storage keyed by session + tenant + actor + booking.
+- `ACP25-CLEANUP-002` Cancellation is separately approval-gated and may use a new cancellation request idempotency key, but HMS receives only the stored original create token; cancellation fails closed without a matching trusted ownership binding.
+- `ACP25-CLEANUP-003` The deployed Worker uses Durable Object storage for reservation ownership so cleanup does not depend on process-local memory.
+- `ACP25-ERROR-001` HMS failures are normalized to Core errors and internal downstream details are not leaked to the user.
+- `ACP25-SCOPE-001` Scope is staging-only synthetic data: no production, payment mutation, real customer data, paid expansion or broader autonomous write capability.
+- `ACP25-EVID-001` Technical PASS may only be claimed for an immutable substantive artifact with exact CI evidence and Independent Critic PASS.

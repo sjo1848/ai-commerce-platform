@@ -21,6 +21,8 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       WORKER_NAME: ai-commerce-agent-core
+      ACP25_GUEST_ID: 12000000-0000-0000-0000-000000000001
+      ACP25_CONFLICT_GUEST_ID: 12000000-0000-0000-0000-000000000002
 
     steps:
       - uses: actions/checkout@v4
@@ -163,8 +165,15 @@ jobs:
           echo "E1_SESSION_ID=$E1_SESSION_ID" >> "$GITHUB_ENV"
           echo "E1_ROOM_ID=$E1_ROOM_ID" >> "$GITHUB_ENV"
 
-      - name: E1 staging handoff
+      - name: E2 controlled reservation HITL and cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/staging-e2e-reservation.mjs
+
+      - name: Staging handoff
         run: |
           echo "E1 REAL PASS: immediate webchat -> Agent Core -> Service Binding -> HMS -> D1"
+          echo "E2 CONTROLLED RESERVATION PASS: HITL -> create -> replay/conflict -> inventory claim -> token-owned cancel/replay -> inventory restored"
           echo "AI_COMMERCE_STAGING_URL=$AI_COMMERCE_STAGING_URL"
           echo "E1_ROOM_ID=$E1_ROOM_ID"

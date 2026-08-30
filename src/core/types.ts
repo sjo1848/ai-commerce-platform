@@ -17,6 +17,7 @@ export type Primitive =
 export type RiskLevel = "read" | "write" | "financial" | "admin";
 export type SideEffect = "none" | "reversible" | "irreversible";
 export type ToolPolicyMode = "auto" | "approval" | "deny";
+export type IdempotencyMode = "core" | "downstream";
 
 export type Tenant = {
   id: string;
@@ -56,6 +57,8 @@ export type ValidationResult<T> =
 
 export type ToolExecutionMeta = {
   idempotencyKey?: string;
+  humanApproved?: boolean;
+  approvedOperationFingerprint?: string;
 };
 
 export type ToolDefinition<I, O> = {
@@ -64,15 +67,15 @@ export type ToolDefinition<I, O> = {
   description: string;
   risk: RiskLevel;
   sideEffect: SideEffect;
+  idempotencyMode?: IdempotencyMode;
   requiredPermissions: readonly string[];
   validateInput(input: unknown): ValidationResult<I>;
-  execute(input: I, context: ExecutionContext): Promise<O>;
+  execute(input: I, context: ExecutionContext, meta: ToolExecutionMeta): Promise<O>;
 };
 
 export type ToolPlan = {
   toolId: string;
   input: unknown;
-  idempotencyKey?: string;
 };
 
 export type ModelRouteResult =

@@ -1,7 +1,7 @@
 import { CoreError } from "./errors.js";
 import type { AuditSink } from "./audit.js";
 import type { AgentCoreExecutor } from "./executor.js";
-import type { ModelRouter, ExecutionContext } from "./types.js";
+import type { ModelRouter, ExecutionContext, ToolExecutionMeta } from "./types.js";
 import type { ToolRegistry } from "./tool-registry.js";
 import type { UsageSink } from "./usage.js";
 
@@ -22,7 +22,7 @@ export class ChatOrchestrator {
     private readonly maxToolCalls = 2,
   ) {}
 
-  async chat(message: string, context: ExecutionContext): Promise<ChatResult> {
+  async chat(message: string, context: ExecutionContext, trustedMeta: ToolExecutionMeta = {}): Promise<ChatResult> {
     const normalized = message.trim();
     if (!normalized) throw new CoreError("BAD_REQUEST", "Message is required", 400);
     if (normalized.length > this.maxMessageChars) throw new CoreError("LIMIT_EXCEEDED", "Message too long", 413);
@@ -64,9 +64,8 @@ export class ChatOrchestrator {
       throw new CoreError("TOOL_NOT_ALLOWED", "Requested tool is not available", 403);
     }
 
-    const data = await this.executor.execute(route.plan.toolId, route.plan.input, context, {
-      ...(route.plan.idempotencyKey ? { idempotencyKey: route.plan.idempotencyKey } : {}),
-    });
+    // Approval and idempotency are channel/runtime metadata; model output cannot set them.
+    const data = await this.executor.execute(route.plan.toolId, route.plan.input, context, trustedMeta);
     return {
       message: "Operación completada.",
       sessionId: context.session.id,
