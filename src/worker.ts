@@ -35,6 +35,14 @@ const tenant = {
   },
 };
 
+const stagingIdentity = {
+  guestIdByActor: {
+    // Synthetic HMS staging guest. This mapping is trusted deployment config,
+    // not a model/user argument; production identity onboarding remains out of 2.6 scope.
+    "visitor-demo": "12000000-0000-0000-0000-000000000001",
+  },
+};
+
 let handle: ((request: Request) => Promise<Response>) | undefined;
 
 function handler(env: Env): (request: Request) => Promise<Response> {
@@ -48,7 +56,7 @@ function handler(env: Env): (request: Request) => Promise<Response> {
   const responder = new LLMGroundedResponder(provider);
   const runtime = new AgentCoreRuntime({
     tenants: [tenant],
-    tools: hmsAgentTools(hms),
+    tools: hmsAgentTools(hms, stagingIdentity),
     sessionStore: new DurableObjectSessionStore(env.SESSIONS),
     conversationStore: new DurableObjectConversationStore(env.SESSIONS),
     model,
