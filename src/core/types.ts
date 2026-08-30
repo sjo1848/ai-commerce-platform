@@ -58,6 +58,7 @@ export type ValidationResult<T> =
 export type ToolExecutionMeta = {
   idempotencyKey?: string;
   humanApproved?: boolean;
+  approvedOperationFingerprint?: string;
 };
 
 export type ToolDefinition<I, O> = {
