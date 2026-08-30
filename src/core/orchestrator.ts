@@ -30,7 +30,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isMissingRequiredValue(value: unknown): boolean {
-  return value === undefined || value === null || (typeof value === "string" && value.trim() === "");
+  return value === undefined || value === null || (typeof value === "string" && value.trim() === "") || (Array.isArray(value) && value.length === 0);
 }
 
 function missingRequiredBusinessFields(tool: ToolDescriptor, input: unknown): string[] {
@@ -46,16 +46,16 @@ function missingRequiredClarification(fields: readonly string[]): string {
   const missing = new Set(fields);
   const datesMissing = missing.has("checkIn") || missing.has("checkOut");
   const guestsMissing = missing.has("guests");
-  const roomMissing = missing.has("roomId");
+  const roomMissing = missing.has("roomId") || missing.has("roomIds");
   const bookingMissing = missing.has("bookingId");
 
-  if (datesMissing && guestsMissing) return "Necesito saber las fechas y cuántas personas son.";
-  if (roomMissing && datesMissing) return "Necesito saber qué habitación elegís y para qué fechas.";
-  if (datesMissing) return "¿Para qué fechas sería?";
-  if (guestsMissing) return "¿Para cuántas personas sería?";
-  if (roomMissing) return "¿Qué habitación u opción querés elegir?";
-  if (bookingMissing) return "¿Qué reserva querés usar? Necesito identificarla de forma inequívoca.";
-  return "Me falta información necesaria para continuar con seguridad.";
+  if (datesMissing && guestsMissing) return "Claro. ¿Para qué fechas sería y cuántas personas son?";
+  if (roomMissing && datesMissing) return "Perfecto. ¿Qué habitación o habitaciones preferís y para qué fechas sería?";
+  if (datesMissing) return "Claro, ¿para qué fechas sería?";
+  if (guestsMissing) return "Perfecto, ¿para cuántas personas sería?";
+  if (roomMissing) return "Perfecto. ¿Qué habitación o habitaciones querés reservar?";
+  if (bookingMissing) return "Para no equivocarme, ¿qué reserva querés usar?";
+  return "Me falta un dato para poder seguir. ¿Me contás un poco más?";
 }
 
 export class ChatOrchestrator {
