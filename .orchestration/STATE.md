@@ -1,62 +1,40 @@
 # AI Commerce Platform — Agent Core State
 
 Phase: `ACP INTEGRATION — PHASE 2.6`
-Task: `ACP-2.6-LLM-MODEL-ROUTER`
-Status: `HUMAN_GATE`
-Current sub-stage: `2.6.9 — HUMAN PRODUCT ACCEPTANCE`
+Task: `ACP-2.6.9-REWORK-RECEPTIONIST`
+Status: `REWORK / IMPLEMENTATION`
+Current sub-stage: `2.6.9-R2 — RECEPTIONIST CONVERSATION`
 
-## Last closed gate
-`2.6.9 — HUMAN PRODUCT ACCEPTANCE REWORK` — `TECHNICAL_PASS / CLOSED`.
-Closure evidence: `.orchestration/evidence/ACP-2.6.9-REWORK-CLOSURE.md`.
+## Human verdict
+Fresh Human Product Acceptance on 2026-08-30 returned `REWORK`.
 
-Final REWORK evidence is anchored to:
-- substantive Artifact A `9ec9f062dfdc8ad9a73bb2646338d932b77c4c19`;
-- exact-artifact core-ci `33322906416` — PASS;
-- Foundation regression `84/84 PASS`;
-- QA / Pre-Critic Gate — PASS;
-- Independent Critic on PR #38 — PASS, zero blocking P0/P1/P2;
-- integration head `38ed24aa272e9e75e1ee0a62c0dab37019a5b408`;
-- post-merge core-ci `33322945318` — PASS;
-- staging head `aa8f2ae1562cb67094714efb5cfeb29777c843ec`;
-- staging deploy `33322986328` — PASS;
-- E1 natural availability + ordinal quote — PASS;
-- expanded real Workers AI conversational evaluator — PASS;
-- date-only → guest clarification regression — PASS;
-- prior-date reservation continuation regression — PASS;
-- E2 controlled reservation/cancel — PASS, including HITL, idempotency, ownership and inventory restoration;
-- staging handoff — PASS.
+Observed product failures:
+- conversation still feels rigid rather than like a human receptionist;
+- greeting/pleasantry behavior is brusque/command-like;
+- previously supplied guest-count facts are not reliably reused in free-form conversation;
+- multi-room intent such as “reservame la 102 y la 101” is not supported by the current single-room state/tool contract.
 
-## Why the REWORK existed
-The initial Human Product Acceptance correctly returned `REWORK` after free-form testing showed that the agent could lose dates/guest count across turns and repeat questions already answered. Subsequent real-model staging found two adjacent gaps: ordinal room references and incomplete model tool plans reaching HTTP 400 rather than conversational clarification.
+## Root cause
+The raw model is not the primary bottleneck. Staging uses Workers AI `@cf/meta/llama-3.3-70b-instruct-fp8-fast`, but current Core architecture restricts it to structured planning and fixed response templates. `ConversationState` and `hms.createReservation` are also single-room oriented.
 
-The REWORK now uses durable structured conversation state for stay dates, guest count, authoritative HMS room candidates, current selection and active booking. The LLM interprets language; Core owns state and execution authority.
+Contract: `.orchestration/contracts/ACP-2.6.9-REWORK-RECEPTIONIST.md`.
 
-## Current gate — 2.6.9
-A fresh Human Product Acceptance is mandatory before Phase 2.6 can be marked `PRODUCT_ACCEPTED` and before Fase 3 — Alquileres is unblocked.
-
-Required human verdicts:
-- `ACCEPT` — closes 2.6 as Product Accepted and enables the next roadmap phase under the same Agent Core + LLM Model Router architecture.
-- `REWORK` — reopens only the concrete product findings reported by the human reviewer, then repeats the bounded method cycle and returns to this gate.
-
-The Controller must not self-approve this gate.
-
-## Product capability now proven technically
-The HMS staging experience uses Workers AI as a real natural-language planning layer while authoritative operations remain outside the model. It can technically:
-- retain stay dates and guest count across turns in durable server-side state;
-- interpret natural Argentine Spanish for availability and follow-up questions;
-- ground ordinal references such as “la primera” to the ordered HMS result without model-authored room IDs;
-- reuse known dates/guest facts instead of asking them again;
-- clarify only truly missing business fields rather than exposing technical HTTP 400 validation errors;
-- ground prices and operational facts in HMS transactional results;
-- reject trusted tenant/hotel/guest authority from user/model input;
-- require HITL before reservation/cancellation writes;
-- preserve idempotency, ownership, audit and inventory consistency.
+## Authorized REWORK scope
+1. Hospitality/social conversation mode for greetings, thanks and normal transitions.
+2. Natural grounded response composition with deterministic verified-fact guardrails.
+3. Durable party composition / guest allocation state.
+4. Authoritative room-number grounding and multi-room selection.
+5. Composite multi-room reservation with exact HITL fingerprint, deterministic child idempotency, ownership and compensation on partial failure.
+6. Expanded QA/adversarial corpus.
+7. Independent Critic.
+8. Real-model staging E2E.
+9. Return to Human Product Acceptance.
 
 ## Non-negotiable architecture
-The LLM may interpret, plan, clarify and compose. It may not choose trusted tenant/hotel/actor context, permissions, approval metadata, operation tokens or arbitrary tools. Tool Registry, structured conversation state, validation, Policy Engine, HITL, idempotency, audit, ownership and HMS transactional truth remain deterministic and authoritative.
+The LLM may interpret, plan, converse and naturalize verified results. It may not choose trusted tenant/hotel/actor/guest identity, permissions, approval metadata, operation tokens, idempotency keys or arbitrary tools. Tool Registry, structured state, validation, Policy Engine, HITL, idempotency, audit, ownership and HMS transactional truth remain deterministic and authoritative.
 
 ## Gate to Fase 3
-Fase 3 — Alquileres remains blocked until the explicit Human Product Acceptance verdict for 2.6 is `ACCEPT`.
+Fase 3 — Alquileres remains blocked until explicit Human Product Acceptance `ACCEPT` after this REWORK.
 
-## Boundaries still in force
-No production cutover, real customer data, payments, paid-resource expansion, WhatsApp requirement, broader autonomous writes or second-vertical implementation is authorized while this Human Gate is open.
+## Boundaries
+No production cutover, real customer data, payments, paid-resource expansion, WhatsApp requirement or second-vertical implementation is authorized.
