@@ -1,60 +1,59 @@
 {
-  "phase": "ACP_INTEGRATION_PHASE_2_5",
-  "runtime_status": "HUMAN_GATE",
-  "resume_authorized": false,
-  "active_task": "ACP-2.5-CONTROLLED-RESERVATION",
-  "last_completed_task": "ACP-2.4-E1-REAL",
-  "last_completed_head": "43b9d75371ed29604509537dac898e059534fbcb",
-  "current_substage": "2.5_HUMAN_PRODUCT_ACCEPTANCE",
-  "artifact_head": "98ede44ed97764c9835d818290167903686f3b4e",
-  "product_artifact_head": "3d1a08376b9581dfc1fc159a6bf3b0733996fa61",
-  "integration_head": "e9c9221f0fa5e7b78a0ee96598e864135037d847",
-  "staging_head": "fb1391635e5b848d6590e3f71047937637310ea8",
-  "hms_artifact_head": "70fae5c902af557eadc2802ba773f44b9f95fd46",
-  "hms_staging_head": "5f92e5b92c6b77564a5a74176303d99a9739d90d",
-  "next_action": "HUMAN_PRODUCT_ACCEPTANCE_ACP_2_5",
-  "stop_reason": "AUTOMATED_AND_INDEPENDENT_GATES_PASS_AWAITING_HUMAN_PRODUCT_VERDICT",
-  "external_review": {
-    "required": false,
-    "last_audited_head": "98ede44ed97764c9835d818290167903686f3b4e",
-    "last_verdict": "PASS",
-    "hms_last_audited_head": "70fae5c902af557eadc2802ba773f44b9f95fd46",
-    "hms_last_verdict": "PASS"
+  "phase": "ACP_INTEGRATION_PHASE_2_6",
+  "runtime_status": "PLANNING_AUTHORIZED",
+  "resume_authorized": true,
+  "active_task": "ACP-2.6-LLM-MODEL-ROUTER",
+  "last_completed_task": "ACP-2.5-CONTROLLED-RESERVATION",
+  "last_completed_head": "fb1391635e5b848d6590e3f71047937637310ea8",
+  "current_substage": "2.6.1_CONVERSATIONAL_ACCEPTANCE_CORPUS",
+  "next_action": "FREEZE_CONVERSATIONAL_AND_ADVERSARIAL_ACCEPTANCE_CORPUS",
+  "stop_reason": null,
+  "product_decision": {
+    "id": "DEC-002",
+    "decision": "CONSOLIDATE_AI_EXPERIENCE_IN_HMS_BEFORE_SECOND_VERTICAL",
+    "phase_3_alquileres_blocked_until_2_6_accept": true
   },
-  "staging_evidence": {
-    "hms_deploy_run": 33301324856,
-    "hms_deploy_result": "PASS",
-    "acp_deploy_run": 33301384087,
-    "acp_deploy_result": "PASS",
-    "e1_immediate_same_session": "PASS",
-    "e2_controlled_reservation": "PASS"
+  "last_gate": {
+    "task": "ACP-2.5-CONTROLLED-RESERVATION",
+    "type": "PRODUCT_ACCEPTANCE",
+    "verdict": "ACCEPT",
+    "closure_path": ".orchestration/evidence/ACP-2.5-CLOSURE.md"
   },
-  "controls": {
-    "exact_operation_approval": true,
-    "durable_reservation_ownership": true,
-    "original_create_token_for_cancel": true,
-    "downstream_replay_audit": true,
-    "staging_e2e_prepared": true,
-    "staging_e2e_executed": true,
-    "staging_e2e_result": "PASS",
-    "staging_e2e_best_effort_cleanup": true
+  "2_5_evidence": {
+    "acp_product_artifact": "3d1a08376b9581dfc1fc159a6bf3b0733996fa61",
+    "acp_critic_candidate": "98ede44ed97764c9835d818290167903686f3b4e",
+    "hms_artifact": "70fae5c902af557eadc2802ba773f44b9f95fd46",
+    "hms_staging_deploy_run": 33301324856,
+    "acp_staging_deploy_run": 33301384087,
+    "e1": "PASS",
+    "e2": "PASS",
+    "human_product_acceptance": "ACCEPT"
   },
+  "2_6_contract": ".orchestration/contracts/ACP-2.6-LLM-MODEL-ROUTER.md",
+  "2_6_sequence": [
+    "2.6.1_CONVERSATIONAL_ACCEPTANCE_CORPUS",
+    "2.6.2_MODEL_PROVIDER_ADAPTER",
+    "2.6.3_STRUCTURED_TOOL_PLANNING",
+    "2.6.4_OPERATIONAL_CONVERSATION_CONTEXT",
+    "2.6.5_CLARIFICATION_AND_RESPONSE_COMPOSITION",
+    "2.6.6_USAGE_LATENCY_COST_FALLBACK",
+    "2.6.7_ADVERSARIAL_QA_AND_INDEPENDENT_CRITIC",
+    "2.6.8_CONVERSATIONAL_STAGING_E2E",
+    "2.6.9_HUMAN_PRODUCT_ACCEPTANCE"
+  ],
   "constraints": {
     "environment": "staging_only",
     "production": false,
     "real_data": false,
     "payment_mutation": false,
     "paid_expansion": false,
-    "human_approval_required": true
-  },
-  "human_gate": {
-    "type": "PRODUCT_ACCEPTANCE",
-    "required_verdicts": ["ACCEPT", "REWORK"],
-    "verdict": null
+    "second_vertical": false,
+    "whatsapp_required": false,
+    "human_approval_required_for_2_5_mutations": true
   },
   "event": {
-    "id": "ACP-2.5-STAGING-E2-PASS-HUMAN-GATE",
-    "type": "HUMAN_GATE",
-    "seq": 8
+    "id": "ACP-2.5-ACCEPT-OPEN-2.6",
+    "type": "PLANNING_AUTHORIZED",
+    "seq": 9
   }
 }
