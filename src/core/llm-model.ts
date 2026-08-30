@@ -18,6 +18,10 @@ const TRUSTED_FIELDS = new Set([
   "requestid", "traceid", "sessionid",
 ]);
 
+const ROUTE_FIELDS = new Set([
+  "kind", "toolId", "input", "clarificationReason", "missing", "statePatch", "messageMode", "messageText",
+]);
+
 const CLARIFICATION_REASONS = ["none", "missing", "ambiguous", "unsupported"] as const;
 const CLARIFICATION_FIELDS = ["dates", "guests", "room", "booking", "selection"] as const;
 const MESSAGE_MODES = ["none", "social", "acknowledgement", "clarification"] as const;
@@ -91,6 +95,10 @@ function hasTrustedField(value: unknown): boolean {
     if (hasTrustedField(nested)) return true;
   }
   return false;
+}
+
+function hasUnknownRouteField(value: Record<string, unknown>): boolean {
+  return Object.keys(value).some((key) => !ROUTE_FIELDS.has(key));
 }
 
 function schemaProperties(schema: JsonSchema | undefined): ReadonlySet<string> | undefined {
@@ -213,10 +221,10 @@ function clarificationContradictsState(
 ): boolean {
   if (clarification.reason !== "missing") return false;
   return clarification.missing.some((field) => {
-    if (field === "dates") return Boolean(state.stay.checkIn && state.stay.checkOut);
-    if (field === "guests") return state.stay.guests !== undefined;
-    if (field === "room" || field === "selection") return state.selectedRoomIds.length > 0 || Boolean(state.selectedRoomId);
-    if (field === "booking") return state.activeBookingIds.length > 0 || Boolean(state.activeBookingId);
+    if (field === "dates") return Boolean(state.stay?.checkIn && state.stay?.checkOut);
+    if (field === "guests") return state.stay?.guests !== undefined;
+    if (field === "room" || field === "selection") return (state.selectedRoomIds?.length ?? 0) > 0 || Boolean(state.selectedRoomId);
+    if (field === "booking") return (state.activeBookingIds?.length ?? 0) > 0 || Boolean(state.activeBookingId);
     return false;
   });
 }
@@ -324,7 +332,7 @@ export class LLMModelRouter implements ModelRouter {
       "statePatch records only facts learned or explicitly changed in the CURRENT user message. Use null only when the user explicitly clears/corrects a fact. Do not copy unchanged state into statePatch.",
       "For dates and guest count, combine the current message with CURRENT_CONVERSATION_STATE. Never ask again for a value already present there unless the user explicitly changed it ambiguously.",
       "Human-visible room numbers are NOT room IDs. When the user says room 101/102/etc., put those labels in statePatch.selectedRoomNumbers. Core resolves them only against CURRENT_CONVERSATION_STATE.availabilityRooms. Never place a guessed roomId in tool input.",
-      "For displayed-option ordinals (first/primera, second/segunda, etc.), use selectedRoomIndex for one room or selectedRoomIndexes for multiple rooms. Core resolves ordinals against authoritative ordered availability.",
+      "selectedRoomIndex is the ONE-BASED list position from the authoritative availability order. For displayed-option ordinals (first/primera, second/segunda, etc.), use selectedRoomIndex for one room or selectedRoomIndexes for multiple rooms; Core resolves them server-side.",
       "When the user explicitly distributes people across rooms, record roomGuestAllocations=[{roomNumber,guests}, ...]. If the total is clear, also set guests to the total. This is conversational memory only; do NOT claim HMS has validated room capacity.",
       "selectedRoomId may only copy an exact roomId already present in CURRENT_CONVERSATION_STATE.availabilityRoomIds. Prefer room numbers/ordinals. activeBookingId may only refer to an active booking already present in state; never invent IDs.",
       "FIRST identify current intent. THEN apply only requirements for that capability.",
@@ -332,7 +340,7 @@ export class LLMModelRouter implements ModelRouter {
       requirements || "(no capabilities)",
       "A new availability query may reuse stored dates or guests. If one piece is supplied now and the rest exists in state, route directly instead of asking for known data.",
       "A quote after availability may omit roomId from input when statePatch grounds a single room; Core fills the authoritative ID and dates.",
-      "A one-room reservation NEVER needs guest count. If one room and dates are grounded, route hms.createReservation and let external policy request approval.",
+      "A reservation request NEVER needs guest count as an execution prerequisite. If one grounded room and dates are present, route hms.createReservation; if multiple grounded rooms are present, route hms.createReservationBundle. External policy handles approval.",
       "If TWO OR MORE rooms are explicitly selected for reservation, route hms.createReservationBundle. Do not emit roomIds or allocations in input; ground room labels/ordinals and allocation in statePatch and let Core fill authoritative IDs.",
       "Interpret ordinary date phrasing. 'del 15 al 17 de enero de 2027' => checkIn=2027-01-15, checkOut=2027-01-17.",
       "Example: state has dates, user says 'somos dos' => statePatch={guests:2}; if availability is the active intent/context, use stored dates and guests=2 rather than asking dates again.",
@@ -362,7 +370,8 @@ export class LLMModelRouter implements ModelRouter {
       await recordModelInference(this.usage, context, "agent_core_route", result);
       const value = result.value;
       if (!isRecord(value)) return this.fallbackRoute("invalid_response", message, context, availableTools, conversation, state);
-      if (hasTrustedField(value)) return this.fallbackRoute("trusted_field_in_model_output", message, context, availableTools, conversation, state);
+      if (hasUnknownRouteField(value)) return this.fallbackRoute("unknown_route_field", message, context, availableTools, conversation, state);
+      if (hasTrustedField(value)) return this.fallbackRoute("trusted_field_attempt", message, context, availableTools, conversation, state);
       const clarification = clarificationDecision(value);
       const statePatch = parseStatePatch(value.statePatch);
       if (!clarification || !statePatch) return this.fallbackRoute("invalid_route_state_shape", message, context, availableTools, conversation, state);
