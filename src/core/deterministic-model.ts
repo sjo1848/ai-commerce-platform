@@ -1,4 +1,4 @@
-import type { ModelRouter, ModelRouteResult, ToolDescriptor } from "./types.js";
+import type { JsonSchema, ModelRouter, ModelRouteResult, ToolDescriptor } from "./types.js";
 
 const UUID_SHAPED = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 
@@ -27,6 +27,13 @@ function extractLabeledId(message: string, labels: readonly string[]): string | 
   return undefined;
 }
 
+function schemaRequired(schema: JsonSchema | undefined, field: string): boolean | undefined {
+  if (!schema) return undefined;
+  const required = schema.required;
+  if (!Array.isArray(required)) return false;
+  return required.includes(field);
+}
+
 export class DeterministicModelRouter implements ModelRouter {
   async route(message: string, _context: unknown, availableTools: readonly ToolDescriptor[]): Promise<ModelRouteResult> {
     const lower = message.toLowerCase();
@@ -39,29 +46,44 @@ export class DeterministicModelRouter implements ModelRouter {
     const dates = extractIsoDates(message);
     const cancellationIntent = /\b(cancelar|cancela|anular|anula)\b/i.test(message) && /\b(reserva|booking)\b/i.test(message);
     if (cancellationIntent) {
-      if (!availableTools.some((tool) => tool.id === "hms.cancelReservation")) {
+      const cancellationTool = availableTools.find((tool) => tool.id === "hms.cancelReservation");
+      if (!cancellationTool) {
         return { kind: "message", message: "La cancelación de reservas no está habilitada para este negocio." };
       }
       const bookingId = extractLabeledId(message, ["reserva", "booking"]);
-      if (!bookingId) return { kind: "message", message: "Para cancelar necesito el identificador explícito de la reserva." };
+      if (!bookingId) return { kind: "message", message: "Para cancelar necesito identificar de forma inequívoca la reserva." };
       return { kind: "tool", plan: { toolId: "hms.cancelReservation", input: { bookingId } } };
     }
 
     const reservationIntent = /\b(reservar|reserva|confirmar\s+reserva)\b/i.test(message);
     if (reservationIntent) {
-      if (!availableTools.some((tool) => tool.id === "hms.createReservation")) {
+      const reservationTool = availableTools.find((tool) => tool.id === "hms.createReservation");
+      if (!reservationTool) {
         return { kind: "message", message: "La creación de reservas no está habilitada para este negocio." };
       }
       const roomId = extractLabeledId(message, ["habitaci[oó]n", "room"]);
       const guestId = extractLabeledId(message, ["hu[eé]sped", "guest"]);
-      if (dates.length < 2 || !roomId || !guestId) {
-        return { kind: "message", message: "Para reservar necesito habitación, huésped y dos fechas explícitas." };
+      // Legacy tools without a schema still require the explicit guest id. The 2.6
+      // model-safe HMS tool schema deliberately omits guestId because identity is server-bound.
+      const guestRequired = schemaRequired(reservationTool.inputSchema, "guestId") ?? true;
+      if (dates.length < 2 || !roomId || (guestRequired && !guestId)) {
+        return {
+          kind: "message",
+          message: guestRequired
+            ? "Para reservar necesito identificar habitación, huésped y fechas."
+            : "Para reservar necesito identificar la habitación y las fechas.",
+        };
       }
       return {
         kind: "tool",
         plan: {
           toolId: "hms.createReservation",
-          input: { roomId, guestId, checkIn: dates[0], checkOut: dates[1] },
+          input: {
+            roomId,
+            ...(guestRequired && guestId ? { guestId } : {}),
+            checkIn: dates[0],
+            checkOut: dates[1],
+          },
         },
       };
     }
@@ -71,7 +93,7 @@ export class DeterministicModelRouter implements ModelRouter {
 
     if (quoteIntent && dates.length >= 2) {
       if (!roomId) {
-        return { kind: "message", message: "Para cotizar necesito el identificador de la habitación además de las fechas." };
+        return { kind: "message", message: "Para cotizar necesito identificar la habitación además de las fechas." };
       }
       if (!availableTools.some((tool) => tool.id === "hms.getQuote")) {
         return { kind: "message", message: "La cotización no está habilitada para este negocio." };
@@ -85,14 +107,25 @@ export class DeterministicModelRouter implements ModelRouter {
       };
     }
 
-    const guests = extractGuests(message) ?? 1;
+    const availabilityTool = availableTools.find((tool) => tool.id === "hms.checkAvailability");
     if ((lower.includes("dispon") || lower.includes("habitaci") || lower.includes("aloj")) && dates.length >= 2) {
-      if (!availableTools.some((tool) => tool.id === "hms.checkAvailability")) {
+      if (!availabilityTool) {
         return { kind: "message", message: "La consulta de disponibilidad no está habilitada para este negocio." };
       }
-      return { kind: "tool", plan: { toolId: "hms.checkAvailability", input: { checkIn: dates[0], checkOut: dates[1], guests } } };
+      const guests = extractGuests(message);
+      const guestsRequired = schemaRequired(availabilityTool.inputSchema, "guests") ?? false;
+      if (guestsRequired && guests === undefined) {
+        return { kind: "message", message: "¿Para cuántas personas sería?" };
+      }
+      return {
+        kind: "tool",
+        plan: {
+          toolId: "hms.checkAvailability",
+          input: { checkIn: dates[0], checkOut: dates[1], guests: guests ?? 1 },
+        },
+      };
     }
 
-    return { kind: "message", message: "Indicame fechas en formato AAAA-MM-DD y cantidad de personas para disponibilidad; habitación y fechas para cotizar; o habitación, huésped y fechas para reservar." };
+    return { kind: "message", message: "Decime las fechas y cuántas personas son; con eso puedo consultar disponibilidad y seguir desde ahí." };
   }
 }
