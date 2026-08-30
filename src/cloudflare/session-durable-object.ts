@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { ReservationOperationBinding, ReservationOperationLookup, ReservationOperationStore } from "../core/reservation-operation-store.js";
 import type { SessionStore } from "../core/session.js";
-import type { Session } from "../core/types.js";
+import type { Session, ToolPlan } from "../core/types.js";
 import {
   approvalFingerprint,
   type ApprovalChallenge,
@@ -28,10 +28,22 @@ function parseSessionJson(raw: string): Session {
   if (!isSession(value)) throw new Error("Invalid stored session payload");
   return value;
 }
+function isToolPlan(value: unknown): value is ToolPlan {
+  if (!value || typeof value !== "object") return false;
+  const plan = value as Record<string, unknown>;
+  return typeof plan.toolId === "string" && Boolean(plan.toolId.trim()) && Object.prototype.hasOwnProperty.call(plan, "input");
+}
 function isStoredApproval(value: unknown): value is StoredApprovalChallenge {
   if (!value || typeof value !== "object") return false;
   const item = value as Record<string, unknown>;
-  return typeof item.token === "string" && item.token.length >= 16 && typeof item.sessionId === "string" && typeof item.tenantId === "string" && typeof item.actorId === "string" && typeof item.fingerprint === "string" && /^[0-9a-f]{64}$/.test(item.fingerprint) && typeof item.operationFingerprint === "string" && /^[0-9a-f]{64}$/.test(item.operationFingerprint) && typeof item.expiresAt === "string" && Number.isFinite(Date.parse(item.expiresAt));
+  return typeof item.token === "string" && item.token.length >= 16
+    && typeof item.sessionId === "string"
+    && typeof item.tenantId === "string"
+    && typeof item.actorId === "string"
+    && typeof item.fingerprint === "string" && /^[0-9a-f]{64}$/.test(item.fingerprint)
+    && typeof item.operationFingerprint === "string" && /^[0-9a-f]{64}$/.test(item.operationFingerprint)
+    && isToolPlan(item.plan)
+    && typeof item.expiresAt === "string" && Number.isFinite(Date.parse(item.expiresAt));
 }
 function parseStoredApproval(raw: string): StoredApprovalChallenge {
   const value: unknown = JSON.parse(raw);
@@ -88,7 +100,7 @@ export class SessionDurableObject extends DurableObject<Env> {
       if (Date.parse(approval.expiresAt) <= Date.now()) { this.ctx.storage.kv.delete(key); return new Response(null, { status: 410 }); }
       if (approval.tenantId !== tenantId || approval.actorId !== actorId || approval.fingerprint !== fingerprint) return new Response(null, { status: 409 });
       this.ctx.storage.kv.delete(key);
-      return new Response(JSON.stringify({ operationFingerprint: approval.operationFingerprint }), { status: 200, headers: { "content-type": "application/json; charset=utf-8" } });
+      return new Response(JSON.stringify({ operationFingerprint: approval.operationFingerprint, plan: approval.plan }), { status: 200, headers: { "content-type": "application/json; charset=utf-8" } });
     }
 
     if (url.pathname === "/reservation-operation") {
@@ -141,7 +153,16 @@ export class DurableObjectApprovalStore implements ApprovalStore {
   public constructor(private readonly namespace: DurableObjectNamespace<SessionDurableObject>, private readonly now: () => Date = () => new Date(), private readonly ttlMs = 5 * 60 * 1000) {}
   async issue(input: ApprovalChallengeIssueInput): Promise<ApprovalChallenge> {
     const token = crypto.randomUUID(); const expiresAt = new Date(this.now().getTime() + this.ttlMs).toISOString();
-    const stored: StoredApprovalChallenge = { token, sessionId: input.sessionId, tenantId: input.tenantId, actorId: input.actorId, fingerprint: await approvalFingerprint(input), operationFingerprint: input.operationFingerprint, expiresAt };
+    const stored: StoredApprovalChallenge = {
+      token,
+      sessionId: input.sessionId,
+      tenantId: input.tenantId,
+      actorId: input.actorId,
+      fingerprint: await approvalFingerprint(input),
+      operationFingerprint: input.operationFingerprint,
+      plan: structuredClone(input.plan),
+      expiresAt,
+    };
     const response = await this.namespace.getByName(input.sessionId).fetch(new Request(APPROVAL_URL, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(stored) }));
     if (!response.ok) throw new Error(`Approval storage write failed (${response.status})`);
     return { token, expiresAt };
@@ -150,9 +171,11 @@ export class DurableObjectApprovalStore implements ApprovalStore {
     const response = await this.namespace.getByName(input.sessionId).fetch(new Request(APPROVAL_CONSUME_URL, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: input.token, tenantId: input.tenantId, actorId: input.actorId, fingerprint: await approvalFingerprint(input) }) }));
     if ([404, 409, 410].includes(response.status)) return null;
     if (!response.ok) throw new Error(`Approval storage consume failed (${response.status})`);
-    const payload = await response.json() as Record<string, unknown>; const operationFingerprint = typeof payload.operationFingerprint === "string" ? payload.operationFingerprint : "";
+    const payload = await response.json() as Record<string, unknown>;
+    const operationFingerprint = typeof payload.operationFingerprint === "string" ? payload.operationFingerprint : "";
     if (!/^[0-9a-f]{64}$/.test(operationFingerprint)) throw new Error("Approval storage returned an invalid operation fingerprint");
-    return { operationFingerprint };
+    if (!isToolPlan(payload.plan)) throw new Error("Approval storage returned an invalid tool plan");
+    return { operationFingerprint, plan: payload.plan };
   }
 }
 
