@@ -11,7 +11,7 @@
       "entrypoint": "AgentHmsService",
       "props": {
         "clientId": "ai-commerce-platform",
-        "permissions": ["availability.read", "quote.read"],
+        "permissions": ["availability.read", "quote.read", "reservation.write", "reservation.cancel"],
         "allowedHotelIds": ["10000000-0000-0000-0000-000000000001"]
       }
     }
