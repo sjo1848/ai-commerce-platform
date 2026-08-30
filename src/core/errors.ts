@@ -25,3 +25,10 @@ export class CoreError extends Error {
     this.name = "CoreError";
   }
 }
+
+export class ApprovalRequiredError extends CoreError {
+  public constructor(public readonly operationFingerprint: string) {
+    super("APPROVAL_REQUIRED", "Human approval is required", 409);
+    this.name = "ApprovalRequiredError";
+  }
+}
