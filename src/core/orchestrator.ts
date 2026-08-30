@@ -4,6 +4,7 @@ import { serializeToolResult, type ConversationStore } from "./conversation.js";
 import {
   applyConversationStatePatch,
   enrichPlanInputFromState,
+  InMemoryConversationStateStore,
   updateConversationStateFromTool,
   type ConversationStateStore,
 } from "./conversation-state.js";
@@ -28,7 +29,7 @@ export class ChatOrchestrator {
     private readonly usage: UsageSink,
     private readonly audit: AuditSink,
     private readonly conversation: ConversationStore,
-    private readonly conversationState: ConversationStateStore,
+    private readonly conversationState: ConversationStateStore = new InMemoryConversationStateStore(),
     private readonly maxMessageChars = 2_000,
     private readonly maxToolCalls = 2,
   ) {}
@@ -38,30 +39,14 @@ export class ChatOrchestrator {
     const tools = this.registry.descriptorsFor(context.tenant);
     const visible = tools.some((tool) => tool.id === plan.toolId);
     if (!visible) {
-      await this.audit.record({
-        timestamp: context.now,
-        requestId: context.requestId,
-        tenantId: context.tenant.id,
-        actorId: context.actor.id,
-        sessionId: context.session.id,
-        toolId: plan.toolId,
-        status: "denied",
-        detail: "model_requested_non_visible_tool",
-      });
+      await this.audit.record({ timestamp: context.now, requestId: context.requestId, tenantId: context.tenant.id, actorId: context.actor.id, sessionId: context.session.id, toolId: plan.toolId, status: "denied", detail: "model_requested_non_visible_tool" });
       throw new CoreError("TOOL_NOT_ALLOWED", "Requested tool is not available", 403);
     }
 
     const data = await this.executor.execute(plan.toolId, plan.input, context, trustedMeta);
     const before = await this.conversationState.get(context.session.id);
-    await this.conversationState.put(
-      context.session.id,
-      updateConversationStateFromTool(before, plan.toolId, plan.input, data),
-    );
-    await this.conversation.append(context.session.id, {
-      role: "tool",
-      toolId: plan.toolId,
-      content: serializeToolResult(data),
-    });
+    await this.conversationState.put(context.session.id, updateConversationStateFromTool(before, plan.toolId, plan.input, data));
+    await this.conversation.append(context.session.id, { role: "tool", toolId: plan.toolId, content: serializeToolResult(data) });
     const groundedContext = await this.conversation.list(context.session.id, 12);
     const message = await this.responder.compose({ toolId: plan.toolId, data, conversation: groundedContext, context });
     await this.conversation.append(context.session.id, { role: "assistant", content: message });
@@ -69,9 +54,7 @@ export class ChatOrchestrator {
   }
 
   async executeApprovedPlan(plan: ToolPlan, context: ExecutionContext, trustedMeta: ToolExecutionMeta): Promise<ChatResult> {
-    if (!trustedMeta.humanApproved || !trustedMeta.approvedOperationFingerprint) {
-      throw new CoreError("FORBIDDEN", "Approved plan execution requires trusted approval metadata", 403);
-    }
+    if (!trustedMeta.humanApproved || !trustedMeta.approvedOperationFingerprint) throw new CoreError("FORBIDDEN", "Approved plan execution requires trusted approval metadata", 403);
     return this.executePlan(plan, context, trustedMeta);
   }
 
@@ -96,10 +79,7 @@ export class ChatOrchestrator {
       return { message: route.message, sessionId: context.session.id };
     }
 
-    const plan: ToolPlan = {
-      toolId: route.plan.toolId,
-      input: enrichPlanInputFromState(route.plan.toolId, route.plan.input, nextState),
-    };
+    const plan: ToolPlan = { toolId: route.plan.toolId, input: enrichPlanInputFromState(route.plan.toolId, route.plan.input, nextState) };
     return this.executePlan(plan, context, trustedMeta);
   }
 }
