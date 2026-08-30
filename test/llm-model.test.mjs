@@ -60,6 +60,23 @@ test("LLM router accepts a visible tool with schema-bounded business arguments",
   assert.match(prompt, /CURRENT_CONVERSATION_STATE=/);
 });
 
+test("LLM router accepts a one-based ordinal selection as state, not as a room id", async () => {
+  const quoteTools = [{
+    id: "hms.getQuote", primitive: "QUOTE", description: "quote", risk: "read",
+    inputSchema: { type: "object", additionalProperties: false, properties: { roomId: {}, checkIn: {}, checkOut: {} }, required: ["roomId", "checkIn", "checkOut"] },
+  }];
+  const p = provider(toolRoute({}, "hms.getQuote", { selectedRoomIndex: 2 }));
+  const fb = fallback();
+  const router = new LLMModelRouter(p, fb);
+  const result = await router.route("¿Cuánto sale la segunda?", context, quoteTools, [], {
+    stay: { checkIn: "2034-02-10", checkOut: "2034-02-12", guests: 2 },
+    availabilityRoomIds: ["room-a", "room-b"],
+  });
+  assert.deepEqual(result, { kind: "tool", plan: { toolId: "hms.getQuote", input: {} }, statePatch: { selectedRoomIndex: 2 } });
+  assert.equal(fb.calls, 0);
+  assert.match(p.request.messages[0].content, /ONE-BASED list position/i);
+});
+
 test("LLM router converts structured missing-field decision into deterministic clarification", async () => {
   const p = provider(messageRoute("missing", ["dates"]));
   const fb = fallback();
