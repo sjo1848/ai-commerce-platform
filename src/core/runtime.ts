@@ -4,7 +4,7 @@ import { AgentCoreExecutor } from "./executor.js";
 import { InMemoryIdempotencyStore } from "./idempotency.js";
 import { ChatOrchestrator } from "./orchestrator.js";
 import { PolicyEngine } from "./policy.js";
-import { InMemorySessionStore, SessionManager } from "./session.js";
+import { InMemorySessionStore, SessionManager, type SessionStore } from "./session.js";
 import { TenantResolver } from "./tenant-resolver.js";
 import { ToolRegistry } from "./tool-registry.js";
 import type { Actor, Channel, ExecutionContext, Tenant, ToolDefinition } from "./types.js";
@@ -15,12 +15,13 @@ export type RuntimeConfig = {
   tenants: readonly Tenant[];
   tools?: readonly ToolDefinition<any, any>[];
   now?: () => Date;
+  sessionStore?: SessionStore;
 };
 
 export class AgentCoreRuntime {
   readonly tenantResolver: TenantResolver;
-  readonly sessions = new InMemorySessionStore();
-  readonly sessionManager = new SessionManager(this.sessions);
+  readonly sessions: SessionStore;
+  readonly sessionManager: SessionManager;
   readonly registry = new ToolRegistry();
   readonly policy = new PolicyEngine();
   readonly audit = new InMemoryAuditSink();
@@ -33,6 +34,8 @@ export class AgentCoreRuntime {
   constructor(config: RuntimeConfig) {
     this.tenantResolver = new TenantResolver(config.tenants);
     this.now = config.now ?? (() => new Date());
+    this.sessions = config.sessionStore ?? new InMemorySessionStore();
+    this.sessionManager = new SessionManager(this.sessions);
 
     if (config.tools) {
       for (const tool of config.tools) this.registry.register(tool);
@@ -48,16 +51,16 @@ export class AgentCoreRuntime {
     this.orchestrator = new ChatOrchestrator(new DeterministicModelRouter(), this.registry, this.executor, this.usage, this.audit);
   }
 
-  createContext(input: {
+  async createContext(input: {
     tenantId: string;
     actor: Actor;
     channel: Channel;
     sessionId?: string;
     requestId?: string;
-  }): ExecutionContext {
+  }): Promise<ExecutionContext> {
     const now = this.now();
     const tenant = this.tenantResolver.resolve(input.tenantId);
-    const session = this.sessionManager.getOrCreate({
+    const session = await this.sessionManager.getOrCreate({
       ...(input.sessionId ? { sessionId: input.sessionId } : {}),
       tenant,
       actor: input.actor,

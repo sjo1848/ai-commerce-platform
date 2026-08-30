@@ -9,7 +9,7 @@ import { InMemoryIdempotencyStore } from "../dist/core/idempotency.js";
 import { CoreError } from "../dist/core/errors.js";
 import { runtime, actor } from "./helpers.mjs";
 
-function setup() {
+async function setup() {
   let calls = 0;
   const registry = new ToolRegistry();
   registry.register({
@@ -25,18 +25,18 @@ function setup() {
   const audit = new InMemoryAuditSink();
   const executor = new AgentCoreExecutor(registry, new PolicyEngine(), audit, new InMemoryUsageSink(), new InMemoryIdempotencyStore());
   const r = runtime();
-  const ctx0 = r.createContext({ tenantId: "hotel-a", actor: { ...actor, permissions: ["write"] }, channel: "webchat" });
+  const ctx0 = await r.createContext({ tenantId: "hotel-a", actor: { ...actor, permissions: ["write"] }, channel: "webchat" });
   const ctx = { ...ctx0, tenant: { ...ctx0.tenant, allowedToolIds: ["test.write"] } };
   return { executor, ctx, audit, getCalls: () => calls };
 }
 
 test("side-effect tools require idempotency keys", async () => {
-  const { executor, ctx } = setup();
+  const { executor, ctx } = await setup();
   await assert.rejects(() => executor.execute("test.write", { x: 1 }, ctx), (e) => e instanceof CoreError && e.code === "IDEMPOTENCY_REQUIRED");
 });
 
 test("same idempotency key replays result without duplicate side effect", async () => {
-  const { executor, ctx, getCalls } = setup();
+  const { executor, ctx, getCalls } = await setup();
   const a = await executor.execute("test.write", { x: 1 }, ctx, { idempotencyKey: "idem-1" });
   const b = await executor.execute("test.write", { x: 1 }, ctx, { idempotencyKey: "idem-1" });
   assert.deepEqual(a, b);
@@ -44,7 +44,7 @@ test("same idempotency key replays result without duplicate side effect", async 
 });
 
 test("same idempotency key with different payload conflicts", async () => {
-  const { executor, ctx } = setup();
+  const { executor, ctx } = await setup();
   await executor.execute("test.write", { x: 1 }, ctx, { idempotencyKey: "idem-1" });
   await assert.rejects(() => executor.execute("test.write", { x: 2 }, ctx, { idempotencyKey: "idem-1" }), (e) => e instanceof CoreError && e.code === "IDEMPOTENCY_CONFLICT");
 });
@@ -64,8 +64,8 @@ test("same client idempotency key is isolated between tenants", async () => {
   });
   const executor = new AgentCoreExecutor(registry, new PolicyEngine(), new InMemoryAuditSink(), new InMemoryUsageSink(), new InMemoryIdempotencyStore());
   const r = runtime();
-  const baseA = r.createContext({ tenantId: "hotel-a", actor: { ...actor, permissions: ["write"] }, channel: "webchat" });
-  const baseB = r.createContext({ tenantId: "hotel-b", actor: { ...actor, permissions: ["write"] }, channel: "webchat" });
+  const baseA = await r.createContext({ tenantId: "hotel-a", actor: { ...actor, permissions: ["write"] }, channel: "webchat" });
+  const baseB = await r.createContext({ tenantId: "hotel-b", actor: { ...actor, permissions: ["write"] }, channel: "webchat" });
   const ctxA = { ...baseA, tenant: { ...baseA.tenant, allowedToolIds: ["test.write"] } };
   const ctxB = { ...baseB, tenant: { ...baseB.tenant, allowedToolIds: ["test.write"] } };
   const a = await executor.execute("test.write", { x: 1 }, ctxA, { idempotencyKey: "same-key" });

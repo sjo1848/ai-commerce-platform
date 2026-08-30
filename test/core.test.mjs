@@ -14,10 +14,10 @@ test("tenant resolver rejects unknown and suspended tenants", () => {
   assert.throws(() => r.tenantResolver.resolve("missing"), (e) => e instanceof CoreError && e.code === "TENANT_NOT_FOUND");
 });
 
-test("session is tenant-bound and cannot be replayed across tenants", () => {
+test("session is tenant-bound and cannot be replayed across tenants", async () => {
   const r = runtime();
-  const a = r.createContext({ tenantId: tenantA.id, actor, channel: "webchat" });
-  assert.throws(() => r.createContext({ tenantId: tenantB.id, actor, channel: "webchat", sessionId: a.session.id }), (e) => e instanceof CoreError && e.code === "TENANT_MISMATCH");
+  const a = await r.createContext({ tenantId: tenantA.id, actor, channel: "webchat" });
+  await assert.rejects(() => r.createContext({ tenantId: tenantB.id, actor, channel: "webchat", sessionId: a.session.id }), (e) => e instanceof CoreError && e.code === "TENANT_MISMATCH");
 });
 
 test("tool registry exposes only tenant-enabled tools", () => {
@@ -29,7 +29,7 @@ test("tool registry exposes only tenant-enabled tools", () => {
 test("policy denies missing permission", async () => {
   const r = runtime();
   const noPerm = { ...actor, permissions: [] };
-  const ctx = r.createContext({ tenantId: tenantA.id, actor: noPerm, channel: "webchat" });
+  const ctx = await r.createContext({ tenantId: tenantA.id, actor: noPerm, channel: "webchat" });
   await assert.rejects(() => r.executor.execute("hms.checkAvailability", { checkIn: "2026-09-01", checkOut: "2026-09-02", guests: 1 }, ctx), (e) => e instanceof CoreError && e.code === "TOOL_NOT_ALLOWED");
 });
 
@@ -48,7 +48,7 @@ test("policy requires approval for financial/admin/irreversible tools", async ()
   const audit = new InMemoryAuditSink();
   const executor = new AgentCoreExecutor(registry, new PolicyEngine(), audit, new InMemoryUsageSink(), new InMemoryIdempotencyStore());
   const r = runtime();
-  const ctx0 = r.createContext({ tenantId: tenantA.id, actor: { ...actor, permissions: ["pay"] }, channel: "webchat" });
+  const ctx0 = await r.createContext({ tenantId: tenantA.id, actor: { ...actor, permissions: ["pay"] }, channel: "webchat" });
   const ctx = { ...ctx0, tenant: { ...tenantA, allowedToolIds: ["test.financial"] } };
   await assert.rejects(() => executor.execute("test.financial", {}, ctx, { idempotencyKey: "x" }), (e) => e instanceof CoreError && e.code === "APPROVAL_REQUIRED");
 });
