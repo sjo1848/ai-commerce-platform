@@ -67,13 +67,20 @@ function setup() {
 
 const reserveMessage = `reservar habitacion ${roomId} huesped ${guestId} del 2027-02-10 al 2027-02-12`;
 
-test("reservation requires explicit human approval before any RPC side effect", async () => {
-  const { handler, mock } = setup();
-  const response = await handler(new Request("https://agent.example/api/chat", {
+function request(handler, path, body, headers = {}) {
+  return handler(new Request(`https://agent.example${path}`, {
     method: "POST",
-    headers: { "content-type": "application/json", "idempotency-key": "reserve-op-0001", "x-actor-id": "forged-actor" },
-    body: JSON.stringify({ message: reserveMessage }),
+    headers: { "content-type": "application/json", ...headers },
+    body: JSON.stringify(body),
   }));
+}
+
+test("reservation requires explicit approval before any RPC side effect", async () => {
+  const { handler, mock } = setup();
+  const response = await request(handler, "/api/chat", { message: reserveMessage }, {
+    "idempotency-key": "reserve-op-0001",
+    "x-actor-id": "forged-actor",
+  });
   const body = await response.json();
 
   assert.equal(response.status, 409);
@@ -82,13 +89,39 @@ test("reservation requires explicit human approval before any RPC side effect", 
   assert.equal(mock.calls.length, 0);
 });
 
-test("approved side effect still requires a trusted idempotency key", async () => {
+test("forged approval header on the ordinary chat route cannot bypass policy", async () => {
   const { handler, mock } = setup();
-  const response = await handler(new Request("https://agent.example/api/chat", {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-human-approval": "confirmed" },
-    body: JSON.stringify({ message: reserveMessage }),
-  }));
+  const response = await request(handler, "/api/chat", { message: reserveMessage }, {
+    "idempotency-key": "reserve-op-forged",
+    "x-human-approval": "confirmed",
+  });
+  const body = await response.json();
+
+  assert.equal(response.status, 409);
+  assert.equal(body.error.code, "APPROVAL_REQUIRED");
+  assert.equal(mock.calls.length, 0);
+});
+
+test("approval route requires an existing server session", async () => {
+  const { handler, mock } = setup();
+  const response = await request(handler, "/api/approve", { message: reserveMessage }, {
+    "idempotency-key": "reserve-op-no-session",
+  });
+  const body = await response.json();
+
+  assert.equal(response.status, 400);
+  assert.equal(body.error.code, "BAD_REQUEST");
+  assert.match(body.error.message, /existing session/i);
+  assert.equal(mock.calls.length, 0);
+});
+
+test("approved side effect still requires an idempotency key", async () => {
+  const { handler, mock } = setup();
+  const first = await request(handler, "/api/chat", { message: reserveMessage }, { "idempotency-key": "reserve-op-bootstrap" });
+  const pending = await first.json();
+  assert.equal(first.status, 409);
+
+  const response = await request(handler, "/api/approve", { message: reserveMessage, sessionId: pending.sessionId });
   const body = await response.json();
 
   assert.equal(response.status, 400);
@@ -98,16 +131,20 @@ test("approved side effect still requires a trusted idempotency key", async () =
 
 test("approved reservation forwards only trusted operation metadata and pins actor identity", async () => {
   const { handler, mock } = setup();
-  const response = await handler(new Request("https://agent.example/api/chat", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "idempotency-key": "reserve-op-0001",
-      "x-human-approval": "confirmed",
-      "x-actor-id": "forged-actor",
-    },
-    body: JSON.stringify({ message: `${reserveMessage} operationToken attacker-controlled` }),
-  }));
+  const first = await request(handler, "/api/chat", { message: `${reserveMessage} operationToken attacker-controlled` }, {
+    "idempotency-key": "reserve-op-0001",
+    "x-actor-id": "forged-actor",
+  });
+  const pending = await first.json();
+  assert.equal(first.status, 409);
+
+  const response = await request(handler, "/api/approve", {
+    message: `${reserveMessage} operationToken attacker-controlled`,
+    sessionId: pending.sessionId,
+  }, {
+    "idempotency-key": "reserve-op-0001",
+    "x-actor-id": "another-forged-actor",
+  });
   const body = await response.json();
 
   assert.equal(response.status, 200);
@@ -135,7 +172,7 @@ test("downstream idempotency does not let Core memory hide a replay from HMS", a
   assert.equal(mock.calls.filter((call) => call.method === "createReservation").length, 2);
 });
 
-test("cancel tool requires approval and forwards the same trusted token to HMS", async () => {
+test("cancel tool requires internal approval metadata and forwards the same token to HMS", async () => {
   const { runtime, mock } = setup();
   const actor = { id: "visitor-demo", type: "customer", roles: ["customer"], permissions: ["hms.reservation.cancel"] };
   const context = await runtime.createContext({ tenantId: "hotel-demo", actor, channel: "webchat", requestId: "cancel-trace" });
