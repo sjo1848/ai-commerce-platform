@@ -1,4 +1,4 @@
-import { CoreError } from "../core/errors.js";
+import { ApprovalRequiredError, CoreError } from "../core/errors.js";
 import type { Actor, ToolExecutionMeta } from "../core/types.js";
 import type { AgentCoreRuntime } from "../core/runtime.js";
 import type { ApprovalChallengeInput, ApprovalStore } from "./approval.js";
@@ -93,6 +93,7 @@ export function createWebchatHandler(runtime: AgentCoreRuntime, config: WebchatH
         });
         if (!approved) throw new CoreError("FORBIDDEN", "Approval challenge is invalid or expired", 403);
         trustedMeta.humanApproved = true;
+        trustedMeta.approvedOperationFingerprint = approved.operationFingerprint;
       }
 
       stage = "orchestrator";
@@ -100,8 +101,7 @@ export function createWebchatHandler(runtime: AgentCoreRuntime, config: WebchatH
       return json(result);
     } catch (error) {
       if (
-        error instanceof CoreError
-        && error.code === "APPROVAL_REQUIRED"
+        error instanceof ApprovalRequiredError
         && chatRoute
         && approvalCandidate
       ) {
@@ -119,7 +119,10 @@ export function createWebchatHandler(runtime: AgentCoreRuntime, config: WebchatH
         }
         try {
           stage = "issue_approval";
-          const challenge = await config.approvalStore.issue(approvalCandidate);
+          const challenge = await config.approvalStore.issue({
+            ...approvalCandidate,
+            operationFingerprint: error.operationFingerprint,
+          });
           return json({
             error: { code: error.code, message: error.message },
             sessionId: activeSessionId,
