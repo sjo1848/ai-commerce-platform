@@ -23,7 +23,7 @@ function tools(executions) {
       requiredPermissions: ["hms.availability.read"],
       inputSchema: { type: "object", properties: { checkIn: {}, checkOut: {}, guests: {} }, required: ["checkIn", "checkOut", "guests"] },
       validateInput(input) {
-        if (!input?.checkIn || !input?.checkOut || !Number.isInteger(input?.guests)) return { ok: false, message: "missing availability fields" };
+        if (!input?.checkIn || !input?.checkOut || !Number.isInteger(input?.guests) || input.guests < 1 || input.guests > 20) return { ok: false, message: "invalid availability fields" };
         return { ok: true, value: input };
       },
       async execute(input) {
