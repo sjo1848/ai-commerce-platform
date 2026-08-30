@@ -4,6 +4,9 @@
   "main": "src/worker.ts",
   "compatibility_date": "2026-08-29",
   "workers_dev": true,
+  "ai": {
+    "binding": "AI"
+  },
   "services": [
     {
       "binding": "HMS",

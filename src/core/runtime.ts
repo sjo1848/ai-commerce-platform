@@ -1,14 +1,16 @@
 import { InMemoryAuditSink } from "./audit.js";
+import { InMemoryConversationStore, type ConversationStore } from "./conversation.js";
 import { DeterministicModelRouter } from "./deterministic-model.js";
 import { AgentCoreExecutor } from "./executor.js";
 import { InMemoryIdempotencyStore } from "./idempotency.js";
+import { DeterministicGroundedResponder, type ModelResponder } from "./model-responder.js";
 import { ChatOrchestrator } from "./orchestrator.js";
 import { PolicyEngine } from "./policy.js";
 import { InMemorySessionStore, SessionManager, type SessionStore } from "./session.js";
 import { TenantResolver } from "./tenant-resolver.js";
 import { ToolRegistry } from "./tool-registry.js";
 import type { Actor, Channel, ExecutionContext, ModelRouter, Tenant, ToolDefinition } from "./types.js";
-import { InMemoryUsageSink } from "./usage.js";
+import { InMemoryUsageSink, type UsageSink } from "./usage.js";
 import { FakeHmsAdapter } from "../adapters/fake-hms.js";
 
 export type RuntimeConfig = {
@@ -16,17 +18,21 @@ export type RuntimeConfig = {
   tools?: readonly ToolDefinition<any, any>[];
   now?: () => Date;
   sessionStore?: SessionStore;
+  conversationStore?: ConversationStore;
+  usageSink?: UsageSink;
   model?: ModelRouter;
+  responder?: ModelResponder;
 };
 
 export class AgentCoreRuntime {
   readonly tenantResolver: TenantResolver;
   readonly sessions: SessionStore;
   readonly sessionManager: SessionManager;
+  readonly conversation: ConversationStore;
   readonly registry = new ToolRegistry();
   readonly policy = new PolicyEngine();
   readonly audit = new InMemoryAuditSink();
-  readonly usage = new InMemoryUsageSink();
+  readonly usage: UsageSink;
   readonly idempotency = new InMemoryIdempotencyStore();
   readonly executor: AgentCoreExecutor;
   readonly orchestrator: ChatOrchestrator;
@@ -37,6 +43,8 @@ export class AgentCoreRuntime {
     this.now = config.now ?? (() => new Date());
     this.sessions = config.sessionStore ?? new InMemorySessionStore();
     this.sessionManager = new SessionManager(this.sessions);
+    this.conversation = config.conversationStore ?? new InMemoryConversationStore();
+    this.usage = config.usageSink ?? new InMemoryUsageSink();
 
     if (config.tools) {
       for (const tool of config.tools) this.registry.register(tool);
@@ -49,7 +57,15 @@ export class AgentCoreRuntime {
     }
 
     this.executor = new AgentCoreExecutor(this.registry, this.policy, this.audit, this.usage, this.idempotency);
-    this.orchestrator = new ChatOrchestrator(config.model ?? new DeterministicModelRouter(), this.registry, this.executor, this.usage, this.audit);
+    this.orchestrator = new ChatOrchestrator(
+      config.model ?? new DeterministicModelRouter(),
+      config.responder ?? new DeterministicGroundedResponder(),
+      this.registry,
+      this.executor,
+      this.usage,
+      this.audit,
+      this.conversation,
+    );
   }
 
   async createContext(input: {

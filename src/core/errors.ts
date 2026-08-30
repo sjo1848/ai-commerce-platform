@@ -1,3 +1,5 @@
+import type { ToolPlan } from "./types.js";
+
 export type CoreErrorCode =
   | "BAD_REQUEST"
   | "TENANT_NOT_FOUND"
@@ -27,7 +29,10 @@ export class CoreError extends Error {
 }
 
 export class ApprovalRequiredError extends CoreError {
-  public constructor(public readonly operationFingerprint: string) {
+  public constructor(
+    public readonly operationFingerprint: string,
+    public readonly plan: ToolPlan,
+  ) {
     super("APPROVAL_REQUIRED", "Human approval is required", 409);
     this.name = "ApprovalRequiredError";
   }

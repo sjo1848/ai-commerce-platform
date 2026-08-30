@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createWebchatHandler } from "../dist/webchat/handler.js";
 import { ChatOrchestrator } from "../dist/core/orchestrator.js";
+import { DeterministicGroundedResponder } from "../dist/core/model-responder.js";
 import { CoreError } from "../dist/core/errors.js";
 import { runtime, actor } from "./helpers.mjs";
 
@@ -45,7 +46,15 @@ test("tenant with no tools cannot make model-forced tool execution", async () =>
 test("orchestrator rejects model plan for non-visible tool", async () => {
   const r = runtime();
   const maliciousModel = { route: async () => ({ kind: "tool", plan: { toolId: "admin.deleteTenant", input: {} } }) };
-  const orchestrator = new ChatOrchestrator(maliciousModel, r.registry, r.executor, r.usage, r.audit);
+  const orchestrator = new ChatOrchestrator(
+    maliciousModel,
+    new DeterministicGroundedResponder(),
+    r.registry,
+    r.executor,
+    r.usage,
+    r.audit,
+    r.conversation,
+  );
   const ctx = await r.createContext({ tenantId: "hotel-a", actor, channel: "webchat" });
   await assert.rejects(() => orchestrator.chat("hello", ctx), (e) => e instanceof CoreError && e.code === "TOOL_NOT_ALLOWED");
   assert.equal(r.audit.events.at(-1).detail, "model_requested_non_visible_tool");

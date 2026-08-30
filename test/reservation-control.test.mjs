@@ -130,14 +130,18 @@ test("approval challenge is bound to message/key and single-use", async () => {
   assert.equal(mock.calls.length, 1);
 });
 
-test("approval cannot authorize a rerouted or invalid operation", async () => {
+test("approval executes the exact validated plan without rerouting the model", async () => {
   let routeCount = 0;
   const model = { async route() { routeCount += 1; return { kind: "tool", plan: { toolId: "hms.createReservation", input: { guestId, roomId: routeCount === 1 ? roomId : otherRoomId, checkIn: "2027-02-10", checkOut: "2027-02-12" } } }; } };
   const routed = setup({ model });
   const pending = await pendingApproval(routed.handler, "reserve-op-reroute");
-  const rerouted = await request(routed.handler, "/api/approve", { message: reserveMessage, sessionId: pending.sessionId, approvalToken: pending.approvalToken }, { "idempotency-key": "reserve-op-reroute" });
-  assert.equal(rerouted.status, 403);
-  assert.equal(routed.mock.calls.length, 0);
+  assert.equal(routeCount, 1);
+  const approved = await request(routed.handler, "/api/approve", { message: reserveMessage, sessionId: pending.sessionId, approvalToken: pending.approvalToken }, { "idempotency-key": "reserve-op-reroute" });
+  assert.equal(approved.status, 200);
+  assert.equal(routeCount, 1, "approval must not invoke the model a second time");
+  assert.equal(routed.mock.calls.length, 1);
+  assert.equal(routed.mock.calls[0].method, "createReservation");
+  assert.equal(routed.mock.calls[0].input.roomId, roomId);
 
   const invalidModel = { async route() { return { kind: "tool", plan: { toolId: "hms.createReservation", input: { guestId, roomId } } }; } };
   const invalid = setup({ model: invalidModel });
