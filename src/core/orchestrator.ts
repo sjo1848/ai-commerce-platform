@@ -52,7 +52,7 @@ export class ChatOrchestrator {
       content: serializeToolResult(data),
     });
     const groundedContext = await this.conversation.list(context.session.id, 12);
-    const message = await this.responder.compose({ toolId: plan.toolId, data, conversation: groundedContext });
+    const message = await this.responder.compose({ toolId: plan.toolId, data, conversation: groundedContext, context });
     await this.conversation.append(context.session.id, { role: "assistant", content: message });
     return { message, sessionId: context.session.id, data };
   }
