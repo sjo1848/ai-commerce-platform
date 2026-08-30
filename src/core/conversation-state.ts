@@ -70,8 +70,8 @@ export function emptyConversationState(): ConversationState {
 
 export class InMemoryConversationStateStore implements ConversationStateStore {
   private readonly items = new Map<string, ConversationState>();
-  async get(sessionId: string): Promise<ConversationState> { return structuredClone(this.items.get(sessionId) ?? emptyConversationState()); }
-  async put(sessionId: string, state: ConversationState): Promise<void> { this.items.set(sessionId, structuredClone(state)); }
+  async get(sessionId: string): Promise<ConversationState> { return normalizeState(this.items.get(sessionId) ?? emptyConversationState()); }
+  async put(sessionId: string, state: ConversationState): Promise<void> { this.items.set(sessionId, normalizeState(state)); }
 }
 
 function validIsoDate(value: unknown): value is string { return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value); }
@@ -84,9 +84,20 @@ function uniqueStrings(values: readonly string[]): string[] {
   return [...new Set(values)];
 }
 
+function normalizeState(value: ConversationState): ConversationState {
+  const next = structuredClone(value) as ConversationState;
+  next.stay ??= {};
+  next.availabilityRoomIds ??= [];
+  next.availabilityRooms ??= next.availabilityRoomIds.map((id) => ({ id }));
+  next.selectedRoomIds ??= next.selectedRoomId ? [next.selectedRoomId] : [];
+  next.roomGuestAllocations ??= {};
+  next.activeBookingIds ??= next.activeBookingId ? [next.activeBookingId] : [];
+  return next;
+}
+
 function validAuthoritativeRoomIds(values: unknown, allowed: readonly string[]): string[] {
   if (!Array.isArray(values)) return [];
-  return uniqueStrings(values.map(stringField).filter((value): value is string => Boolean(value) && allowed.includes(value))).slice(0, 25);
+  return uniqueStrings(values.map(stringField).filter((value): value is string => typeof value === "string" && allowed.includes(value))).slice(0, 25);
 }
 
 function parseStoredState(value: unknown): ConversationState | undefined {
@@ -110,7 +121,7 @@ function parseStoredState(value: unknown): ConversationState | undefined {
   }
 
   if (Array.isArray(raw.availabilityRoomIds)) {
-    state.availabilityRoomIds = raw.availabilityRoomIds.map(stringField).filter((v): v is string => Boolean(v)).slice(0, 25);
+    state.availabilityRoomIds = raw.availabilityRoomIds.map(stringField).filter((value): value is string => typeof value === "string").slice(0, 25);
   }
   if (state.availabilityRoomIds.length === 0 && state.availabilityRooms.length > 0) {
     state.availabilityRoomIds = state.availabilityRooms.map((room) => room.id);
@@ -124,7 +135,10 @@ function parseStoredState(value: unknown): ConversationState | undefined {
   if (state.selectedRoomIds.length === 0 && selectedRoomId && state.availabilityRoomIds.includes(selectedRoomId)) {
     state.selectedRoomIds = [selectedRoomId];
   }
-  if (state.selectedRoomIds.length > 0) state.selectedRoomId = selectedRoomId && state.selectedRoomIds.includes(selectedRoomId) ? selectedRoomId : state.selectedRoomIds[0];
+  if (state.selectedRoomIds.length > 0) {
+    const selected = selectedRoomId && state.selectedRoomIds.includes(selectedRoomId) ? selectedRoomId : state.selectedRoomIds[0];
+    if (selected) state.selectedRoomId = selected;
+  }
 
   if (raw.roomGuestAllocations && typeof raw.roomGuestAllocations === "object" && !Array.isArray(raw.roomGuestAllocations)) {
     for (const [roomId, guests] of Object.entries(raw.roomGuestAllocations as Record<string, unknown>)) {
@@ -133,11 +147,14 @@ function parseStoredState(value: unknown): ConversationState | undefined {
   }
 
   state.activeBookingIds = Array.isArray(raw.activeBookingIds)
-    ? uniqueStrings(raw.activeBookingIds.map(stringField).filter((v): v is string => Boolean(v))).slice(0, 25)
+    ? uniqueStrings(raw.activeBookingIds.map(stringField).filter((value): value is string => typeof value === "string")).slice(0, 25)
     : [];
   const activeBookingId = stringField(raw.activeBookingId);
   if (state.activeBookingIds.length === 0 && activeBookingId) state.activeBookingIds = [activeBookingId];
-  if (state.activeBookingIds.length > 0) state.activeBookingId = activeBookingId && state.activeBookingIds.includes(activeBookingId) ? activeBookingId : state.activeBookingIds[0];
+  if (state.activeBookingIds.length > 0) {
+    const active = activeBookingId && state.activeBookingIds.includes(activeBookingId) ? activeBookingId : state.activeBookingIds[0];
+    if (active) state.activeBookingId = active;
+  }
 
   const bookingStatus = stringField(raw.bookingStatus);
   if (bookingStatus) state.bookingStatus = bookingStatus;
@@ -153,13 +170,13 @@ export class ConversationBackedStateStore implements ConversationStateStore {
       if (turn?.role !== "tool" || turn.toolId !== CONVERSATION_STATE_TOOL_ID) continue;
       try {
         const parsed = parseStoredState(JSON.parse(turn.content));
-        if (parsed) return parsed;
+        if (parsed) return normalizeState(parsed);
       } catch {}
     }
     return emptyConversationState();
   }
   async put(sessionId: string, state: ConversationState): Promise<void> {
-    await this.conversation.append(sessionId, { role: "tool", toolId: CONVERSATION_STATE_TOOL_ID, content: JSON.stringify(state) });
+    await this.conversation.append(sessionId, { role: "tool", toolId: CONVERSATION_STATE_TOOL_ID, content: JSON.stringify(normalizeState(state)) });
   }
 }
 
@@ -170,8 +187,9 @@ function resolveRoomNumbers(state: ConversationState, values: readonly string[])
     const target = roomNumberField(value);
     if (!target) return undefined;
     const matches = state.availabilityRooms.filter((room) => roomNumberField(room.roomNumber) === target);
-    if (matches.length !== 1) return undefined;
-    resolved.push(matches[0].id);
+    const match = matches.length === 1 ? matches[0] : undefined;
+    if (!match) return undefined;
+    resolved.push(match.id);
   }
   return uniqueStrings(resolved);
 }
@@ -190,7 +208,8 @@ function resolveRoomIndexes(state: ConversationState, values: readonly number[])
 
 function setSelectedRooms(next: ConversationState, roomIds: readonly string[]): void {
   next.selectedRoomIds = uniqueStrings(roomIds.filter((roomId) => next.availabilityRoomIds.includes(roomId))).slice(0, 25);
-  if (next.selectedRoomIds.length > 0) next.selectedRoomId = next.selectedRoomIds[0];
+  const primary = next.selectedRoomIds[0];
+  if (primary) next.selectedRoomId = primary;
   else delete next.selectedRoomId;
   for (const roomId of Object.keys(next.roomGuestAllocations)) {
     if (!next.selectedRoomIds.includes(roomId)) delete next.roomGuestAllocations[roomId];
@@ -198,8 +217,8 @@ function setSelectedRooms(next: ConversationState, roomIds: readonly string[]): 
 }
 
 export function applyConversationStatePatch(current: ConversationState, patch: ConversationStatePatch | undefined): ConversationState {
-  if (!patch) return structuredClone(current);
-  const next = structuredClone(current);
+  const next = normalizeState(current);
+  if (!patch) return next;
   if (patch.checkIn === null) delete next.stay.checkIn; else if (validIsoDate(patch.checkIn)) next.stay.checkIn = patch.checkIn;
   if (patch.checkOut === null) delete next.stay.checkOut; else if (validIsoDate(patch.checkOut)) next.stay.checkOut = patch.checkOut;
   if (patch.guests === null) delete next.stay.guests; else if (validGuests(patch.guests)) next.stay.guests = patch.guests;
@@ -254,42 +273,43 @@ export function applyConversationStatePatch(current: ConversationState, patch: C
     next.activeBookingIds = [];
   } else {
     const booking = stringField(patch.activeBookingId);
-    if (booking && current.activeBookingIds.includes(booking)) {
+    if (booking && next.activeBookingIds.includes(booking)) {
       next.activeBookingId = booking;
-      next.activeBookingIds = uniqueStrings([booking, ...current.activeBookingIds]);
+      next.activeBookingIds = uniqueStrings([booking, ...next.activeBookingIds]);
     }
   }
   return next;
 }
 
 export function enrichPlanInputFromState(toolId: string, input: unknown, state: ConversationState): unknown {
+  const safeState = normalizeState(state);
   const raw = input && typeof input === "object" && !Array.isArray(input) ? { ...(input as Record<string, unknown>) } : {};
   if (toolId === "hms.checkAvailability") {
-    if (raw.checkIn === undefined && state.stay.checkIn) raw.checkIn = state.stay.checkIn;
-    if (raw.checkOut === undefined && state.stay.checkOut) raw.checkOut = state.stay.checkOut;
-    if (raw.guests === undefined && state.stay.guests) raw.guests = state.stay.guests;
+    if (raw.checkIn === undefined && safeState.stay.checkIn) raw.checkIn = safeState.stay.checkIn;
+    if (raw.checkOut === undefined && safeState.stay.checkOut) raw.checkOut = safeState.stay.checkOut;
+    if (raw.guests === undefined && safeState.stay.guests) raw.guests = safeState.stay.guests;
   }
   if (toolId === "hms.getQuote" || toolId === "hms.createReservation") {
-    if (raw.roomId === undefined && state.selectedRoomId) raw.roomId = state.selectedRoomId;
-    if (raw.checkIn === undefined && state.stay.checkIn) raw.checkIn = state.stay.checkIn;
-    if (raw.checkOut === undefined && state.stay.checkOut) raw.checkOut = state.stay.checkOut;
+    if (raw.roomId === undefined && safeState.selectedRoomId) raw.roomId = safeState.selectedRoomId;
+    if (raw.checkIn === undefined && safeState.stay.checkIn) raw.checkIn = safeState.stay.checkIn;
+    if (raw.checkOut === undefined && safeState.stay.checkOut) raw.checkOut = safeState.stay.checkOut;
   }
   if (toolId === "hms.createReservationBundle") {
-    if (raw.roomIds === undefined && state.selectedRoomIds.length > 1) raw.roomIds = [...state.selectedRoomIds];
-    if (raw.checkIn === undefined && state.stay.checkIn) raw.checkIn = state.stay.checkIn;
-    if (raw.checkOut === undefined && state.stay.checkOut) raw.checkOut = state.stay.checkOut;
-    if (raw.allocations === undefined && Object.keys(state.roomGuestAllocations).length > 0) {
-      raw.allocations = state.selectedRoomIds
-        .filter((roomId) => state.roomGuestAllocations[roomId] !== undefined)
-        .map((roomId) => ({ roomId, guests: state.roomGuestAllocations[roomId] }));
+    if (raw.roomIds === undefined && safeState.selectedRoomIds.length > 1) raw.roomIds = [...safeState.selectedRoomIds];
+    if (raw.checkIn === undefined && safeState.stay.checkIn) raw.checkIn = safeState.stay.checkIn;
+    if (raw.checkOut === undefined && safeState.stay.checkOut) raw.checkOut = safeState.stay.checkOut;
+    if (raw.allocations === undefined && Object.keys(safeState.roomGuestAllocations).length > 0) {
+      raw.allocations = safeState.selectedRoomIds
+        .filter((roomId) => safeState.roomGuestAllocations[roomId] !== undefined)
+        .map((roomId) => ({ roomId, guests: safeState.roomGuestAllocations[roomId] }));
     }
   }
-  if (toolId === "hms.cancelReservation" && raw.bookingId === undefined && state.activeBookingId) raw.bookingId = state.activeBookingId;
+  if (toolId === "hms.cancelReservation" && raw.bookingId === undefined && safeState.activeBookingId) raw.bookingId = safeState.activeBookingId;
   return raw;
 }
 
 export function updateConversationStateFromTool(current: ConversationState, toolId: string, input: unknown, data: unknown): ConversationState {
-  const next = structuredClone(current);
+  const next = normalizeState(current);
   const rawInput = input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : {};
   const rawData = data && typeof data === "object" && !Array.isArray(data) ? data as Record<string, unknown> : {};
   const checkIn = stringField(rawInput.checkIn) ?? stringField(rawData.start);
@@ -319,14 +339,17 @@ export function updateConversationStateFromTool(current: ConversationState, tool
 
   if (toolId === "hms.createReservationBundle") {
     const roomIds = Array.isArray(rawInput.roomIds)
-      ? rawInput.roomIds.map(stringField).filter((value): value is string => Boolean(value))
+      ? rawInput.roomIds.map(stringField).filter((value): value is string => typeof value === "string")
       : [];
     if (roomIds.length > 0) setSelectedRooms(next, roomIds);
     const bookings = Array.isArray(rawData.bookings) ? rawData.bookings : [];
-    const bookingIds = bookings.map((booking) => booking && typeof booking === "object" ? stringField((booking as Record<string, unknown>).bookingId) : undefined).filter((value): value is string => Boolean(value));
+    const bookingIds = bookings
+      .map((booking) => booking && typeof booking === "object" ? stringField((booking as Record<string, unknown>).bookingId) : undefined)
+      .filter((value): value is string => typeof value === "string");
     if (bookingIds.length > 0) {
       next.activeBookingIds = uniqueStrings(bookingIds);
-      next.activeBookingId = next.activeBookingIds[0];
+      const primaryBooking = next.activeBookingIds[0];
+      if (primaryBooking) next.activeBookingId = primaryBooking;
     }
   }
 
@@ -337,8 +360,11 @@ export function updateConversationStateFromTool(current: ConversationState, tool
   }
   if (toolId === "hms.cancelReservation" && bookingId) {
     next.activeBookingIds = next.activeBookingIds.filter((value) => value !== bookingId);
-    if (next.activeBookingId === bookingId) next.activeBookingId = next.activeBookingIds[0];
-    if (!next.activeBookingId) delete next.activeBookingId;
+    if (next.activeBookingId === bookingId) {
+      const replacement = next.activeBookingIds[0];
+      if (replacement) next.activeBookingId = replacement;
+      else delete next.activeBookingId;
+    }
   }
 
   const bookingStatus = stringField(rawData.status);
