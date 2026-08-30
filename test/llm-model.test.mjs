@@ -45,13 +45,16 @@ function provider(value, error) {
   };
 }
 
+function toolRoute(input, toolId = "hms.checkAvailability") {
+  return { kind: "tool", toolId, input, clarificationReason: "none", missing: [] };
+}
+
+function messageRoute(reason, missing) {
+  return { kind: "message", toolId: "", input: {}, clarificationReason: reason, missing };
+}
+
 test("LLM router accepts a visible tool with schema-bounded business arguments", async () => {
-  const p = provider({
-    kind: "tool",
-    toolId: "hms.checkAvailability",
-    input: { checkIn: "2034-02-10", checkOut: "2034-02-12", guests: 2 },
-    message: "",
-  });
+  const p = provider(toolRoute({ checkIn: "2034-02-10", checkOut: "2034-02-12", guests: 2 }));
   const fb = fallback();
   const router = new LLMModelRouter(p, fb);
   const result = await router.route("Somos dos del 10 al 12 de febrero de 2034", context, tools);
@@ -65,16 +68,26 @@ test("LLM router accepts a visible tool with schema-bounded business arguments",
   assert.match(prompt, /hms\.checkAvailability/);
 });
 
-test("LLM router accepts a concise clarification message", async () => {
-  const p = provider({ kind: "message", toolId: "", input: {}, message: "¿Para qué fechas sería?" });
+test("LLM router converts structured missing-field decision into deterministic clarification", async () => {
+  const p = provider(messageRoute("missing", ["dates"]));
   const fb = fallback();
   const router = new LLMModelRouter(p, fb);
   assert.deepEqual(await router.route("¿Tenés para dos?", context, tools), { kind: "message", message: "¿Para qué fechas sería?" });
   assert.equal(fb.calls, 0);
 });
 
+test("LLM message route cannot author free-form operational facts", async () => {
+  const p = provider({ ...messageRoute("missing", ["dates"]), message: "Sí, hay una suite por $1 con desayuno" });
+  const fb = fallback();
+  const router = new LLMModelRouter(p, fb);
+  const result = await router.route("¿Tenés algo?", context, tools);
+  assert.deepEqual(result, { kind: "message", message: "fallback" });
+  assert.equal(fb.calls, 1);
+  assert.doesNotMatch(result.message, /suite|desayuno|\$1/i);
+});
+
 test("unknown model-selected tools fail to configured fallback", async () => {
-  const p = provider({ kind: "tool", toolId: "hms.deleteHotel", input: {}, message: "" });
+  const p = provider(toolRoute({}, "hms.deleteHotel"));
   const fb = fallback();
   const router = new LLMModelRouter(p, fb);
   assert.deepEqual(await router.route("borrá el hotel", context, tools), { kind: "message", message: "fallback" });
@@ -82,12 +95,7 @@ test("unknown model-selected tools fail to configured fallback", async () => {
 });
 
 test("trusted execution fields from model output are rejected", async () => {
-  const p = provider({
-    kind: "tool",
-    toolId: "hms.checkAvailability",
-    input: { checkIn: "2034-02-10", checkOut: "2034-02-12", guests: 2, tenantId: "other" },
-    message: "",
-  });
+  const p = provider(toolRoute({ checkIn: "2034-02-10", checkOut: "2034-02-12", guests: 2, tenantId: "other" }));
   const fb = fallback();
   const router = new LLMModelRouter(p, fb);
   assert.deepEqual(await router.route("consulta", context, tools), { kind: "message", message: "fallback" });
@@ -97,7 +105,7 @@ test("trusted execution fields from model output are rejected", async () => {
 test("guestId and traceId are globally trusted even for a schema-less future tool", async () => {
   const schemaLess = [{ id: "future.tool", primitive: "CHECK", description: "future", risk: "read" }];
   for (const field of ["guestId", "traceId"]) {
-    const p = provider({ kind: "tool", toolId: "future.tool", input: { query: "x", [field]: "attacker" }, message: "" });
+    const p = provider(toolRoute({ query: "x", [field]: "attacker" }, "future.tool"));
     const fb = fallback();
     const router = new LLMModelRouter(p, fb);
     assert.deepEqual(await router.route("consulta", context, schemaLess), { kind: "message", message: "fallback" });
@@ -106,14 +114,16 @@ test("guestId and traceId are globally trusted even for a schema-less future too
 });
 
 test("unknown tool arguments are rejected before executor", async () => {
-  const p = provider({
-    kind: "tool",
-    toolId: "hms.checkAvailability",
-    input: { checkIn: "2034-02-10", checkOut: "2034-02-12", guests: 2, surprise: "x" },
-    message: "",
-  });
+  const p = provider(toolRoute({ checkIn: "2034-02-10", checkOut: "2034-02-12", guests: 2, surprise: "x" }));
   const fb = fallback();
   const router = new LLMModelRouter(p, fb);
+  assert.deepEqual(await router.route("consulta", context, tools), { kind: "message", message: "fallback" });
+  assert.equal(fb.calls, 1);
+});
+
+test("inconsistent message/tool clarification state fails to fallback", async () => {
+  const fb = fallback();
+  const router = new LLMModelRouter(provider({ kind: "message", toolId: "hms.checkAvailability", input: {}, clarificationReason: "missing", missing: ["dates"] }), fb);
   assert.deepEqual(await router.route("consulta", context, tools), { kind: "message", message: "fallback" });
   assert.equal(fb.calls, 1);
 });
