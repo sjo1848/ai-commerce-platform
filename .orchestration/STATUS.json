@@ -1,20 +1,21 @@
 {
   "phase": "ACP_INTEGRATION_PHASE_2_5",
-  "runtime_status": "PRECRITIC_REVALIDATION",
-  "resume_authorized": true,
+  "runtime_status": "EXTERNAL_REVIEW",
+  "resume_authorized": false,
   "active_task": "ACP-2.5-CONTROLLED-RESERVATION",
   "last_completed_task": "ACP-2.4-E1-REAL",
   "last_completed_head": "43b9d75371ed29604509537dac898e059534fbcb",
   "current_substage": "2.5_CONTROLLED_SIDE_EFFECT",
   "work_branch": "feature/acp-2-5-controlled-reservation",
   "artifact_head": "cec61660187969923da7ae34af524b094e9e762d",
-  "next_action": "RUN_EXACT_ARTIFACT_GATES_AND_PUBLISH_PRECRITIC",
-  "stop_reason": null,
+  "next_action": "INDEPENDENT_CRITIC_ON_FROZEN_ACP_2_5_ARTIFACT",
+  "stop_reason": "PRECRITIC_PASS_AWAITING_EXTERNAL_REVIEW",
   "external_review": {
     "required": true,
     "last_audited_head": null,
     "last_verdict": null,
-    "review_path": null
+    "artifact_head": "cec61660187969923da7ae34af524b094e9e762d",
+    "review_path": ".orchestration/evidence/ACP-2.5-PRECRITIC.md"
   },
   "constraints": {
     "environment": "staging_only",
@@ -25,8 +26,8 @@
     "human_approval_required": true
   },
   "event": {
-    "id": "ACP-2.5-PRECRITIC-REVALIDATION",
-    "type": "TASK_ACTIVE",
-    "seq": 4
+    "id": "ACP-2.5-PRECRITIC-PASS",
+    "type": "EXTERNAL_REVIEW",
+    "seq": 5
   }
 }
