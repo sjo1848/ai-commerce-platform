@@ -72,7 +72,12 @@ export type ToolDefinition<I, O> = {
   requiredPermissions: readonly string[];
   /** Model-visible business arguments only. Trusted execution metadata must never appear here. */
   inputSchema?: JsonSchema;
-  validateInput(input: unknown): ValidationResult<I>;
+  /**
+   * Canonicalizes and validates execution input. The optional server context may
+   * inject trusted bindings that are deliberately absent from model-visible
+   * schemas; the returned canonical value is what approval fingerprints bind.
+   */
+  validateInput(input: unknown, context?: ExecutionContext): ValidationResult<I>;
   execute(input: I, context: ExecutionContext, meta: ToolExecutionMeta): Promise<O>;
 };
 
