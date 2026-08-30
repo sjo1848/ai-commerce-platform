@@ -64,16 +64,39 @@ jobs:
           ')"
           echo "AI_COMMERCE_STAGING_URL=https://$WORKER_NAME.$subdomain.workers.dev" >> "$GITHUB_ENV"
 
+      - name: Wait for Agent Core readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 12); do
+            status="$(curl -sS --max-time 10 -o /tmp/e1-root.html -w '%{http_code}' "$AI_COMMERCE_STAGING_URL/" || true)"
+            if [[ "$status" == 2* ]]; then
+              echo "Agent Core ready on attempt $attempt ($status)."
+              exit 0
+            fi
+            echo "Agent Core not ready on attempt $attempt (HTTP ${status:-curl-error}); retrying..."
+            sleep 2
+          done
+          echo "Agent Core workers.dev endpoint did not become ready." >&2
+          [[ -f /tmp/e1-root.html ]] && cat /tmp/e1-root.html >&2 || true
+          exit 1
+
       - name: E1 real availability through HMS Service Binding
         shell: bash
         run: |
           set -euo pipefail
-          response="$(curl -fsS --max-time 20 \
+          status="$(curl -sS --max-time 20 \
+            -o /tmp/e1-availability.json \
+            -w '%{http_code}' \
             -H 'content-type: application/json' \
             -H 'x-request-id: e1-staging-availability' \
             -X POST "$AI_COMMERCE_STAGING_URL/api/chat" \
-            --data '{"message":"disponibilidad 2027-01-15 2027-01-17 para 1 persona"}')"
-          printf '%s' "$response" > /tmp/e1-availability.json
+            --data '{"message":"disponibilidad 2027-01-15 2027-01-17 para 1 persona"}' || true)"
+          if [[ "$status" != 2* ]]; then
+            echo "E1 availability HTTP $status" >&2
+            cat /tmp/e1-availability.json >&2 || true
+            exit 1
+          fi
           node - <<'NODE'
           const fs = require('fs');
           const body = JSON.parse(fs.readFileSync('/tmp/e1-availability.json', 'utf8'));
@@ -96,12 +119,18 @@ jobs:
               sessionId: process.env.E1_SESSION_ID
             }));
           ')"
-          response="$(curl -fsS --max-time 20 \
+          status="$(curl -sS --max-time 20 \
+            -o /tmp/e1-quote.json \
+            -w '%{http_code}' \
             -H 'content-type: application/json' \
             -H 'x-request-id: e1-staging-quote' \
             -X POST "$AI_COMMERCE_STAGING_URL/api/chat" \
-            --data "$payload")"
-          printf '%s' "$response" > /tmp/e1-quote.json
+            --data "$payload" || true)"
+          if [[ "$status" != 2* ]]; then
+            echo "E1 quote HTTP $status" >&2
+            cat /tmp/e1-quote.json >&2 || true
+            exit 1
+          fi
           E1_ROOM_ID="$E1_ROOM_ID" node - <<'NODE'
           const fs = require('fs');
           const body = JSON.parse(fs.readFileSync('/tmp/e1-quote.json', 'utf8'));
