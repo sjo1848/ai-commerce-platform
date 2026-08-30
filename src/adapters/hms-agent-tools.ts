@@ -1,5 +1,5 @@
 import { CoreError } from "../core/errors.js";
-import type { JsonSchema, ToolDefinition } from "../core/types.js";
+import type { ExecutionContext, JsonSchema, ToolDefinition } from "../core/types.js";
 import type { HmsServiceBindingAdapter } from "./hms-service-binding.js";
 
 const availabilitySchema: JsonSchema = {
@@ -52,9 +52,14 @@ function withSchema<I, O>(tool: ToolDefinition<I, O>, inputSchema: JsonSchema): 
 }
 
 export type HmsAgentIdentityConfig = {
-  /** Server-owned staging/application identity mapping. Never model/user input. */
-  guestIdByActor?: Readonly<Record<string, string>>;
+  /** Server-owned tenant+actor identity mapping. Never model/user input. */
+  guestIdByTenantActor?: Readonly<Record<string, Readonly<Record<string, string>>>>;
 };
+
+function trustedGuestId(identity: HmsAgentIdentityConfig, context: ExecutionContext): string | undefined {
+  const value = identity.guestIdByTenantActor?.[context.tenant.id]?.[context.actor.id]?.trim();
+  return value || undefined;
+}
 
 function createReservationTool(
   adapter: HmsServiceBindingAdapter,
@@ -66,11 +71,10 @@ function createReservationTool(
     inputSchema: reservationSchema,
     validateInput(input, context) {
       if (!context) return { ok: false, message: "Trusted execution context is required" };
-      const guestId = identity.guestIdByActor?.[context.actor.id]?.trim();
-      if (!guestId) return { ok: false, message: "Guest identity is not configured for this actor" };
+      const guestId = trustedGuestId(identity, context);
+      if (!guestId) return { ok: false, message: "Guest identity is not configured for this tenant and actor" };
       if (!input || typeof input !== "object") return { ok: false, message: "Invalid reservation input" };
       const raw = input as Record<string, unknown>;
-      // Legacy deterministic fallback may include the same synthetic guest id.
       // Any attempt to select a different guest is rejected; canonical input always uses the trusted mapping.
       if (raw.guestId !== undefined && raw.guestId !== guestId) {
         return { ok: false, message: "Guest identity cannot be selected by the request" };
@@ -85,9 +89,9 @@ function createReservationTool(
       return base.validateInput(canonical, context);
     },
     async execute(input, context, meta) {
-      const expectedGuestId = identity.guestIdByActor?.[context.actor.id]?.trim();
+      const expectedGuestId = trustedGuestId(identity, context);
       if (!expectedGuestId || input.guestId !== expectedGuestId) {
-        throw new CoreError("FORBIDDEN", "Reservation guest identity does not match trusted actor binding", 403);
+        throw new CoreError("FORBIDDEN", "Reservation guest identity does not match trusted tenant/actor binding", 403);
       }
       return base.execute(input, context, meta);
     },
