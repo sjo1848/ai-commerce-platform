@@ -7,7 +7,7 @@ import { PolicyEngine } from "./policy.js";
 import { InMemorySessionStore, SessionManager, type SessionStore } from "./session.js";
 import { TenantResolver } from "./tenant-resolver.js";
 import { ToolRegistry } from "./tool-registry.js";
-import type { Actor, Channel, ExecutionContext, Tenant, ToolDefinition } from "./types.js";
+import type { Actor, Channel, ExecutionContext, ModelRouter, Tenant, ToolDefinition } from "./types.js";
 import { InMemoryUsageSink } from "./usage.js";
 import { FakeHmsAdapter } from "../adapters/fake-hms.js";
 
@@ -16,6 +16,7 @@ export type RuntimeConfig = {
   tools?: readonly ToolDefinition<any, any>[];
   now?: () => Date;
   sessionStore?: SessionStore;
+  model?: ModelRouter;
 };
 
 export class AgentCoreRuntime {
@@ -48,7 +49,7 @@ export class AgentCoreRuntime {
     }
 
     this.executor = new AgentCoreExecutor(this.registry, this.policy, this.audit, this.usage, this.idempotency);
-    this.orchestrator = new ChatOrchestrator(new DeterministicModelRouter(), this.registry, this.executor, this.usage, this.audit);
+    this.orchestrator = new ChatOrchestrator(config.model ?? new DeterministicModelRouter(), this.registry, this.executor, this.usage, this.audit);
   }
 
   async createContext(input: {
