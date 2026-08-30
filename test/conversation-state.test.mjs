@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { InMemoryConversationStore } from "../dist/core/conversation.js";
-import { applyConversationStatePatch, ConversationBackedStateStore } from "../dist/core/conversation-state.js";
+import { applyConversationStatePatch, ConversationBackedStateStore, InMemoryConversationStateStore } from "../dist/core/conversation-state.js";
 import { AgentCoreRuntime } from "../dist/core/runtime.js";
 import { InMemorySessionStore } from "../dist/core/session.js";
 
@@ -72,6 +72,56 @@ test("dates survive a clarification turn and are not requested again when guests
   assert.deepEqual(executions[0].input, { guests: 2, checkIn: "2027-01-15", checkOut: "2027-01-17" });
 });
 
+test("incomplete tool plan becomes clarification after persisting its state patch", async () => {
+  const executions = [];
+  let call = 0;
+  const model = {
+    async route() {
+      call += 1;
+      if (call === 1) {
+        return {
+          kind: "tool",
+          plan: { toolId: "hms.checkAvailability", input: { checkIn: "2027-01-15", checkOut: "2027-01-17" } },
+          statePatch: { checkIn: "2027-01-15", checkOut: "2027-01-17" },
+        };
+      }
+      return { kind: "tool", plan: { toolId: "hms.checkAvailability", input: { guests: 2 } }, statePatch: { guests: 2 } };
+    },
+  };
+  const stateStore = new InMemoryConversationStateStore();
+  const runtime = new AgentCoreRuntime({ tenants: [tenant], tools: tools(executions), model, conversationStateStore: stateStore });
+  const context = await runtime.createContext({ tenantId: tenant.id, actor, channel: "webchat" });
+
+  const first = await runtime.orchestrator.chat("Necesito disponibilidad del 15 al 17 de enero de 2027", context);
+  assert.match(first.message, /cuántas personas/i);
+  assert.equal(executions.length, 0);
+  assert.deepEqual((await stateStore.get(context.session.id)).stay, { checkIn: "2027-01-15", checkOut: "2027-01-17" });
+
+  const secondContext = await runtime.createContext({ tenantId: tenant.id, actor, channel: "webchat", sessionId: context.session.id });
+  await runtime.orchestrator.chat("Somos dos", secondContext);
+  assert.deepEqual(executions[0].input, { guests: 2, checkIn: "2027-01-15", checkOut: "2027-01-17" });
+});
+
+test("present but invalid required value still fails closed instead of becoming a clarification", async () => {
+  const executions = [];
+  const model = {
+    async route() {
+      return {
+        kind: "tool",
+        plan: { toolId: "hms.checkAvailability", input: { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 0 } },
+        statePatch: { checkIn: "2027-01-15", checkOut: "2027-01-17" },
+      };
+    },
+  };
+  const runtime = new AgentCoreRuntime({ tenants: [tenant], tools: tools(executions), model });
+  const context = await runtime.createContext({ tenantId: tenant.id, actor, channel: "webchat" });
+  await assert.rejects(
+    runtime.orchestrator.chat("Somos cero", context),
+    (error) => error?.code === "BAD_REQUEST" && error?.status === 400,
+  );
+  assert.equal(executions.length, 0);
+});
+
 test("ordinal model selection is resolved server-side against authoritative availability order", async () => {
   const executions = [];
   let call = 0;
@@ -91,6 +141,62 @@ test("ordinal model selection is resolved server-side against authoritative avai
   const secondContext = await runtime.createContext({ tenantId: tenant.id, actor, channel: "webchat", sessionId: first.sessionId });
   await runtime.orchestrator.chat("¿Cuánto sale la primera?", secondContext);
   assert.deepEqual(executions[1].input, { roomId, checkIn: "2027-01-15", checkOut: "2027-01-17" });
+});
+
+test("reservation continuation with known dates but no room asks only for selection", async () => {
+  const reservationTenant = {
+    id: "hotel-reservation-demo",
+    slug: "hotel-reservation-demo",
+    status: "active",
+    allowedToolIds: ["hms.createReservation"],
+    toolPolicies: { "hms.createReservation": "approval" },
+  };
+  const reservationActor = {
+    id: "visitor-demo",
+    type: "customer",
+    roles: ["customer"],
+    permissions: ["hms.reservation.write"],
+  };
+  let executions = 0;
+  const reservationTool = {
+    id: "hms.createReservation",
+    primitive: "RESERVE",
+    description: "reservation",
+    risk: "write",
+    sideEffect: "reversible",
+    requiredPermissions: ["hms.reservation.write"],
+    inputSchema: { type: "object", properties: { roomId: {}, checkIn: {}, checkOut: {} }, required: ["roomId", "checkIn", "checkOut"] },
+    validateInput(input) {
+      if (!input?.roomId || !input?.checkIn || !input?.checkOut) return { ok: false, message: "room and dates required" };
+      return { ok: true, value: input };
+    },
+    async execute() {
+      executions += 1;
+      return { bookingId: "booking-1", status: "CONFIRMED" };
+    },
+  };
+  const stateStore = new InMemoryConversationStateStore();
+  const runtime = new AgentCoreRuntime({
+    tenants: [reservationTenant],
+    tools: [reservationTool],
+    conversationStateStore: stateStore,
+    model: {
+      async route() {
+        return { kind: "tool", plan: { toolId: "hms.createReservation", input: {} }, statePatch: {} };
+      },
+    },
+  });
+  const context = await runtime.createContext({ tenantId: reservationTenant.id, actor: reservationActor, channel: "webchat" });
+  await stateStore.put(context.session.id, {
+    stay: { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 2 },
+    availabilityRoomIds: [roomId, secondRoomId],
+  });
+
+  const result = await runtime.orchestrator.chat("Para las fechas que te dije ya", context);
+  assert.match(result.message, /habitación|opción/i);
+  assert.doesNotMatch(result.message, /fecha|persona/i);
+  assert.equal(executions, 0);
+  assert.deepEqual((await stateStore.get(context.session.id)).stay, { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 2 });
 });
 
 test("model cannot persist a selected room or ordinal outside authoritative availability", () => {
