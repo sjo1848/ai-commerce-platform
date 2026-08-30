@@ -160,8 +160,11 @@ jobs:
           if (body?.data?.currency !== 'ARS') throw new Error('E1 quote currency mismatch');
           NODE
 
-          if ! grep -q '"kind":"model_inference"' /tmp/e1-worker-tail.log; then
-            echo "E1 did not capture any real model_inference telemetry." >&2
+          E1_TELEMETRY="$(node scripts/count-model-telemetry.mjs /tmp/e1-worker-tail.log)"
+          echo "E1_TELEMETRY=$E1_TELEMETRY"
+          E1_MODEL_INFERENCES="$(printf '%s' "$E1_TELEMETRY" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(String(JSON.parse(s).modelInferences)))')"
+          if [[ "$E1_MODEL_INFERENCES" -lt 2 ]]; then
+            echo "E1 did not capture enough real model_inference telemetry." >&2
             exit 1
           fi
 
@@ -190,8 +193,10 @@ jobs:
           echo "--- ACP 2.6.8 model telemetry ---"
           cat /tmp/acp26-model-tail.log || true
 
-          MODEL_INFERENCES="$(grep -c '"kind":"model_inference"' /tmp/acp26-model-tail.log || true)"
-          MODEL_FALLBACKS="$(grep -c '"kind":"model_fallback"' /tmp/acp26-model-tail.log || true)"
+          MODEL_TELEMETRY="$(node scripts/count-model-telemetry.mjs /tmp/acp26-model-tail.log)"
+          echo "ACP26_MODEL_TELEMETRY=$MODEL_TELEMETRY"
+          MODEL_INFERENCES="$(printf '%s' "$MODEL_TELEMETRY" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(String(JSON.parse(s).modelInferences)))')"
+          MODEL_FALLBACKS="$(printf '%s' "$MODEL_TELEMETRY" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(String(JSON.parse(s).modelFallbacks)))')"
           echo "ACP26_MODEL_INFERENCES=$MODEL_INFERENCES"
           echo "ACP26_MODEL_FALLBACKS=$MODEL_FALLBACKS"
           if [[ "$MODEL_INFERENCES" -lt 3 ]]; then
