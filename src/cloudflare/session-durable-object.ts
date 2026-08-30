@@ -1,7 +1,8 @@
 import { DurableObject } from "cloudflare:workers";
+import type { ConversationStore } from "../core/conversation.js";
 import type { ReservationOperationBinding, ReservationOperationLookup, ReservationOperationStore } from "../core/reservation-operation-store.js";
 import type { SessionStore } from "../core/session.js";
-import type { Session, ToolPlan } from "../core/types.js";
+import type { ModelConversationTurn, Session, ToolPlan } from "../core/types.js";
 import {
   approvalFingerprint,
   type ApprovalChallenge,
@@ -13,7 +14,9 @@ import {
 } from "../webchat/approval.js";
 
 const SESSION_KEY = "session";
+const CONVERSATION_KEY = "conversation";
 const SESSION_URL = "https://session.internal/session";
+const CONVERSATION_URL = "https://session.internal/conversation";
 const APPROVAL_URL = "https://session.internal/approval";
 const APPROVAL_CONSUME_URL = "https://session.internal/approval/consume";
 const RESERVATION_OPERATION_URL = "https://session.internal/reservation-operation";
@@ -32,6 +35,21 @@ function isToolPlan(value: unknown): value is ToolPlan {
   if (!value || typeof value !== "object") return false;
   const plan = value as Record<string, unknown>;
   return typeof plan.toolId === "string" && Boolean(plan.toolId.trim()) && Object.prototype.hasOwnProperty.call(plan, "input");
+}
+function isConversationTurn(value: unknown): value is ModelConversationTurn {
+  if (!value || typeof value !== "object") return false;
+  const turn = value as Record<string, unknown>;
+  return ["user", "assistant", "tool"].includes(String(turn.role))
+    && typeof turn.content === "string"
+    && turn.content.trim().length > 0
+    && turn.content.length <= 4_000
+    && (turn.toolId === undefined || typeof turn.toolId === "string");
+}
+function parseConversation(raw: string | undefined): ModelConversationTurn[] {
+  if (raw === undefined) return [];
+  const value: unknown = JSON.parse(raw);
+  if (!Array.isArray(value) || !value.every(isConversationTurn)) throw new Error("Invalid stored conversation payload");
+  return value;
 }
 function isStoredApproval(value: unknown): value is StoredApprovalChallenge {
   if (!value || typeof value !== "object") return false;
@@ -58,7 +76,7 @@ function isReservationOperationBinding(value: unknown): value is ReservationOper
   return typeof item.sessionId === "string" && typeof item.tenantId === "string" && typeof item.actorId === "string" && typeof item.bookingId === "string" && typeof item.operationToken === "string" && item.operationToken.length >= 1;
 }
 
-/** Per-session durable authority for session, approval challenges and reversible reservation ownership. */
+/** Per-session durable authority for session, conversation, approval challenges and reversible reservation ownership. */
 export class SessionDurableObject extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) { super(ctx, env); }
 
@@ -76,6 +94,27 @@ export class SessionDurableObject extends DurableObject<Env> {
         const raw = await request.text(); const session = parseSessionJson(raw);
         if (this.ctx.id.name && session.id !== this.ctx.id.name) return new Response(null, { status: 409 });
         this.ctx.storage.kv.put(SESSION_KEY, JSON.stringify(session));
+        return new Response(null, { status: 204 });
+      }
+      return new Response(null, { status: 405 });
+    }
+
+    if (url.pathname === "/conversation") {
+      if (request.method === "GET") {
+        const turns = parseConversation(this.ctx.storage.kv.get<string>(CONVERSATION_KEY));
+        return new Response(JSON.stringify(turns), { status: 200, headers: { "content-type": "application/json; charset=utf-8" } });
+      }
+      if (request.method === "POST") {
+        const turn = await request.json() as unknown;
+        if (!isConversationTurn(turn)) return new Response(null, { status: 400 });
+        const turns = parseConversation(this.ctx.storage.kv.get<string>(CONVERSATION_KEY));
+        turns.push({
+          role: turn.role,
+          content: turn.content.trim(),
+          ...(turn.toolId ? { toolId: turn.toolId.slice(0, 200) } : {}),
+        });
+        if (turns.length > 32) turns.splice(0, turns.length - 32);
+        this.ctx.storage.kv.put(CONVERSATION_KEY, JSON.stringify(turns));
         return new Response(null, { status: 204 });
       }
       return new Response(null, { status: 405 });
@@ -146,6 +185,21 @@ export class DurableObjectSessionStore implements SessionStore {
     if (!isSession(session)) throw new Error("Invalid session payload");
     const response = await this.namespace.getByName(session.id).fetch(new Request(SESSION_URL, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(session) }));
     if (!response.ok) throw new Error(`Session storage write failed (${response.status})`);
+  }
+}
+
+export class DurableObjectConversationStore implements ConversationStore {
+  public constructor(private readonly namespace: DurableObjectNamespace<SessionDurableObject>) {}
+  async list(sessionId: string, limit = 12): Promise<ModelConversationTurn[]> {
+    const response = await this.namespace.getByName(sessionId).fetch(CONVERSATION_URL);
+    if (!response.ok) throw new Error(`Conversation storage read failed (${response.status})`);
+    const turns = parseConversation(await response.text());
+    return turns.slice(-Math.max(0, Math.min(limit, 32)));
+  }
+  async append(sessionId: string, turn: ModelConversationTurn): Promise<void> {
+    if (!isConversationTurn(turn)) throw new Error("Invalid conversation turn");
+    const response = await this.namespace.getByName(sessionId).fetch(new Request(CONVERSATION_URL, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(turn) }));
+    if (!response.ok) throw new Error(`Conversation storage write failed (${response.status})`);
   }
 }
 
