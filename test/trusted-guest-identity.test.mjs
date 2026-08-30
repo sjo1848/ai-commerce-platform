@@ -28,7 +28,7 @@ function setup() {
   };
   const reservationOperations = { async bind() {}, async get() { return undefined; } };
   const adapter = new HmsServiceBindingAdapter(service, { "hotel-demo": { hotelId } }, reservationOperations);
-  const tools = hmsAgentTools(adapter, { guestIdByActor: { "visitor-demo": trustedGuestId } });
+  const tools = hmsAgentTools(adapter, { guestIdByTenantActor: { "hotel-demo": { "visitor-demo": trustedGuestId } } });
   const runtime = new AgentCoreRuntime({ tenants: [tenant], tools });
   return { runtime, calls };
 }
@@ -41,7 +41,7 @@ test("model-visible reservation schema contains no guestId", () => {
   assert.deepEqual(descriptor.inputSchema.required, ["roomId", "checkIn", "checkOut"]);
 });
 
-test("canonical approval plan includes server-resolved guest identity", async () => {
+test("canonical approval plan includes server-resolved tenant+actor guest identity", async () => {
   const { runtime } = setup();
   const context = await runtime.createContext({ tenantId: tenant.id, actor, channel: "webchat" });
   const input = { roomId, checkIn: "2034-02-10", checkOut: "2034-02-12" };
