@@ -26,8 +26,8 @@ function numberField(value: unknown): number | undefined {
 export class WorkersAiModelProvider implements ModelProvider {
   readonly model: string;
   readonly gatewayId: string;
-  readonly inputPerMillionUsd?: number;
-  readonly outputPerMillionUsd?: number;
+  readonly inputPerMillionUsd: number | undefined;
+  readonly outputPerMillionUsd: number | undefined;
 
   constructor(
     private readonly ai: WorkersAiBinding,
