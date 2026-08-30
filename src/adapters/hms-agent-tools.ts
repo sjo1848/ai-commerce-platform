@@ -1,5 +1,6 @@
-import type { HmsServiceBindingAdapter } from "./hms-service-binding.js";
+import { CoreError } from "../core/errors.js";
 import type { JsonSchema, ToolDefinition } from "../core/types.js";
+import type { HmsServiceBindingAdapter } from "./hms-service-binding.js";
 
 const availabilitySchema: JsonSchema = {
   type: "object",
@@ -23,17 +24,18 @@ const quoteSchema: JsonSchema = {
   required: ["roomId", "checkIn", "checkOut"],
 };
 
+// guestId is intentionally absent: the authenticated/server-pinned actor identity
+// resolves it before validation and the canonical resolved value is fingerprinted.
 const reservationSchema: JsonSchema = {
   type: "object",
   additionalProperties: false,
   properties: {
-    guestId: { type: "string", minLength: 1, description: "ID de huésped ya conocido por la sesión/flujo" },
     roomId: { type: "string", minLength: 1, description: "ID de habitación proveniente de HMS/tool context" },
     checkIn: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
     checkOut: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
     notes: { type: ["string", "null"], maxLength: 500 },
   },
-  required: ["guestId", "roomId", "checkIn", "checkOut"],
+  required: ["roomId", "checkIn", "checkOut"],
 };
 
 const cancellationSchema: JsonSchema = {
@@ -49,11 +51,54 @@ function withSchema<I, O>(tool: ToolDefinition<I, O>, inputSchema: JsonSchema): 
   return { ...tool, inputSchema };
 }
 
-export function hmsAgentTools(adapter: HmsServiceBindingAdapter) {
+export type HmsAgentIdentityConfig = {
+  /** Server-owned staging/application identity mapping. Never model/user input. */
+  guestIdByActor?: Readonly<Record<string, string>>;
+};
+
+function createReservationTool(
+  adapter: HmsServiceBindingAdapter,
+  identity: HmsAgentIdentityConfig,
+): ToolDefinition<any, any> {
+  const base = adapter.createReservationTool();
+  return {
+    ...base,
+    inputSchema: reservationSchema,
+    validateInput(input, context) {
+      if (!context) return { ok: false, message: "Trusted execution context is required" };
+      const guestId = identity.guestIdByActor?.[context.actor.id]?.trim();
+      if (!guestId) return { ok: false, message: "Guest identity is not configured for this actor" };
+      if (!input || typeof input !== "object") return { ok: false, message: "Invalid reservation input" };
+      const raw = input as Record<string, unknown>;
+      // Legacy deterministic fallback may include the same synthetic guest id.
+      // Any attempt to select a different guest is rejected; canonical input always uses the trusted mapping.
+      if (raw.guestId !== undefined && raw.guestId !== guestId) {
+        return { ok: false, message: "Guest identity cannot be selected by the request" };
+      }
+      const canonical = {
+        roomId: raw.roomId,
+        checkIn: raw.checkIn,
+        checkOut: raw.checkOut,
+        ...(raw.notes !== undefined ? { notes: raw.notes } : {}),
+        guestId,
+      };
+      return base.validateInput(canonical, context);
+    },
+    async execute(input, context, meta) {
+      const expectedGuestId = identity.guestIdByActor?.[context.actor.id]?.trim();
+      if (!expectedGuestId || input.guestId !== expectedGuestId) {
+        throw new CoreError("FORBIDDEN", "Reservation guest identity does not match trusted actor binding", 403);
+      }
+      return base.execute(input, context, meta);
+    },
+  };
+}
+
+export function hmsAgentTools(adapter: HmsServiceBindingAdapter, identity: HmsAgentIdentityConfig = {}) {
   return [
     withSchema(adapter.checkAvailabilityTool(), availabilitySchema),
     withSchema(adapter.getQuoteTool(), quoteSchema),
-    withSchema(adapter.createReservationTool(), reservationSchema),
+    createReservationTool(adapter, identity),
     withSchema(adapter.cancelReservationTool(), cancellationSchema),
   ] as const;
 }
