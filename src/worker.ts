@@ -1,5 +1,9 @@
 import { HmsServiceBindingAdapter, type HmsRpcService } from "./adapters/hms-service-binding.js";
-import { DurableObjectSessionStore, SessionDurableObject } from "./cloudflare/session-durable-object.js";
+import {
+  DurableObjectApprovalStore,
+  DurableObjectSessionStore,
+  SessionDurableObject,
+} from "./cloudflare/session-durable-object.js";
 import { AgentCoreRuntime } from "./core/runtime.js";
 import { createWebchatHandler } from "./webchat/handler.js";
 
@@ -50,6 +54,7 @@ function handler(env: Env): (request: Request) => Promise<Response> {
   handle = createWebchatHandler(runtime, {
     fixedTenantId: "hotel-demo",
     fixedActorId: "visitor-demo",
+    approvalStore: new DurableObjectApprovalStore(env.SESSIONS),
   });
   return handle;
 }
