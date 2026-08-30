@@ -28,7 +28,7 @@ function reservationData(context, input, bookingId, status = "CONFIRMED", replay
   };
 }
 
-function setup({ failRoomId } = {}) {
+function setup({ failRoomId, failCompensation = false } = {}) {
   const calls = { creates: [], cancels: [] };
   const service = {
     async checkAvailability() { throw new Error("not used"); },
@@ -43,6 +43,9 @@ function setup({ failRoomId } = {}) {
     },
     async cancelReservation(context, input) {
       calls.cancels.push({ ...input });
+      if (failCompensation) {
+        return { ok: false, error: { code: "INTERNAL_ERROR", message: "cancel failed", traceId: context.traceId } };
+      }
       const created = calls.creates.find((item) => item.operationToken === input.operationToken);
       return { ok: true, data: reservationData(context, { guestId: trustedGuestId, roomId: created?.roomId ?? room101 }, input.bookingId, "CANCELLED") };
     },
@@ -117,6 +120,13 @@ test("bundle schema is model-visible without guest identity and exact bundle is 
   assert.match(calls.creates[0].notes, /no valida capacidad/i);
 });
 
+test("bundle approval fingerprint changes when the exact room bundle changes", async () => {
+  const { runtime, actor } = setup();
+  const first = await approval(runtime, actor, { roomIds: [room101, room102], checkIn: "2034-02-10", checkOut: "2034-02-12" }, "bundle-fingerprint-a");
+  const second = await approval(runtime, actor, { roomIds: [room102, room101], checkIn: "2034-02-10", checkOut: "2034-02-12" }, "bundle-fingerprint-b");
+  assert.notEqual(first.fingerprint, second.fingerprint);
+});
+
 test("bundle partial create failure compensates prior room and never reports partial confirmation", async () => {
   const { runtime, actor, calls } = setup({ failRoomId: room101 });
   const raw = { roomIds: [room102, room101], checkIn: "2034-02-10", checkOut: "2034-02-12" };
@@ -133,6 +143,21 @@ test("bundle partial create failure compensates prior room and never reports par
   assert.equal(calls.cancels.length, 1);
   assert.equal(calls.cancels[0].operationToken, "bundle-compensate:room:1");
   assert.deepEqual(result.compensatedBookingIds, ["13000000-0000-0000-0000-000000000102"]);
+});
+
+test("bundle partial failure with failed compensation fails closed as an exceptional state", async () => {
+  const { runtime, actor, calls } = setup({ failRoomId: room101, failCompensation: true });
+  const raw = { roomIds: [room102, room101], checkIn: "2034-02-10", checkOut: "2034-02-12" };
+  const { context, fingerprint } = await approval(runtime, actor, raw, "bundle-compensation-fails");
+  await assert.rejects(
+    runtime.executor.execute("hms.createReservationBundle", raw, context, {
+      idempotencyKey: "bundle-compensation-fails",
+      humanApproved: true,
+      approvedOperationFingerprint: fingerprint,
+    }),
+    (error) => error?.code === "TOOL_EXECUTION_FAILED" && /compensation was incomplete/i.test(error?.message ?? ""),
+  );
+  assert.equal(calls.cancels.length, 1);
 });
 
 test("request cannot forge guest identity for multi-room bundle", async () => {
