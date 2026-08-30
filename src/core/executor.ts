@@ -1,7 +1,8 @@
-import { CoreError } from "./errors.js";
+import { ApprovalRequiredError, CoreError } from "./errors.js";
 import type { AuditSink } from "./audit.js";
 import type { IdempotencyStore } from "./idempotency.js";
 import { stableStringify } from "./idempotency.js";
+import { operationFingerprint } from "./operation-fingerprint.js";
 import type { PolicyEngine } from "./policy.js";
 import type { ToolRegistry } from "./tool-registry.js";
 import type { ExecutionContext, ToolExecutionMeta } from "./types.js";
@@ -32,20 +33,29 @@ export class AgentCoreExecutor {
       await this.audit.record({ ...auditBase, status: "denied", detail: policy.reason });
       throw new CoreError("TOOL_NOT_ALLOWED", "Tool execution denied", 403);
     }
-    if (policy.decision === "approval_required") {
-      if (!meta.humanApproved) {
-        await this.audit.record({ ...auditBase, status: "approval_required", detail: policy.reason });
-        throw new CoreError("APPROVAL_REQUIRED", "Human approval is required", 409);
-      }
-      await this.audit.record({ ...auditBase, status: "allowed", detail: `human_approval_confirmed:${policy.reason}` });
-    } else {
-      await this.audit.record({ ...auditBase, status: "allowed" });
-    }
 
+    // A Human Gate must approve a concrete valid operation, not just a message.
+    // Validate only after policy has established that the caller may reach this
+    // tool boundary, but before issuing any approval challenge.
     const validated = tool.validateInput(rawInput);
     if (!validated.ok) {
       await this.audit.record({ ...auditBase, status: "failed", detail: "input_validation" });
       throw new CoreError("BAD_REQUEST", validated.message, 400);
+    }
+
+    if (policy.decision === "approval_required") {
+      const plannedOperationFingerprint = await operationFingerprint(toolId, validated.value);
+      if (!meta.humanApproved) {
+        await this.audit.record({ ...auditBase, status: "approval_required", detail: policy.reason });
+        throw new ApprovalRequiredError(plannedOperationFingerprint);
+      }
+      if (meta.approvedOperationFingerprint !== plannedOperationFingerprint) {
+        await this.audit.record({ ...auditBase, status: "denied", detail: "approval_operation_mismatch" });
+        throw new CoreError("FORBIDDEN", "Approval does not match requested operation", 403);
+      }
+      await this.audit.record({ ...auditBase, status: "allowed", detail: `human_approval_confirmed:${policy.reason}` });
+    } else {
+      await this.audit.record({ ...auditBase, status: "allowed" });
     }
 
     const hasSideEffect = tool.sideEffect !== "none";
