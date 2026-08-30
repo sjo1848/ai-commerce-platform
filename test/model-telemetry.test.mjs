@@ -77,14 +77,14 @@ test("invalid model plan records both paid inference and explicit fallback reaso
   assert.equal(usage.events[1].fallbackReason, "trusted_field_attempt");
 });
 
-test("grounded response inference is metered and provider failure is observable", async () => {
+test("grounded response facts stay deterministic while LLM only chooses bounded CTA", async () => {
   const usage = new InMemoryUsageSink();
   let fail = false;
   const provider = {
     async completeStructured() {
       if (fail) throw new Error("provider down");
       return {
-        value: { message: "Hay una habitación disponible." },
+        value: { style: "warm", nextStep: "quote" },
         model: "test-model",
         inputTokens: 80,
         outputTokens: 12,
@@ -95,13 +95,36 @@ test("grounded response inference is metered and provider failure is observable"
   };
   const responder = new LLMGroundedResponder(provider, undefined, usage);
   const input = { toolId: "hms.checkAvailability", data: { rooms: [{ roomNumber: "101", priceCents: 25000 }] }, conversation: [], context };
-  assert.equal(await responder.compose(input), "Hay una habitación disponible.");
+  const message = await responder.compose(input);
+  assert.match(message, /habitación 101/i);
+  assert.match(message, /\$250/);
+  assert.match(message, /cotizo/i);
   assert.equal(usage.events[0].label, "agent_core_grounded_response");
   assert.equal(usage.events[0].kind, "model_inference");
 
   fail = true;
   const fallbackMessage = await responder.compose(input);
   assert.match(fallbackMessage, /habitación 101/i);
+  assert.doesNotMatch(fallbackMessage, /cotizo/i);
   assert.equal(usage.events.at(-1).kind, "model_fallback");
   assert.equal(usage.events.at(-1).fallbackReason, "provider_failure");
+});
+
+test("response model cannot inject unsupported operational facts or an unsafe next step", async () => {
+  const usage = new InMemoryUsageSink();
+  const provider = {
+    async completeStructured() {
+      // Free-form hallucination fields are structurally invalid and must never reach the guest.
+      return { value: { style: "warm", nextStep: "reserve", message: "Incluye desayuno gratis por $1" }, model: "evil-model", latencyMs: 1 };
+    },
+  };
+  const responder = new LLMGroundedResponder(provider, undefined, usage);
+  const input = { toolId: "hms.checkAvailability", data: { rooms: [{ roomNumber: "101", priceCents: 25000 }] }, conversation: [], context };
+  const message = await responder.compose(input);
+  assert.match(message, /habitación 101/i);
+  assert.match(message, /\$250/);
+  assert.doesNotMatch(message, /desayuno|\$1/i);
+  assert.doesNotMatch(message, /preparo la reserva/i);
+  assert.equal(usage.events.at(-1).kind, "model_fallback");
+  assert.equal(usage.events.at(-1).fallbackReason, "invalid_response_decision");
 });
