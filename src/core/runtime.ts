@@ -1,4 +1,5 @@
 import { InMemoryAuditSink } from "./audit.js";
+import { InMemoryConversationStore, type ConversationStore } from "./conversation.js";
 import { DeterministicModelRouter } from "./deterministic-model.js";
 import { AgentCoreExecutor } from "./executor.js";
 import { InMemoryIdempotencyStore } from "./idempotency.js";
@@ -16,6 +17,7 @@ export type RuntimeConfig = {
   tools?: readonly ToolDefinition<any, any>[];
   now?: () => Date;
   sessionStore?: SessionStore;
+  conversationStore?: ConversationStore;
   model?: ModelRouter;
 };
 
@@ -23,6 +25,7 @@ export class AgentCoreRuntime {
   readonly tenantResolver: TenantResolver;
   readonly sessions: SessionStore;
   readonly sessionManager: SessionManager;
+  readonly conversation: ConversationStore;
   readonly registry = new ToolRegistry();
   readonly policy = new PolicyEngine();
   readonly audit = new InMemoryAuditSink();
@@ -37,6 +40,7 @@ export class AgentCoreRuntime {
     this.now = config.now ?? (() => new Date());
     this.sessions = config.sessionStore ?? new InMemorySessionStore();
     this.sessionManager = new SessionManager(this.sessions);
+    this.conversation = config.conversationStore ?? new InMemoryConversationStore();
 
     if (config.tools) {
       for (const tool of config.tools) this.registry.register(tool);
@@ -49,7 +53,14 @@ export class AgentCoreRuntime {
     }
 
     this.executor = new AgentCoreExecutor(this.registry, this.policy, this.audit, this.usage, this.idempotency);
-    this.orchestrator = new ChatOrchestrator(config.model ?? new DeterministicModelRouter(), this.registry, this.executor, this.usage, this.audit);
+    this.orchestrator = new ChatOrchestrator(
+      config.model ?? new DeterministicModelRouter(),
+      this.registry,
+      this.executor,
+      this.usage,
+      this.audit,
+      this.conversation,
+    );
   }
 
   async createContext(input: {
