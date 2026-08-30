@@ -12,6 +12,7 @@ import { DeterministicModelRouter } from "./core/deterministic-model.js";
 import { LLMModelRouter } from "./core/llm-model.js";
 import { LLMGroundedResponder } from "./core/model-responder.js";
 import { AgentCoreRuntime } from "./core/runtime.js";
+import { ConsoleUsageSink } from "./core/usage.js";
 import { createWebchatHandler } from "./webchat/handler.js";
 
 export { SessionDurableObject };
@@ -51,14 +52,16 @@ function handler(env: Env): (request: Request) => Promise<Response> {
   const hms = new HmsServiceBindingAdapter(env.HMS, {
     "hotel-demo": { hotelId: "10000000-0000-0000-0000-000000000001" },
   }, reservationOperations);
+  const usage = new ConsoleUsageSink();
   const provider = new WorkersAiModelProvider(env.AI);
-  const model = new LLMModelRouter(provider, new DeterministicModelRouter());
-  const responder = new LLMGroundedResponder(provider);
+  const model = new LLMModelRouter(provider, new DeterministicModelRouter(), usage);
+  const responder = new LLMGroundedResponder(provider, undefined, usage);
   const runtime = new AgentCoreRuntime({
     tenants: [tenant],
     tools: hmsAgentTools(hms, stagingIdentity),
     sessionStore: new DurableObjectSessionStore(env.SESSIONS),
     conversationStore: new DurableObjectConversationStore(env.SESSIONS),
+    usageSink: usage,
     model,
     responder,
   });
