@@ -3,6 +3,7 @@ import { InMemoryConversationStore, type ConversationStore } from "./conversatio
 import { DeterministicModelRouter } from "./deterministic-model.js";
 import { AgentCoreExecutor } from "./executor.js";
 import { InMemoryIdempotencyStore } from "./idempotency.js";
+import { DeterministicGroundedResponder, type ModelResponder } from "./model-responder.js";
 import { ChatOrchestrator } from "./orchestrator.js";
 import { PolicyEngine } from "./policy.js";
 import { InMemorySessionStore, SessionManager, type SessionStore } from "./session.js";
@@ -19,6 +20,7 @@ export type RuntimeConfig = {
   sessionStore?: SessionStore;
   conversationStore?: ConversationStore;
   model?: ModelRouter;
+  responder?: ModelResponder;
 };
 
 export class AgentCoreRuntime {
@@ -55,6 +57,7 @@ export class AgentCoreRuntime {
     this.executor = new AgentCoreExecutor(this.registry, this.policy, this.audit, this.usage, this.idempotency);
     this.orchestrator = new ChatOrchestrator(
       config.model ?? new DeterministicModelRouter(),
+      config.responder ?? new DeterministicGroundedResponder(),
       this.registry,
       this.executor,
       this.usage,
