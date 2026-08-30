@@ -32,7 +32,7 @@ function availabilityTool() {
   };
 }
 
-test("second model turn receives prior user, tool and assistant history owned by the server", async () => {
+test("second model turn receives prior user, tool and grounded assistant history owned by the server", async () => {
   const calls = [];
   const model = {
     async route(message, _context, _tools, conversation = []) {
@@ -47,6 +47,7 @@ test("second model turn receives prior user, tool and assistant history owned by
   const firstContext = await runtime.createContext({ tenantId: tenant.id, actor, channel: "webchat" });
   const first = await runtime.orchestrator.chat("Somos dos, ¿qué hay?", firstContext);
   assert.equal(first.data.rooms[0].id, roomId);
+  assert.match(first.message, /habitación 101/i);
 
   const secondContext = await runtime.createContext({ tenantId: tenant.id, actor, channel: "webchat", sessionId: first.sessionId });
   await runtime.orchestrator.chat("¿Y la primera?", secondContext);
@@ -56,7 +57,7 @@ test("second model turn receives prior user, tool and assistant history owned by
   assert.equal(history[0].content, "Somos dos, ¿qué hay?");
   assert.equal(history[1].toolId, "hms.checkAvailability");
   assert.match(history[1].content, new RegExp(roomId));
-  assert.equal(history[2].content, "Operación completada.");
+  assert.match(history[2].content, /habitación 101/i);
 });
 
 test("conversation history is bounded and never supplied by request metadata", async () => {
