@@ -34,7 +34,7 @@ export function createWebchatHandler(runtime: AgentCoreRuntime, config: WebchatH
         roles: ["customer"],
         permissions: ["hms.availability.read", "hms.quote.read"],
       };
-      const context = runtime.createContext({
+      const context = await runtime.createContext({
         tenantId,
         actor,
         channel: "webchat",
