@@ -14,10 +14,17 @@ const tenant = {
   id: "hotel-demo",
   slug: "hotel-demo",
   status: "active" as const,
-  allowedToolIds: ["hms.checkAvailability", "hms.getQuote"],
+  allowedToolIds: [
+    "hms.checkAvailability",
+    "hms.getQuote",
+    "hms.createReservation",
+    "hms.cancelReservation",
+  ],
   toolPolicies: {
     "hms.checkAvailability": "auto" as const,
     "hms.getQuote": "auto" as const,
+    "hms.createReservation": "approval" as const,
+    "hms.cancelReservation": "approval" as const,
   },
 };
 
@@ -32,10 +39,18 @@ function handler(env: Env): (request: Request) => Promise<Response> {
   });
   const runtime = new AgentCoreRuntime({
     tenants: [tenant],
-    tools: [hms.checkAvailabilityTool(), hms.getQuoteTool()],
+    tools: [
+      hms.checkAvailabilityTool(),
+      hms.getQuoteTool(),
+      hms.createReservationTool(),
+      hms.cancelReservationTool(),
+    ],
     sessionStore: new DurableObjectSessionStore(env.SESSIONS),
   });
-  handle = createWebchatHandler(runtime, { fixedTenantId: "hotel-demo" });
+  handle = createWebchatHandler(runtime, {
+    fixedTenantId: "hotel-demo",
+    fixedActorId: "visitor-demo",
+  });
   return handle;
 }
 
