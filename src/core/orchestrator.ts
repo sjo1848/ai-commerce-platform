@@ -54,8 +54,18 @@ function missingRequiredClarification(fields: readonly string[]): string {
   if (datesMissing) return "Claro, ¿para qué fechas sería?";
   if (guestsMissing) return "Perfecto, ¿para cuántas personas sería?";
   if (roomMissing) return "Perfecto. ¿Qué habitación o habitaciones querés reservar?";
-  if (bookingMissing) return "Para no equivocarme, ¿qué reserva querés usar?";
+  if (bookingMissing) return "Para no equivocarme, tenés más de una reserva activa. ¿Cuál querés cancelar?";
   return "Me falta un dato para poder seguir. ¿Me contás un poco más?";
+}
+
+function planInputWithSafeState(toolId: string, input: unknown, state: Awaited<ReturnType<ConversationStateStore["get"]>>): unknown {
+  // With multiple active bookings, a generic cancellation must remain ambiguous.
+  // Never let the primary/current booking silently stand in for the whole set.
+  if (toolId === "hms.cancelReservation" && (state.activeBookingIds?.length ?? 0) > 1) {
+    const explicit = isRecord(input) && typeof input.bookingId === "string" && input.bookingId.trim();
+    if (!explicit) return input;
+  }
+  return enrichPlanInputFromState(toolId, input, state);
 }
 
 export class ChatOrchestrator {
@@ -117,7 +127,7 @@ export class ChatOrchestrator {
       return { message: route.message, sessionId: context.session.id };
     }
 
-    const plan: ToolPlan = { toolId: route.plan.toolId, input: enrichPlanInputFromState(route.plan.toolId, route.plan.input, nextState) };
+    const plan: ToolPlan = { toolId: route.plan.toolId, input: planInputWithSafeState(route.plan.toolId, route.plan.input, nextState) };
     const visibleTool = tools.find((tool) => tool.id === plan.toolId);
     if (visibleTool) {
       const missing = missingRequiredBusinessFields(visibleTool, plan.input);
