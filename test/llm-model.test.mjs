@@ -18,22 +18,14 @@ const tools = [{
   inputSchema: {
     type: "object",
     additionalProperties: false,
-    properties: {
-      checkIn: { type: "string" },
-      checkOut: { type: "string" },
-      guests: { type: "integer" },
-    },
+    properties: { checkIn: { type: "string" }, checkOut: { type: "string" }, guests: { type: "integer" } },
     required: ["checkIn", "checkOut", "guests"],
   },
 }];
 
 function fallback(result = { kind: "message", message: "fallback" }) {
-  return {
-    calls: 0,
-    async route() { this.calls += 1; return result; },
-  };
+  return { calls: 0, async route() { this.calls += 1; return result; } };
 }
-
 function provider(value, error) {
   return {
     request: undefined,
@@ -44,13 +36,11 @@ function provider(value, error) {
     },
   };
 }
-
-function toolRoute(input, toolId = "hms.checkAvailability") {
-  return { kind: "tool", toolId, input, clarificationReason: "none", missing: [] };
+function toolRoute(input, toolId = "hms.checkAvailability", statePatch = {}) {
+  return { kind: "tool", toolId, input, clarificationReason: "none", missing: [], statePatch };
 }
-
-function messageRoute(reason, missing) {
-  return { kind: "message", toolId: "", input: {}, clarificationReason: reason, missing };
+function messageRoute(reason, missing, statePatch = {}) {
+  return { kind: "message", toolId: "", input: {}, clarificationReason: reason, missing, statePatch };
 }
 
 test("LLM router accepts a visible tool with schema-bounded business arguments", async () => {
@@ -61,18 +51,20 @@ test("LLM router accepts a visible tool with schema-bounded business arguments",
   assert.deepEqual(result, {
     kind: "tool",
     plan: { toolId: "hms.checkAvailability", input: { checkIn: "2034-02-10", checkOut: "2034-02-12", guests: 2 } },
+    statePatch: {},
   });
   assert.equal(fb.calls, 0);
   const prompt = p.request.messages.map((item) => item.content).join("\n");
   assert.doesNotMatch(prompt, /tenant-secret|actor-secret|session-secret|request-secret/);
   assert.match(prompt, /hms\.checkAvailability/);
+  assert.match(prompt, /CURRENT_CONVERSATION_STATE=/);
 });
 
 test("LLM router converts structured missing-field decision into deterministic clarification", async () => {
   const p = provider(messageRoute("missing", ["dates"]));
   const fb = fallback();
   const router = new LLMModelRouter(p, fb);
-  assert.deepEqual(await router.route("¿Tenés para dos?", context, tools), { kind: "message", message: "¿Para qué fechas sería?" });
+  assert.deepEqual(await router.route("¿Tenés para dos?", context, tools), { kind: "message", message: "¿Para qué fechas sería?", statePatch: {} });
   assert.equal(fb.calls, 0);
 });
 
@@ -123,7 +115,7 @@ test("unknown tool arguments are rejected before executor", async () => {
 
 test("inconsistent message/tool clarification state fails to fallback", async () => {
   const fb = fallback();
-  const router = new LLMModelRouter(provider({ kind: "message", toolId: "hms.checkAvailability", input: {}, clarificationReason: "missing", missing: ["dates"] }), fb);
+  const router = new LLMModelRouter(provider({ kind: "message", toolId: "hms.checkAvailability", input: {}, clarificationReason: "missing", missing: ["dates"], statePatch: {} }), fb);
   assert.deepEqual(await router.route("consulta", context, tools), { kind: "message", message: "fallback" });
   assert.equal(fb.calls, 1);
 });
@@ -133,6 +125,15 @@ test("provider failure degrades to deterministic fallback without changing polic
   const fb = fallback({ kind: "tool", plan: { toolId: "hms.checkAvailability", input: { checkIn: "2034-02-10", checkOut: "2034-02-12", guests: 1 } } });
   const router = new LLMModelRouter(p, fb);
   const result = await router.route("disponibilidad 2034-02-10 2034-02-12 para 1 persona", context, tools);
+  assert.equal(result.kind, "tool");
+  assert.equal(fb.calls, 1);
+});
+
+test("LLM cannot ask again for dates already present in durable state", async () => {
+  const p = provider(messageRoute("missing", ["dates"], { guests: 2 }));
+  const fb = fallback({ kind: "tool", plan: { toolId: "hms.checkAvailability", input: { checkIn: "2034-02-10", checkOut: "2034-02-12", guests: 2 } } });
+  const router = new LLMModelRouter(p, fb);
+  const result = await router.route("Somos dos", context, tools, [], { stay: { checkIn: "2034-02-10", checkOut: "2034-02-12" }, availabilityRoomIds: [] });
   assert.equal(result.kind, "tool");
   assert.equal(fb.calls, 1);
 });
