@@ -25,8 +25,8 @@ function schemaRequired(schema: JsonSchema | undefined, field: string): boolean 
   return Array.isArray(schema.required) ? schema.required.includes(field) : false;
 }
 function groundedRoomIdsFromVisibleNumbers(message: string, state?: Readonly<ConversationState>): string[] {
-  if (!state) return [];
-  const matches = state.availabilityRooms.filter((room) => {
+  const rooms = state?.availabilityRooms ?? [];
+  const matches = rooms.filter((room) => {
     const number = room.roomNumber?.trim();
     if (!number) return false;
     return new RegExp(`(?:^|[^0-9A-Za-z])${number.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:$|[^0-9A-Za-z])`, "i").test(message);
@@ -57,9 +57,9 @@ export class DeterministicModelRouter implements ModelRouter {
     const explicitDates = extractIsoDates(message);
     const dates = explicitDates.length >= 2
       ? explicitDates
-      : state?.stay.checkIn && state?.stay.checkOut ? [state.stay.checkIn, state.stay.checkOut] : explicitDates;
+      : state?.stay?.checkIn && state?.stay?.checkOut ? [state.stay.checkIn, state.stay.checkOut] : explicitDates;
     const explicitGuests = extractGuests(message);
-    const guests = explicitGuests ?? state?.stay.guests;
+    const guests = explicitGuests ?? state?.stay?.guests;
 
     const cancellationIntent = /\b(cancelar|cancela|anular|anula)\b/i.test(message) && /\b(reserva|booking)\b/i.test(message);
     if (cancellationIntent) {
