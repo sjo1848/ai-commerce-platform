@@ -5,7 +5,7 @@ import type { ApprovalChallengeInput, ApprovalStore } from "./approval.js";
 
 const HTML = `<!doctype html>
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>AI Commerce Webchat</title></head>
-<body><main><h1>Asistente</h1><form id="f"><input id="m" maxlength="2000" placeholder="Ej: disponibilidad 2027-02-10 a 2027-02-12 para 2 personas"><button>Enviar</button></form><pre id="o"></pre></main>
+<body><main><h1>Asistente</h1><form id="f"><input id="m" maxlength="2000" placeholder="Ej: somos dos y queremos quedarnos del 10 al 12 de febrero"><button>Enviar</button></form><pre id="o"></pre></main>
 <script>let sessionId;document.getElementById('f').addEventListener('submit',async(e)=>{e.preventDefault();const message=document.getElementById('m').value;const operationKey=crypto.randomUUID();const send=async(path,approvalToken)=>{const r=await fetch(path,{method:'POST',headers:{'content-type':'application/json','Idempotency-Key':operationKey},body:JSON.stringify({message,sessionId,...(approvalToken?{approvalToken}:{})})});const j=await r.json();sessionId=j.sessionId||sessionId;if(path==='/api/chat'&&r.status===409&&j?.error?.code==='APPROVAL_REQUIRED'&&j?.approvalToken&&confirm('Esta acción modificará una reserva en HMS. ¿Confirmar?'))return send('/api/approve',j.approvalToken);document.getElementById('o').textContent=JSON.stringify(j,null,2);};await send('/api/chat');});</script></body></html>`;
 
 function json(payload: unknown, status = 200): Response {
@@ -94,6 +94,8 @@ export function createWebchatHandler(runtime: AgentCoreRuntime, config: WebchatH
         if (!approved) throw new CoreError("FORBIDDEN", "Approval challenge is invalid or expired", 403);
         trustedMeta.humanApproved = true;
         trustedMeta.approvedOperationFingerprint = approved.operationFingerprint;
+        stage = "execute_approved_plan";
+        return json(await runtime.orchestrator.executeApprovedPlan(approved.plan, context, trustedMeta));
       }
 
       stage = "orchestrator";
@@ -122,6 +124,7 @@ export function createWebchatHandler(runtime: AgentCoreRuntime, config: WebchatH
           const challenge = await config.approvalStore.issue({
             ...approvalCandidate,
             operationFingerprint: error.operationFingerprint,
+            plan: error.plan,
           });
           return json({
             error: { code: error.code, message: error.message },
