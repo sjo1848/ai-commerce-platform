@@ -1,11 +1,12 @@
 import { CoreError } from "../core/errors.js";
 import type { Actor, ToolExecutionMeta } from "../core/types.js";
 import type { AgentCoreRuntime } from "../core/runtime.js";
+import type { ApprovalChallengeInput, ApprovalStore } from "./approval.js";
 
 const HTML = `<!doctype html>
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>AI Commerce Webchat</title></head>
 <body><main><h1>Asistente</h1><form id="f"><input id="m" maxlength="2000" placeholder="Ej: disponibilidad 2027-02-10 a 2027-02-12 para 2 personas"><button>Enviar</button></form><pre id="o"></pre></main>
-<script>let sessionId;document.getElementById('f').addEventListener('submit',async(e)=>{e.preventDefault();const message=document.getElementById('m').value;const operationKey=crypto.randomUUID();const send=async(path)=>{const r=await fetch(path,{method:'POST',headers:{'content-type':'application/json','Idempotency-Key':operationKey},body:JSON.stringify({message,sessionId})});const j=await r.json();sessionId=j.sessionId||sessionId;if(path==='/api/chat'&&r.status===409&&j?.error?.code==='APPROVAL_REQUIRED'&&confirm('Esta acción modificará una reserva en HMS. ¿Confirmar?'))return send('/api/approve');document.getElementById('o').textContent=JSON.stringify(j,null,2);};await send('/api/chat');});</script></body></html>`;
+<script>let sessionId;document.getElementById('f').addEventListener('submit',async(e)=>{e.preventDefault();const message=document.getElementById('m').value;const operationKey=crypto.randomUUID();const send=async(path,approvalToken)=>{const r=await fetch(path,{method:'POST',headers:{'content-type':'application/json','Idempotency-Key':operationKey},body:JSON.stringify({message,sessionId,...(approvalToken?{approvalToken}:{})})});const j=await r.json();sessionId=j.sessionId||sessionId;if(path==='/api/chat'&&r.status===409&&j?.error?.code==='APPROVAL_REQUIRED'&&j?.approvalToken&&confirm('Esta acción modificará una reserva en HMS. ¿Confirmar?'))return send('/api/approve',j.approvalToken);document.getElementById('o').textContent=JSON.stringify(j,null,2);};await send('/api/chat');});</script></body></html>`;
 
 function json(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
@@ -16,6 +17,8 @@ export type WebchatHandlerConfig = {
   fixedTenantId?: string;
   /** Pin a deployment actor when side effects must not trust a spoofable request header. */
   fixedActorId?: string;
+  /** Server-side single-use approval challenges. Required for /api/approve. */
+  approvalStore?: ApprovalStore;
 };
 
 export function createWebchatHandler(runtime: AgentCoreRuntime, config: WebchatHandlerConfig = {}) {
@@ -29,14 +32,23 @@ export function createWebchatHandler(runtime: AgentCoreRuntime, config: WebchatH
     const requestId = request.headers.get("x-request-id")?.trim() || crypto.randomUUID();
     let stage = "request";
     let activeSessionId: string | undefined;
+    let approvalCandidate: ApprovalChallengeInput | undefined;
 
     try {
       stage = "parse_request";
       const contentType = request.headers.get("content-type") ?? "";
       if (!contentType.toLowerCase().includes("application/json")) throw new CoreError("BAD_REQUEST", "JSON body required", 415);
       const body = await request.json() as Record<string, unknown>;
+      const message = typeof body.message === "string" ? body.message : "";
+      const idempotencyKey = request.headers.get("idempotency-key")?.trim() || "";
       if (approvalRoute && (typeof body.sessionId !== "string" || !body.sessionId.trim())) {
         throw new CoreError("BAD_REQUEST", "Approval requires an existing session", 400);
+      }
+      if (approvalRoute && (typeof body.approvalToken !== "string" || !body.approvalToken.trim())) {
+        throw new CoreError("FORBIDDEN", "Approval challenge is required", 403);
+      }
+      if (approvalRoute && !idempotencyKey) {
+        throw new CoreError("IDEMPOTENCY_REQUIRED", "Idempotency key required for approval", 400);
       }
       const tenantId = config.fixedTenantId ?? request.headers.get("x-tenant-id") ?? "";
       const actorId = config.fixedActorId ?? (request.headers.get("x-actor-id")?.trim() || "anonymous");
@@ -52,10 +64,7 @@ export function createWebchatHandler(runtime: AgentCoreRuntime, config: WebchatH
         ],
       };
       const trustedMeta: ToolExecutionMeta = {
-        ...(request.headers.get("idempotency-key")?.trim()
-          ? { idempotencyKey: request.headers.get("idempotency-key")!.trim() }
-          : {}),
-        ...(approvalRoute ? { humanApproved: true } : {}),
+        ...(idempotencyKey ? { idempotencyKey } : {}),
       };
 
       stage = "create_context";
@@ -67,15 +76,66 @@ export function createWebchatHandler(runtime: AgentCoreRuntime, config: WebchatH
         requestId,
       });
       activeSessionId = context.session.id;
+      approvalCandidate = {
+        sessionId: context.session.id,
+        tenantId: context.tenant.id,
+        actorId: context.actor.id,
+        message,
+        idempotencyKey,
+      };
+
+      if (approvalRoute) {
+        stage = "consume_approval";
+        if (!config.approvalStore) throw new CoreError("FORBIDDEN", "Approval flow is not enabled", 403);
+        const approved = await config.approvalStore.consume({
+          ...approvalCandidate,
+          token: (body.approvalToken as string).trim(),
+        });
+        if (!approved) throw new CoreError("FORBIDDEN", "Approval challenge is invalid or expired", 403);
+        trustedMeta.humanApproved = true;
+      }
 
       stage = "orchestrator";
-      const result = await runtime.orchestrator.chat(
-        typeof body.message === "string" ? body.message : "",
-        context,
-        trustedMeta,
-      );
+      const result = await runtime.orchestrator.chat(message, context, trustedMeta);
       return json(result);
     } catch (error) {
+      if (
+        error instanceof CoreError
+        && error.code === "APPROVAL_REQUIRED"
+        && chatRoute
+        && approvalCandidate
+      ) {
+        if (!approvalCandidate.idempotencyKey) {
+          return json({
+            error: { code: "IDEMPOTENCY_REQUIRED", message: "Idempotency key required for side-effect approval" },
+            ...(activeSessionId ? { sessionId: activeSessionId } : {}),
+          }, 400);
+        }
+        if (!config.approvalStore) {
+          return json({
+            error: { code: error.code, message: error.message },
+            ...(activeSessionId ? { sessionId: activeSessionId } : {}),
+          }, error.status);
+        }
+        try {
+          stage = "issue_approval";
+          const challenge = await config.approvalStore.issue(approvalCandidate);
+          return json({
+            error: { code: error.code, message: error.message },
+            sessionId: activeSessionId,
+            approvalToken: challenge.token,
+            approvalExpiresAt: challenge.expiresAt,
+          }, error.status);
+        } catch (approvalError) {
+          console.error(JSON.stringify({
+            event: "approval_challenge_issue_failed",
+            requestId,
+            errorName: approvalError instanceof Error ? approvalError.name : "UnknownError",
+          }));
+          return json({ error: { code: "INTERNAL_ERROR", message: "Internal error" } }, 500);
+        }
+      }
+
       if (error instanceof CoreError) {
         return json({
           error: { code: error.code, message: error.message },
