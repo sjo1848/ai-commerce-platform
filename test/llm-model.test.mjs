@@ -94,6 +94,17 @@ test("trusted execution fields from model output are rejected", async () => {
   assert.equal(fb.calls, 1);
 });
 
+test("guestId and traceId are globally trusted even for a schema-less future tool", async () => {
+  const schemaLess = [{ id: "future.tool", primitive: "CHECK", description: "future", risk: "read" }];
+  for (const field of ["guestId", "traceId"]) {
+    const p = provider({ kind: "tool", toolId: "future.tool", input: { query: "x", [field]: "attacker" }, message: "" });
+    const fb = fallback();
+    const router = new LLMModelRouter(p, fb);
+    assert.deepEqual(await router.route("consulta", context, schemaLess), { kind: "message", message: "fallback" });
+    assert.equal(fb.calls, 1);
+  }
+});
+
 test("unknown tool arguments are rejected before executor", async () => {
   const p = provider({
     kind: "tool",
