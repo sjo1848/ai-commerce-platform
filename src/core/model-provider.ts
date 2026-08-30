@@ -19,6 +19,7 @@ export type StructuredModelResult = {
   inputTokens?: number;
   outputTokens?: number;
   latencyMs?: number;
+  estimatedCostUsd?: number;
   logId?: string;
 };
 
