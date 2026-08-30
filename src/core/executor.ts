@@ -31,7 +31,8 @@ export class AgentCoreExecutor {
       throw new CoreError("TOOL_NOT_ALLOWED", "Tool execution denied", 403);
     }
 
-    const validated = tool.validateInput(rawInput);
+    // Canonicalization may add trusted server-owned bindings that are absent from model-visible input.
+    const validated = tool.validateInput(rawInput, context);
     if (!validated.ok) {
       await this.audit.record({ ...auditBase, status: "failed", detail: "input_validation" });
       throw new CoreError("BAD_REQUEST", validated.message, 400);
