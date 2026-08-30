@@ -61,7 +61,6 @@ function parseStoredState(value: unknown): ConversationState | undefined {
   return state;
 }
 
-/** Durable adapter using the existing per-session conversation log. State turns are filtered from model history. */
 export class ConversationBackedStateStore implements ConversationStateStore {
   constructor(private readonly conversation: ConversationStore) {}
   async get(sessionId: string): Promise<ConversationState> {
@@ -72,7 +71,7 @@ export class ConversationBackedStateStore implements ConversationStateStore {
       try {
         const parsed = parseStoredState(JSON.parse(turn.content));
         if (parsed) return parsed;
-      } catch { /* ignore malformed historical state */ }
+      } catch {}
     }
     return emptyConversationState();
   }
@@ -135,6 +134,7 @@ export function updateConversationStateFromTool(current: ConversationState, tool
   if ((toolId === "hms.getQuote" || toolId === "hms.createReservation") && roomId && (next.availabilityRoomIds.length === 0 || next.availabilityRoomIds.includes(roomId))) next.selectedRoomId = roomId;
   const bookingId = stringField(rawData.bookingId);
   if (toolId === "hms.createReservation" && bookingId) next.activeBookingId = bookingId;
-  if ((toolId === "hms.createReservation" || toolId === "hms.cancelReservation") && stringField(rawData.status)) next.bookingStatus = stringField(rawData.status);
+  const bookingStatus = stringField(rawData.status);
+  if ((toolId === "hms.createReservation" || toolId === "hms.cancelReservation") && bookingStatus) next.bookingStatus = bookingStatus;
   return next;
 }
