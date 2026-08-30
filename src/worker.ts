@@ -1,6 +1,7 @@
 import { HmsServiceBindingAdapter, type HmsRpcService } from "./adapters/hms-service-binding.js";
 import {
   DurableObjectApprovalStore,
+  DurableObjectReservationOperationStore,
   DurableObjectSessionStore,
   SessionDurableObject,
 } from "./cloudflare/session-durable-object.js";
@@ -18,12 +19,7 @@ const tenant = {
   id: "hotel-demo",
   slug: "hotel-demo",
   status: "active" as const,
-  allowedToolIds: [
-    "hms.checkAvailability",
-    "hms.getQuote",
-    "hms.createReservation",
-    "hms.cancelReservation",
-  ],
+  allowedToolIds: ["hms.checkAvailability", "hms.getQuote", "hms.createReservation", "hms.cancelReservation"],
   toolPolicies: {
     "hms.checkAvailability": "auto" as const,
     "hms.getQuote": "auto" as const,
@@ -36,19 +32,13 @@ let handle: ((request: Request) => Promise<Response>) | undefined;
 
 function handler(env: Env): (request: Request) => Promise<Response> {
   if (handle) return handle;
-
+  const reservationOperations = new DurableObjectReservationOperationStore(env.SESSIONS);
   const hms = new HmsServiceBindingAdapter(env.HMS, {
-    // Trusted deployment mapping. User/model input cannot choose this hotel id.
     "hotel-demo": { hotelId: "10000000-0000-0000-0000-000000000001" },
-  });
+  }, reservationOperations);
   const runtime = new AgentCoreRuntime({
     tenants: [tenant],
-    tools: [
-      hms.checkAvailabilityTool(),
-      hms.getQuoteTool(),
-      hms.createReservationTool(),
-      hms.cancelReservationTool(),
-    ],
+    tools: [hms.checkAvailabilityTool(), hms.getQuoteTool(), hms.createReservationTool(), hms.cancelReservationTool()],
     sessionStore: new DurableObjectSessionStore(env.SESSIONS),
   });
   handle = createWebchatHandler(runtime, {
@@ -60,7 +50,5 @@ function handler(env: Env): (request: Request) => Promise<Response> {
 }
 
 export default {
-  fetch(request: Request, env: Env): Promise<Response> {
-    return handler(env)(request);
-  },
+  fetch(request: Request, env: Env): Promise<Response> { return handler(env)(request); },
 };
