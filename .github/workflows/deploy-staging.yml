@@ -113,6 +113,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          : > /tmp/e1-worker-tail.log
+          timeout 20s npx wrangler tail "$WORKER_NAME" --format=json --method POST > /tmp/e1-worker-tail.log 2>&1 &
+          TAIL_PID=$!
+          trap 'kill "$TAIL_PID" 2>/dev/null || true' EXIT
+          sleep 3
+
           payload="$(E1_ROOM_ID="$E1_ROOM_ID" E1_SESSION_ID="$E1_SESSION_ID" node -e '
             process.stdout.write(JSON.stringify({
               message: `cotizame ${process.env.E1_ROOM_ID} del 2027-01-15 al 2027-01-17`,
@@ -126,9 +132,14 @@ jobs:
             -H 'x-request-id: e1-staging-quote' \
             -X POST "$AI_COMMERCE_STAGING_URL/api/chat" \
             --data "$payload" || true)"
+          sleep 2
+          kill "$TAIL_PID" 2>/dev/null || true
+
           if [[ "$status" != 2* ]]; then
             echo "E1 quote HTTP $status" >&2
             cat /tmp/e1-quote.json >&2 || true
+            echo "--- Worker tail diagnostics ---" >&2
+            cat /tmp/e1-worker-tail.log >&2 || true
             exit 1
           fi
           E1_ROOM_ID="$E1_ROOM_ID" node - <<'NODE'
