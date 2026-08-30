@@ -31,6 +31,7 @@ const STATE_PATCH_SCHEMA: JsonSchema = {
     checkOut: { type: ["string", "null"], pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
     guests: { type: ["integer", "null"], minimum: 1, maximum: 20 },
     selectedRoomId: { type: ["string", "null"] },
+    selectedRoomIndex: { type: ["integer", "null"], minimum: 1, maximum: 25 },
     activeBookingId: { type: ["string", "null"] },
   },
 };
@@ -103,13 +104,14 @@ function clarificationDecision(value: Record<string, unknown>): { reason: Clarif
 
 function parseStatePatch(value: unknown): ConversationStatePatch | undefined {
   if (!isRecord(value)) return undefined;
-  const allowed = new Set(["checkIn", "checkOut", "guests", "selectedRoomId", "activeBookingId"]);
+  const allowed = new Set(["checkIn", "checkOut", "guests", "selectedRoomId", "selectedRoomIndex", "activeBookingId"]);
   if (Object.keys(value).some((key) => !allowed.has(key))) return undefined;
   const patch: ConversationStatePatch = {};
   if (value.checkIn === null || typeof value.checkIn === "string") patch.checkIn = value.checkIn;
   if (value.checkOut === null || typeof value.checkOut === "string") patch.checkOut = value.checkOut;
   if (value.guests === null || Number.isInteger(value.guests)) patch.guests = value.guests as number | null;
   if (value.selectedRoomId === null || typeof value.selectedRoomId === "string") patch.selectedRoomId = value.selectedRoomId;
+  if (value.selectedRoomIndex === null || Number.isInteger(value.selectedRoomIndex)) patch.selectedRoomIndex = value.selectedRoomIndex as number | null;
   if (value.activeBookingId === null || typeof value.activeBookingId === "string") patch.activeBookingId = value.activeBookingId;
   return patch;
 }
@@ -212,14 +214,18 @@ export class LLMModelRouter implements ModelRouter {
       `CURRENT_CONVERSATION_STATE=${stateText}`,
       "statePatch records only facts learned or explicitly changed in the CURRENT user message. Use null only when the user explicitly clears/corrects a fact. Do not copy unchanged state into statePatch.",
       "For dates and guest count, combine the current message with CURRENT_CONVERSATION_STATE. Never ask again for a value already present there unless the user explicitly changed it ambiguously.",
-      "selectedRoomId may only be set to a roomId present in CURRENT_CONVERSATION_STATE.availabilityRoomIds. activeBookingId may only refer to the current active booking already present in state; never invent IDs.",
+      "For a reference to a displayed option by list position (first/primera, second/segunda, third/tercera, last/última, etc.), put the ONE-BASED list position in statePatch.selectedRoomIndex. The Core resolves that index to an authoritative roomId. Do not ask which room when the ordinal is unambiguous.",
+      "selectedRoomId may only copy an exact roomId already present in CURRENT_CONVERSATION_STATE.availabilityRoomIds. Prefer selectedRoomIndex for ordinal references. activeBookingId may only refer to the current active booking already present in state; never invent IDs.",
       "FIRST identify current intent. THEN apply only requirements for that capability.",
       "Capability-specific routing rules:",
       requirements || "(no capabilities)",
       "A new availability query may reuse stored dates or guests. If one piece is supplied now and the rest exists in state, route directly instead of asking for known data.",
+      "A quote after an availability list may omit roomId from tool input when statePatch.selectedRoomIndex or selectedRoomId grounds the selection; the server fills roomId and dates from durable state.",
       "A reservation request NEVER needs guest count. If room and dates are grounded from message/state, route hms.createReservation and let external policy request approval.",
       "Interpret ordinary date phrasing. 'del 15 al 17 de enero de 2027' => checkIn=2027-01-15, checkOut=2027-01-17.",
       "Example: state has checkIn=2027-01-15/checkOut=2027-01-17, user says 'somos dos' => statePatch={guests:2}; if availability is the active intent/context, use the stored dates and guests=2 rather than asking dates again.",
+      "Example after availabilityRoomIds=[roomA,roomB,roomC]: user says '¿Cuánto sale la primera?' => kind=tool, toolId=hms.getQuote, input={}, statePatch={selectedRoomIndex:1}, clarificationReason=none, missing=[].",
+      "Example after availabilityRoomIds=[roomA,roomB,roomC]: 'me quedo con la segunda, reservámela' => kind=tool, toolId=hms.createReservation, input={}, statePatch={selectedRoomIndex:2}, clarificationReason=none, missing=[].",
       "Example: state already has dates and guests, user says '¿puedo reservar?' => do not ask dates or guests. Ask only for a room/selection if none is grounded; if selectedRoomId exists, route reservation.",
       "Example: user says 'para las que te dije ya' when dates exist in state => preserve/use those dates; never ask them again.",
       "For kind=tool: choose one visible tool and grounded business arguments; clarificationReason=none, missing=[]. The server may fill omitted arguments from durable state.",
@@ -237,7 +243,7 @@ export class LLMModelRouter implements ModelRouter {
       const result = await this.provider.completeStructured({
         messages: [{ role: "system", content: system }, { role: "user", content: message }],
         schema: ROUTE_SCHEMA,
-        maxTokens: 340,
+        maxTokens: 360,
         temperature: 0.1,
         label: "agent_core_route",
       });

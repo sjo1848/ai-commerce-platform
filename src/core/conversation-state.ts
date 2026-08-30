@@ -21,6 +21,8 @@ export type ConversationStatePatch = {
   checkOut?: string | null;
   guests?: number | null;
   selectedRoomId?: string | null;
+  /** One-based ordinal selected by the LLM; Core resolves it against authoritative HMS candidates. */
+  selectedRoomIndex?: number | null;
   activeBookingId?: string | null;
 };
 
@@ -41,6 +43,7 @@ export class InMemoryConversationStateStore implements ConversationStateStore {
 
 function validIsoDate(value: unknown): value is string { return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value); }
 function validGuests(value: unknown): value is number { return Number.isInteger(value) && Number(value) >= 1 && Number(value) <= 20; }
+function validSelectionIndex(value: unknown): value is number { return Number.isInteger(value) && Number(value) >= 1 && Number(value) <= 25; }
 function stringField(value: unknown): string | undefined { return typeof value === "string" && value.trim() ? value.trim() : undefined; }
 
 function parseStoredState(value: unknown): ConversationState | undefined {
@@ -86,11 +89,17 @@ export function applyConversationStatePatch(current: ConversationState, patch: C
   if (patch.checkIn === null) delete next.stay.checkIn; else if (validIsoDate(patch.checkIn)) next.stay.checkIn = patch.checkIn;
   if (patch.checkOut === null) delete next.stay.checkOut; else if (validIsoDate(patch.checkOut)) next.stay.checkOut = patch.checkOut;
   if (patch.guests === null) delete next.stay.guests; else if (validGuests(patch.guests)) next.stay.guests = patch.guests;
-  if (patch.selectedRoomId === null) delete next.selectedRoomId;
-  else {
+
+  if (patch.selectedRoomId === null || patch.selectedRoomIndex === null) delete next.selectedRoomId;
+  if (validSelectionIndex(patch.selectedRoomIndex)) {
+    const candidate = next.availabilityRoomIds[patch.selectedRoomIndex - 1];
+    if (candidate) next.selectedRoomId = candidate;
+    else delete next.selectedRoomId;
+  } else {
     const selected = stringField(patch.selectedRoomId);
     if (selected && next.availabilityRoomIds.includes(selected)) next.selectedRoomId = selected;
   }
+
   if (patch.activeBookingId === null) delete next.activeBookingId;
   else {
     const booking = stringField(patch.activeBookingId);
