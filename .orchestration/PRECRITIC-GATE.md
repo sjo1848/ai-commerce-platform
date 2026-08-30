@@ -1,16 +1,25 @@
-# Pre-Critic Gate — ACP-I01
+# Pre-Critic Gate — ACP 2.5 Controlled Reservation
 
-- [x] `npm run typecheck` PASS
-- [x] `npm test` PASS — 21/21
-- [x] I-01 tenant body/message override adversarial test PASS
-- [x] I-02 cross-tenant session replay test PASS
-- [x] I-03 malicious model non-visible tool test PASS
-- [x] I-04 missing permission / approval tests PASS
-- [x] I-05 idempotency required/replay/conflict/isolation tests PASS
-- [x] I-06 audit success/deny/fail/replay evidence PASS
-- [x] I-07 source boundary inspection PASS
-- [x] I-08 error normalization test PASS
-- [x] I-09 integer cents test PASS
-- [x] I-10 no deploy/paid resources PASS
+Substantive artifact: `cec61660187969923da7ae34af524b094e9e762d`
 
-Verdict: `PASS`
+- [x] Accepted E1 ancestry reconciled with `acceptance/staging` without product-tree change.
+- [x] Human authorization bounded to HMS staging controlled reservation + cleanup.
+- [x] Task Contract published.
+- [x] `npm run qa` PASS on exact substantive artifact via GitHub Actions `33289958425`.
+- [x] Wrangler dry-run PASS in the same exact-artifact CI job.
+- [x] Tenant/hotel/actor routing remains trusted server configuration.
+- [x] `createReservation` policy requires Human-in-the-Loop approval.
+- [x] Approval challenge is server-issued, message/idempotency/session/tenant/actor bound, expiring and single-use.
+- [x] Forged approval/request identity adversarial cases PASS.
+- [x] Side effects require trusted idempotency key.
+- [x] HMS `operationToken` cannot come from model/user tool input.
+- [x] Downstream HMS idempotency remains authoritative; Core does not cache away replay.
+- [x] Cancellation is separately approval-gated and forwards trusted operation token.
+- [x] No payment/production/real-data/paid-resource scope added.
+- [x] Full ACP 2.5 invariant classification published in `.orchestration/evidence/ACP-2.5-PRECRITIC.md`.
+- [ ] Independent Critic PASS on the frozen substantive artifact and publication boundary.
+- [ ] Merge/promotion.
+- [ ] Cross-repository staging E2E after HMS 2.5 independently passes.
+
+Pre-Critic verdict: `READY_FOR_INDEPENDENT_CRITIC`.
+No technical PASS or staging deployment is claimed yet.
