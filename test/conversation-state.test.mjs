@@ -99,6 +99,8 @@ test("model cannot persist a selected room or ordinal outside authoritative avai
   assert.equal(fakeId.selectedRoomId, undefined);
   const outOfRange = applyConversationStatePatch(current, { selectedRoomIndex: 3 });
   assert.equal(outOfRange.selectedRoomId, undefined);
+  const staleSelection = applyConversationStatePatch({ ...current, selectedRoomId: roomId }, { selectedRoomIndex: 3 });
+  assert.equal(staleSelection.selectedRoomId, undefined);
   const validSecond = applyConversationStatePatch(current, { selectedRoomIndex: 2 });
   assert.equal(validSecond.selectedRoomId, secondRoomId);
 });
