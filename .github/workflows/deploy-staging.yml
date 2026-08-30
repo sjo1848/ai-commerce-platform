@@ -81,22 +81,33 @@ jobs:
           [[ -f /tmp/e1-root.html ]] && cat /tmp/e1-root.html >&2 || true
           exit 1
 
-      - name: E1 real availability through HMS Service Binding
+      - name: E1 immediate same-session availability and quote
         shell: bash
         run: |
           set -euo pipefail
-          status="$(curl -sS --max-time 20 \
+          : > /tmp/e1-worker-tail.log
+          timeout 25s npx wrangler tail "$WORKER_NAME" --format=json --method POST > /tmp/e1-worker-tail.log 2>&1 &
+          TAIL_PID=$!
+          trap 'kill "$TAIL_PID" 2>/dev/null || true' EXIT
+          # Connect diagnostics before the measured flow so it cannot add a delay between turns.
+          sleep 3
+
+          availability_status="$(curl -sS --max-time 20 \
             -o /tmp/e1-availability.json \
             -w '%{http_code}' \
             -H 'content-type: application/json' \
             -H 'x-request-id: e1-staging-availability' \
             -X POST "$AI_COMMERCE_STAGING_URL/api/chat" \
             --data '{"message":"disponibilidad 2027-01-15 2027-01-17 para 1 persona"}' || true)"
-          if [[ "$status" != 2* ]]; then
-            echo "E1 availability HTTP $status" >&2
+          if [[ "$availability_status" != 2* ]]; then
+            echo "E1 availability HTTP $availability_status" >&2
             cat /tmp/e1-availability.json >&2 || true
+            sleep 1
+            echo "--- Worker tail diagnostics ---" >&2
+            cat /tmp/e1-worker-tail.log >&2 || true
             exit 1
           fi
+
           node - <<'NODE'
           const fs = require('fs');
           const body = JSON.parse(fs.readFileSync('/tmp/e1-availability.json', 'utf8'));
@@ -106,42 +117,38 @@ jobs:
           if (!Array.isArray(body?.data?.rooms) || body.data.rooms.length < 1) throw new Error('E1 availability returned no rooms');
           const roomId = body.data.rooms[0]?.id;
           if (typeof roomId !== 'string' || !roomId) throw new Error('E1 availability missing room id');
-          fs.appendFileSync(process.env.GITHUB_ENV, `E1_SESSION_ID=${body.sessionId}\nE1_ROOM_ID=${roomId}\n`);
           NODE
 
-      - name: E1 real quote through same HMS Service Binding
-        shell: bash
-        run: |
-          set -euo pipefail
-          : > /tmp/e1-worker-tail.log
-          timeout 20s npx wrangler tail "$WORKER_NAME" --format=json --method POST > /tmp/e1-worker-tail.log 2>&1 &
-          TAIL_PID=$!
-          trap 'kill "$TAIL_PID" 2>/dev/null || true' EXIT
-          sleep 3
+          E1_SESSION_ID="$(node -e 'const b=require("/tmp/e1-availability.json");process.stdout.write(b.sessionId)')"
+          E1_ROOM_ID="$(node -e 'const b=require("/tmp/e1-availability.json");process.stdout.write(b.data.rooms[0].id)')"
+          export E1_SESSION_ID E1_ROOM_ID
 
-          payload="$(E1_ROOM_ID="$E1_ROOM_ID" E1_SESSION_ID="$E1_SESSION_ID" node -e '
+          # No sleep/retry is allowed here: continuity must work immediately after availability.
+          quote_payload="$(node -e '
             process.stdout.write(JSON.stringify({
               message: `cotizame ${process.env.E1_ROOM_ID} del 2027-01-15 al 2027-01-17`,
               sessionId: process.env.E1_SESSION_ID
             }));
           ')"
-          status="$(curl -sS --max-time 20 \
+          quote_status="$(curl -sS --max-time 20 \
             -o /tmp/e1-quote.json \
             -w '%{http_code}' \
             -H 'content-type: application/json' \
-            -H 'x-request-id: e1-staging-quote' \
+            -H 'x-request-id: e1-staging-quote-immediate' \
             -X POST "$AI_COMMERCE_STAGING_URL/api/chat" \
-            --data "$payload" || true)"
+            --data "$quote_payload" || true)"
+
           sleep 2
           kill "$TAIL_PID" 2>/dev/null || true
 
-          if [[ "$status" != 2* ]]; then
-            echo "E1 quote HTTP $status" >&2
+          if [[ "$quote_status" != 2* ]]; then
+            echo "E1 immediate quote HTTP $quote_status" >&2
             cat /tmp/e1-quote.json >&2 || true
             echo "--- Worker tail diagnostics ---" >&2
             cat /tmp/e1-worker-tail.log >&2 || true
             exit 1
           fi
+
           E1_ROOM_ID="$E1_ROOM_ID" node - <<'NODE'
           const fs = require('fs');
           const body = JSON.parse(fs.readFileSync('/tmp/e1-quote.json', 'utf8'));
@@ -153,8 +160,11 @@ jobs:
           if (body?.data?.currency !== 'ARS') throw new Error('E1 quote currency mismatch');
           NODE
 
+          echo "E1_SESSION_ID=$E1_SESSION_ID" >> "$GITHUB_ENV"
+          echo "E1_ROOM_ID=$E1_ROOM_ID" >> "$GITHUB_ENV"
+
       - name: E1 staging handoff
         run: |
-          echo "E1 REAL PASS: webchat -> Agent Core -> Service Binding -> HMS -> D1"
+          echo "E1 REAL PASS: immediate webchat -> Agent Core -> Service Binding -> HMS -> D1"
           echo "AI_COMMERCE_STAGING_URL=$AI_COMMERCE_STAGING_URL"
           echo "E1_ROOM_ID=$E1_ROOM_ID"
