@@ -2,46 +2,51 @@
 
 Phase: `ACP INTEGRATION — PHASE 2.6`
 Task: `ACP-2.6-LLM-MODEL-ROUTER`
-Status: `PLANNING_AUTHORIZED`
-Current sub-stage: `2.6.1 — CONVERSATIONAL ACCEPTANCE CORPUS`
+Status: `HUMAN_GATE`
+Current sub-stage: `2.6.9 — HUMAN PRODUCT ACCEPTANCE`
 
 ## Last closed gate
-`ACP-2.5-CONTROLLED-RESERVATION` — `PRODUCT_ACCEPTED / CLOSED`.
-Human verdict: `ACCEPT`.
-Closure evidence: `.orchestration/evidence/ACP-2.5-CLOSURE.md`.
+`2.6.8 — CONVERSATIONAL STAGING E2E` — `TECHNICAL_PASS / CLOSED`.
+Closure evidence: `.orchestration/evidence/ACP-2.6.8-REAL-MODEL-STAGING.md`.
 
-Accepted 2.5 evidence remains anchored to:
-- ACP product artifact `3d1a08376b9581dfc1fc159a6bf3b0733996fa61`;
-- ACP final staging candidate `98ede44ed97764c9835d818290167903686f3b4e` — Independent Critic PASS;
-- HMS artifact `70fae5c902af557eadc2802ba773f44b9f95fd46` — Independent Critic PASS;
-- HMS staging deploy `33301324856` — PASS;
-- ACP staging deploy `33301384087` — E1 + E2 PASS;
-- Human Product Acceptance — ACCEPT.
+Final 2.6.8 evidence is anchored to:
+- runtime Artifact A `3468026011170f7bb9106d1a2b7e6d1ecf2d7cdd`;
+- PR #32 exact-artifact core-ci `33319324060` — PASS;
+- Pre-Critic Gate — PASS;
+- Independent Critic — PASS;
+- integration head `97522064a63d7dfb3d9691414b52c1fe5da5d12b`;
+- post-merge core-ci `33319393065` — PASS;
+- staging head `6ea974c725b6ca288da8501ef28f5a2f11d2a5fa`;
+- staging deploy `33319422840` — PASS;
+- Foundation regression: `75/75 PASS`;
+- E1 natural same-session availability + quote — PASS;
+- ACP 2.6.8 real-model evaluator — `5/5 PASS`, `naturalCorrectness=1`, `safety=true`, `7` real model inferences, `0` fallbacks;
+- E2 controlled reservation/cancel — PASS, including HITL, server-bound guest identity, authoritative replay/conflict, ownership and inventory restoration.
 
-## Product decision after acceptance
-Do not move to Fase 3 — Alquileres yet.
+## Current gate — 2.6.9
+Human Product Acceptance is mandatory before Phase 2.6 can be marked `PRODUCT_ACCEPTED` and before Fase 3 — Alquileres is unblocked.
 
-The current HMS staging flow proves governed tool execution and reversible side effects but still uses `DeterministicModelRouter` as the primary language interpreter. The next increment must make HMS feel like the product thesis: a natural, contextual AI agent that can plan tool use without gaining authority over trusted operational controls.
+Required human verdicts:
+- `ACCEPT` — closes 2.6 as Product Accepted and enables the next roadmap phase under the same Agent Core + LLM Model Router architecture.
+- `REWORK` — reopens only the concrete product findings reported by the human reviewer, then repeats the bounded method cycle and returns to this gate.
 
-Drive decision: `DEC-002 — Consolidar experiencia IA en HMS antes de segunda vertical`.
-Execution contract: `.orchestration/contracts/ACP-2.6-LLM-MODEL-ROUTER.md`.
+The Controller must not self-approve this gate.
 
-## 2.6 execution sequence
-1. `2.6.1` Freeze a conversational + adversarial acceptance corpus before implementation.
-2. `2.6.2` Introduce provider-independent Model Provider Adapter + `LLMModelRouter`; keep deterministic router as fallback/test fixture.
-3. `2.6.3` Enforce strict structured tool planning and server-side revalidation.
-4. `2.6.4` Add safe operational conversation context for multi-turn references without making LLM memory authoritative.
-5. `2.6.5` Add minimal clarification behavior and natural response composition grounded in tool results.
-6. `2.6.6` Instrument model usage, latency, cost and safe timeout/fallback behavior.
-7. `2.6.7` Run adversarial QA and Independent Critic on the frozen artifact.
-8. `2.6.8` Run real-model conversational E2E against HMS staging through reserve/cancel + cleanup.
-9. `2.6.9` Return to Human Product Acceptance.
+## Product capability now proven technically
+The HMS staging experience uses Workers AI as a real natural-language planning layer while authoritative operations remain outside the model. It can:
+- interpret natural Argentine Spanish for availability;
+- use safe same-session operational context for references such as “la primera”;
+- clarify missing information instead of inventing it;
+- ground prices and operational facts in HMS transactional results;
+- reject trusted tenant/hotel/guest authority from user/model input;
+- require HITL before reservation/cancellation writes;
+- preserve idempotency, ownership, audit and inventory consistency.
 
 ## Non-negotiable architecture
 The LLM may interpret, plan, clarify and compose. It may not choose trusted tenant/hotel/actor context, permissions, approval metadata, operation tokens or arbitrary tools. Tool Registry, validation, Policy Engine, HITL, idempotency, audit, ownership and HMS transactional truth remain deterministic and authoritative.
 
 ## Gate to Fase 3
-Fase 3 — Alquileres remains blocked until ACP 2.6 closes with `Human Product Acceptance: ACCEPT`. The second vertical must then reuse the same Agent Core + LLM Model Router; only domain adapter/tool/truth semantics should materially change.
+Fase 3 — Alquileres remains blocked until the explicit Human Product Acceptance verdict for 2.6 is `ACCEPT`.
 
 ## Boundaries still in force
-No production cutover, real customer data, payments, paid-resource expansion, WhatsApp requirement, broader autonomous writes or second-vertical implementation is authorized by 2.6 planning.
+No production cutover, real customer data, payments, paid-resource expansion, WhatsApp requirement, broader autonomous writes or second-vertical implementation is authorized while this Human Gate is open.
