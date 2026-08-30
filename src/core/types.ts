@@ -18,6 +18,7 @@ export type RiskLevel = "read" | "write" | "financial" | "admin";
 export type SideEffect = "none" | "reversible" | "irreversible";
 export type ToolPolicyMode = "auto" | "approval" | "deny";
 export type IdempotencyMode = "core" | "downstream";
+export type JsonSchema = Readonly<Record<string, unknown>>;
 
 export type Tenant = {
   id: string;
@@ -69,6 +70,8 @@ export type ToolDefinition<I, O> = {
   sideEffect: SideEffect;
   idempotencyMode?: IdempotencyMode;
   requiredPermissions: readonly string[];
+  /** Model-visible business arguments only. Trusted execution metadata must never appear here. */
+  inputSchema?: JsonSchema;
   validateInput(input: unknown): ValidationResult<I>;
   execute(input: I, context: ExecutionContext, meta: ToolExecutionMeta): Promise<O>;
 };
@@ -82,8 +85,19 @@ export type ModelRouteResult =
   | { kind: "tool"; plan: ToolPlan }
   | { kind: "message"; message: string };
 
+export type ModelConversationTurn = {
+  role: "user" | "assistant" | "tool";
+  content: string;
+  toolId?: string;
+};
+
 export interface ModelRouter {
-  route(message: string, context: ExecutionContext, availableTools: readonly ToolDescriptor[]): Promise<ModelRouteResult>;
+  route(
+    message: string,
+    context: ExecutionContext,
+    availableTools: readonly ToolDescriptor[],
+    conversation?: readonly ModelConversationTurn[],
+  ): Promise<ModelRouteResult>;
 }
 
 export type ToolDescriptor = {
@@ -91,4 +105,5 @@ export type ToolDescriptor = {
   primitive: Primitive;
   description: string;
   risk: RiskLevel;
+  inputSchema?: JsonSchema;
 };
