@@ -119,7 +119,7 @@ function nextStepAllowed(toolId: string, nextStep: NextStep): boolean {
 
 function cta(nextStep: NextStep, style: ResponseStyle): string {
   switch (nextStep) {
-    case "quote": return style === "warm" ? "Decime cuál te interesa y te paso el total de la estadía." : "Si querés, cotizo la opción que elijas.";
+    case "quote": return style === "warm" ? "Decime cuál te interesa y te la cotizo con el total de la estadía." : "Si querés, cotizo la opción que elijas.";
     case "reserve": return style === "warm" ? "Si te sirve, puedo dejar esa habitación lista para que confirmes la reserva." : "Si querés, preparo la reserva para que la confirmes.";
     case "new_search": return style === "warm" ? "Si querés, vemos otras fechas u otra habitación." : "Si querés, buscamos otras fechas u opciones.";
     default: return "";
