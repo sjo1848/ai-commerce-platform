@@ -16,7 +16,7 @@ concurrency:
 jobs:
   deploy-and-e1-smoke:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -83,27 +83,27 @@ jobs:
           [[ -f /tmp/e1-root.html ]] && cat /tmp/e1-root.html >&2 || true
           exit 1
 
-      - name: E1 immediate same-session availability and quote
+      - name: E1 natural same-session availability and quote
         shell: bash
         run: |
           set -euo pipefail
           : > /tmp/e1-worker-tail.log
-          timeout 25s npx wrangler tail "$WORKER_NAME" --format=json --method POST > /tmp/e1-worker-tail.log 2>&1 &
+          timeout 35s npx wrangler tail "$WORKER_NAME" --format=json --method POST > /tmp/e1-worker-tail.log 2>&1 &
           TAIL_PID=$!
           trap 'kill "$TAIL_PID" 2>/dev/null || true' EXIT
-          # Connect diagnostics before the measured flow so it cannot add a delay between turns.
           sleep 3
 
-          availability_status="$(curl -sS --max-time 20 \
+          availability_status="$(curl -sS --max-time 25 \
             -o /tmp/e1-availability.json \
             -w '%{http_code}' \
             -H 'content-type: application/json' \
-            -H 'x-request-id: e1-staging-availability' \
+            -H 'x-request-id: e1-staging-availability-natural' \
             -X POST "$AI_COMMERCE_STAGING_URL/api/chat" \
-            --data '{"message":"disponibilidad 2027-01-15 2027-01-17 para 1 persona"}' || true)"
+            --data '{"message":"Hola, somos dos y queremos quedarnos del 15 al 17 de enero de 2027. ¿Tenés algo disponible?"}' || true)"
+          echo "--- E1 availability response (HTTP $availability_status) ---"
+          cat /tmp/e1-availability.json || true
+          echo
           if [[ "$availability_status" != 2* ]]; then
-            echo "E1 availability HTTP $availability_status" >&2
-            cat /tmp/e1-availability.json >&2 || true
             sleep 1
             echo "--- Worker tail diagnostics ---" >&2
             cat /tmp/e1-worker-tail.log >&2 || true
@@ -125,45 +125,80 @@ jobs:
           E1_ROOM_ID="$(node -e 'const b=require("/tmp/e1-availability.json");process.stdout.write(b.data.rooms[0].id)')"
           export E1_SESSION_ID E1_ROOM_ID
 
-          # No sleep/retry is allowed here: continuity must work immediately after availability.
           quote_payload="$(node -e '
             process.stdout.write(JSON.stringify({
-              message: `cotizame ${process.env.E1_ROOM_ID} del 2027-01-15 al 2027-01-17`,
+              message: "¿Cuánto sale la primera?",
               sessionId: process.env.E1_SESSION_ID
             }));
           ')"
-          quote_status="$(curl -sS --max-time 20 \
+          quote_status="$(curl -sS --max-time 25 \
             -o /tmp/e1-quote.json \
             -w '%{http_code}' \
             -H 'content-type: application/json' \
-            -H 'x-request-id: e1-staging-quote-immediate' \
+            -H 'x-request-id: e1-staging-quote-natural-reference' \
             -X POST "$AI_COMMERCE_STAGING_URL/api/chat" \
             --data "$quote_payload" || true)"
 
           sleep 2
           kill "$TAIL_PID" 2>/dev/null || true
+          echo "--- E1 quote response (HTTP $quote_status) ---"
+          cat /tmp/e1-quote.json || true
+          echo
+          echo "--- E1 model telemetry ---"
+          cat /tmp/e1-worker-tail.log || true
 
-          if [[ "$quote_status" != 2* ]]; then
-            echo "E1 immediate quote HTTP $quote_status" >&2
-            cat /tmp/e1-quote.json >&2 || true
-            echo "--- Worker tail diagnostics ---" >&2
-            cat /tmp/e1-worker-tail.log >&2 || true
-            exit 1
-          fi
+          if [[ "$quote_status" != 2* ]]; then exit 1; fi
 
           E1_ROOM_ID="$E1_ROOM_ID" node - <<'NODE'
           const fs = require('fs');
           const body = JSON.parse(fs.readFileSync('/tmp/e1-quote.json', 'utf8'));
-          if (body?.data?.source !== 'hms') throw new Error('E1 quote did not come from HMS');
+          if (body?.data?.source !== 'hms') throw new Error(`E1 natural quote did not come from HMS: ${JSON.stringify(body)}`);
           if (body?.data?.truth !== 'transactional') throw new Error('E1 quote is not transactional truth');
-          if (body?.data?.roomId !== process.env.E1_ROOM_ID) throw new Error('E1 quote room differs from availability room');
+          if (body?.data?.roomId !== process.env.E1_ROOM_ID) throw new Error('E1 quote room differs from first availability room');
           if (!Number.isInteger(body?.data?.nights) || body.data.nights !== 2) throw new Error('E1 quote nights mismatch');
           if (!Number.isInteger(body?.data?.totalCents) || body.data.totalCents <= 0) throw new Error('E1 quote total is invalid');
           if (body?.data?.currency !== 'ARS') throw new Error('E1 quote currency mismatch');
           NODE
 
+          if ! grep -q '"kind":"model_inference"' /tmp/e1-worker-tail.log; then
+            echo "E1 did not capture any real model_inference telemetry." >&2
+            exit 1
+          fi
+
           echo "E1_SESSION_ID=$E1_SESSION_ID" >> "$GITHUB_ENV"
           echo "E1_ROOM_ID=$E1_ROOM_ID" >> "$GITHUB_ENV"
+
+      - name: ACP 2.6.8 real-model conversational evaluator
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > /tmp/acp26-model-tail.log
+          timeout 55s npx wrangler tail "$WORKER_NAME" --format=json --method POST > /tmp/acp26-model-tail.log 2>&1 &
+          TAIL_PID=$!
+          trap 'kill "$TAIL_PID" 2>/dev/null || true' EXIT
+          sleep 3
+
+          set +e
+          node scripts/staging-real-model-eval.mjs > /tmp/acp26-eval.json 2>&1
+          EVAL_CODE=$?
+          set -e
+          sleep 3
+          kill "$TAIL_PID" 2>/dev/null || true
+
+          echo "--- ACP 2.6.8 evaluator ---"
+          cat /tmp/acp26-eval.json || true
+          echo "--- ACP 2.6.8 model telemetry ---"
+          cat /tmp/acp26-model-tail.log || true
+
+          MODEL_INFERENCES="$(grep -c '"kind":"model_inference"' /tmp/acp26-model-tail.log || true)"
+          MODEL_FALLBACKS="$(grep -c '"kind":"model_fallback"' /tmp/acp26-model-tail.log || true)"
+          echo "ACP26_MODEL_INFERENCES=$MODEL_INFERENCES"
+          echo "ACP26_MODEL_FALLBACKS=$MODEL_FALLBACKS"
+          if [[ "$MODEL_INFERENCES" -lt 3 ]]; then
+            echo "Insufficient real model inference evidence; evaluator could be running mostly on fallback." >&2
+            exit 1
+          fi
+          if [[ "$EVAL_CODE" -ne 0 ]]; then exit "$EVAL_CODE"; fi
 
       - name: E2 controlled reservation HITL and cleanup
         shell: bash
@@ -173,7 +208,8 @@ jobs:
 
       - name: Staging handoff
         run: |
-          echo "E1 REAL PASS: immediate webchat -> Agent Core -> Service Binding -> HMS -> D1"
+          echo "E1 NATURAL PASS: natural Spanish -> Agent Core real model -> HMS transactional availability + conversational quote"
+          echo "ACP 2.6.8 REAL MODEL PASS: natural/context/clarification/grounding/trusted-context evaluator + model telemetry"
           echo "E2 CONTROLLED RESERVATION PASS: HITL -> create -> replay/conflict -> inventory claim -> token-owned cancel/replay -> inventory restored"
           echo "AI_COMMERCE_STAGING_URL=$AI_COMMERCE_STAGING_URL"
           echo "E1_ROOM_ID=$E1_ROOM_ID"
