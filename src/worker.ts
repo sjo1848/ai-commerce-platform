@@ -8,6 +8,7 @@ import {
   DurableObjectSessionStore,
   SessionDurableObject,
 } from "./cloudflare/session-durable-object.js";
+import { ConversationBackedStateStore } from "./core/conversation-state.js";
 import { DeterministicModelRouter } from "./core/deterministic-model.js";
 import { LLMModelRouter } from "./core/llm-model.js";
 import { LLMGroundedResponder } from "./core/model-responder.js";
@@ -39,8 +40,6 @@ const tenant = {
 const stagingIdentity = {
   guestIdByTenantActor: {
     "hotel-demo": {
-      // Synthetic HMS staging guest. This mapping is trusted deployment config,
-      // not a model/user argument; production identity onboarding remains out of 2.6 scope.
       "visitor-demo": "12000000-0000-0000-0000-000000000001",
     },
   },
@@ -58,11 +57,13 @@ function handler(env: Env): (request: Request) => Promise<Response> {
   const provider = new WorkersAiModelProvider(env.AI);
   const model = new LLMModelRouter(provider, new DeterministicModelRouter(), usage);
   const responder = new LLMGroundedResponder(provider, undefined, usage);
+  const conversationStore = new DurableObjectConversationStore(env.SESSIONS);
   const runtime = new AgentCoreRuntime({
     tenants: [tenant],
     tools: hmsAgentTools(hms, stagingIdentity),
     sessionStore: new DurableObjectSessionStore(env.SESSIONS),
-    conversationStore: new DurableObjectConversationStore(env.SESSIONS),
+    conversationStore,
+    conversationStateStore: new ConversationBackedStateStore(conversationStore),
     usageSink: usage,
     model,
     responder,
