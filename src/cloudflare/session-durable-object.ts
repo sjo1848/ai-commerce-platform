@@ -33,7 +33,7 @@ export class SessionDurableObject extends DurableObject<Env> {
     super(ctx, env);
   }
 
-  async fetch(request: Request): Promise<Response> {
+  override async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname !== "/session") return json({ error: "NOT_FOUND" }, 404);
 
