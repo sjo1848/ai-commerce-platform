@@ -25,5 +25,7 @@ jobs:
         run: npm ci
       - name: Typecheck and tests
         run: npm run qa
+      - name: Validate staging E2E runner syntax
+        run: node --check scripts/staging-e2e-reservation.mjs
       - name: Validate Cloudflare Worker config
         run: npx wrangler deploy --dry-run
