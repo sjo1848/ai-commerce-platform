@@ -1,5 +1,6 @@
 import { InMemoryAuditSink } from "./audit.js";
 import { InMemoryConversationStore, type ConversationStore } from "./conversation.js";
+import { InMemoryConversationStateStore, type ConversationStateStore } from "./conversation-state.js";
 import { DeterministicModelRouter } from "./deterministic-model.js";
 import { AgentCoreExecutor } from "./executor.js";
 import { InMemoryIdempotencyStore } from "./idempotency.js";
@@ -19,6 +20,7 @@ export type RuntimeConfig = {
   now?: () => Date;
   sessionStore?: SessionStore;
   conversationStore?: ConversationStore;
+  conversationStateStore?: ConversationStateStore;
   usageSink?: UsageSink;
   model?: ModelRouter;
   responder?: ModelResponder;
@@ -29,6 +31,7 @@ export class AgentCoreRuntime {
   readonly sessions: SessionStore;
   readonly sessionManager: SessionManager;
   readonly conversation: ConversationStore;
+  readonly conversationState: ConversationStateStore;
   readonly registry = new ToolRegistry();
   readonly policy = new PolicyEngine();
   readonly audit = new InMemoryAuditSink();
@@ -44,13 +47,12 @@ export class AgentCoreRuntime {
     this.sessions = config.sessionStore ?? new InMemorySessionStore();
     this.sessionManager = new SessionManager(this.sessions);
     this.conversation = config.conversationStore ?? new InMemoryConversationStore();
+    this.conversationState = config.conversationStateStore ?? new InMemoryConversationStateStore();
     this.usage = config.usageSink ?? new InMemoryUsageSink();
 
     if (config.tools) {
       for (const tool of config.tools) this.registry.register(tool);
     } else {
-      // Phase-1 reproducibility: the fake remains the default only when no real
-      // vertical tools are injected by the deployment runtime.
       const hms = new FakeHmsAdapter();
       this.registry.register(hms.checkAvailabilityTool());
       this.registry.register(hms.getQuoteTool());
@@ -65,6 +67,7 @@ export class AgentCoreRuntime {
       this.usage,
       this.audit,
       this.conversation,
+      this.conversationState,
     );
   }
 
