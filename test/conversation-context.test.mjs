@@ -27,7 +27,14 @@ function availabilityTool() {
     requiredPermissions: ["hms.availability.read"],
     validateInput(input) { return { ok: true, value: input }; },
     async execute() {
-      return { source: "hms", truth: "transactional", rooms: [{ id: roomId, roomNumber: "101", priceCents: 25000 }] };
+      return {
+        source: "hms",
+        truth: "transactional",
+        hotelId: "trusted-hotel-secret",
+        traceId: "trusted-trace-secret",
+        guestId: "trusted-guest-secret",
+        rooms: [{ id: roomId, roomNumber: "101", priceCents: 25000 }],
+      };
     },
   };
 }
@@ -47,6 +54,7 @@ test("second model turn receives prior user, tool and grounded assistant history
   const firstContext = await runtime.createContext({ tenantId: tenant.id, actor, channel: "webchat" });
   const first = await runtime.orchestrator.chat("Somos dos, ¿qué hay?", firstContext);
   assert.equal(first.data.rooms[0].id, roomId);
+  assert.equal(first.data.hotelId, "trusted-hotel-secret");
   assert.match(first.message, /habitación 101/i);
 
   const secondContext = await runtime.createContext({ tenantId: tenant.id, actor, channel: "webchat", sessionId: first.sessionId });
@@ -57,6 +65,7 @@ test("second model turn receives prior user, tool and grounded assistant history
   assert.equal(history[0].content, "Somos dos, ¿qué hay?");
   assert.equal(history[1].toolId, "hms.checkAvailability");
   assert.match(history[1].content, new RegExp(roomId));
+  assert.doesNotMatch(history[1].content, /trusted-hotel-secret|trusted-trace-secret|trusted-guest-secret/);
   assert.match(history[2].content, /habitación 101/i);
 });
 
