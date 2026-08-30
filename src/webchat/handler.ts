@@ -22,7 +22,11 @@ export function createWebchatHandler(runtime: AgentCoreRuntime, config: WebchatH
     if (request.method === "GET" && url.pathname === "/") return new Response(HTML, { headers: { "content-type": "text/html; charset=utf-8" } });
     if (request.method !== "POST" || url.pathname !== "/api/chat") return json({ error: { code: "NOT_FOUND" } }, 404);
 
+    const requestId = request.headers.get("x-request-id")?.trim() || crypto.randomUUID();
+    let stage = "request";
+
     try {
+      stage = "parse_request";
       const contentType = request.headers.get("content-type") ?? "";
       if (!contentType.toLowerCase().includes("application/json")) throw new CoreError("BAD_REQUEST", "JSON body required", 415);
       const body = await request.json() as Record<string, unknown>;
@@ -34,17 +38,28 @@ export function createWebchatHandler(runtime: AgentCoreRuntime, config: WebchatH
         roles: ["customer"],
         permissions: ["hms.availability.read", "hms.quote.read"],
       };
+
+      stage = "create_context";
       const context = await runtime.createContext({
         tenantId,
         actor,
         channel: "webchat",
         ...(typeof body.sessionId === "string" && body.sessionId ? { sessionId: body.sessionId } : {}),
-        requestId: request.headers.get("x-request-id")?.trim() || crypto.randomUUID(),
+        requestId,
       });
+
+      stage = "orchestrator";
       const result = await runtime.orchestrator.chat(typeof body.message === "string" ? body.message : "", context);
       return json(result);
     } catch (error) {
       if (error instanceof CoreError) return json({ error: { code: error.code, message: error.message } }, error.status);
+      console.error(JSON.stringify({
+        event: "webchat_unhandled_error",
+        stage,
+        requestId,
+        errorName: error instanceof Error ? error.name : "UnknownError",
+        errorMessage: error instanceof Error ? error.message : "unknown",
+      }));
       return json({ error: { code: "INTERNAL_ERROR", message: "Internal error" } }, 500);
     }
   };
