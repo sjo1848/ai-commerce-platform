@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { InMemoryConversationStore } from "../dist/core/conversation.js";
+import { applyConversationStatePatch, ConversationBackedStateStore } from "../dist/core/conversation-state.js";
 import { AgentCoreRuntime } from "../dist/core/runtime.js";
+import { InMemorySessionStore } from "../dist/core/session.js";
 
 const roomId = "11000000-0000-0000-0000-000000000001";
 const tenant = {
@@ -51,9 +54,7 @@ test("dates survive a clarification turn and are not requested again when guests
     async route(_message, _context, _tools, _conversation, state) {
       seenStates.push(structuredClone(state));
       call += 1;
-      if (call === 1) {
-        return { kind: "message", message: "¿Para cuántas personas sería?", statePatch: { checkIn: "2027-01-15", checkOut: "2027-01-17" } };
-      }
+      if (call === 1) return { kind: "message", message: "¿Para cuántas personas sería?", statePatch: { checkIn: "2027-01-15", checkOut: "2027-01-17" } };
       return { kind: "tool", plan: { toolId: "hms.checkAvailability", input: { guests: 2 } }, statePatch: { guests: 2 } };
     },
   };
@@ -77,11 +78,7 @@ test("authoritative availability candidates plus a model selection become reusab
     async route(_message, _context, _tools, _conversation, state) {
       call += 1;
       if (call === 1) {
-        return {
-          kind: "tool",
-          plan: { toolId: "hms.checkAvailability", input: { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 2 } },
-          statePatch: { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 2 },
-        };
+        return { kind: "tool", plan: { toolId: "hms.checkAvailability", input: { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 2 } }, statePatch: { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 2 } };
       }
       assert.ok(state.availabilityRoomIds.includes(roomId));
       return { kind: "tool", plan: { toolId: "hms.getQuote", input: {} }, statePatch: { selectedRoomId: roomId } };
@@ -92,6 +89,46 @@ test("authoritative availability candidates plus a model selection become reusab
   const first = await runtime.orchestrator.chat("Somos dos del 15 al 17", firstContext);
   const secondContext = await runtime.createContext({ tenantId: tenant.id, actor, channel: "webchat", sessionId: first.sessionId });
   await runtime.orchestrator.chat("¿Cuánto sale la primera?", secondContext);
-
   assert.deepEqual(executions[1].input, { roomId, checkIn: "2027-01-15", checkOut: "2027-01-17" });
+});
+
+test("model cannot persist a selected room that was not returned by authoritative availability", () => {
+  const current = { stay: { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 2 }, availabilityRoomIds: [roomId] };
+  const next = applyConversationStatePatch(current, { selectedRoomId: "22000000-0000-0000-0000-000000000099" });
+  assert.equal(next.selectedRoomId, undefined);
+  assert.deepEqual(next.availabilityRoomIds, [roomId]);
+});
+
+test("conversation-backed state survives runtime replacement and internal snapshots never enter model history", async () => {
+  const executions = [];
+  const sessions = new InMemorySessionStore();
+  const conversation = new InMemoryConversationStore(32);
+  const stateStore1 = new ConversationBackedStateStore(conversation);
+  const firstModel = {
+    async route() {
+      return { kind: "message", message: "¿Para cuántas personas sería?", statePatch: { checkIn: "2027-01-15", checkOut: "2027-01-17" } };
+    },
+  };
+  const runtime1 = new AgentCoreRuntime({ tenants: [tenant], tools: tools(executions), model: firstModel, sessionStore: sessions, conversationStore: conversation, conversationStateStore: stateStore1 });
+  const firstContext = await runtime1.createContext({ tenantId: tenant.id, actor, channel: "webchat" });
+  await runtime1.orchestrator.chat("Quiero ir del 15 al 17", firstContext);
+
+  let observed;
+  const runtime2 = new AgentCoreRuntime({
+    tenants: [tenant], tools: tools(executions), sessionStore: sessions, conversationStore: conversation,
+    conversationStateStore: new ConversationBackedStateStore(conversation),
+    model: {
+      async route(_message, _context, _tools, history, state) {
+        observed = { history: structuredClone(history), state: structuredClone(state) };
+        return { kind: "tool", plan: { toolId: "hms.checkAvailability", input: { guests: 2 } }, statePatch: { guests: 2 } };
+      },
+    },
+  });
+  const secondContext = await runtime2.createContext({ tenantId: tenant.id, actor, channel: "webchat", sessionId: firstContext.session.id });
+  await runtime2.orchestrator.chat("Somos dos", secondContext);
+
+  assert.equal(observed.state.stay.checkIn, "2027-01-15");
+  assert.equal(observed.state.stay.checkOut, "2027-01-17");
+  assert.ok(observed.history.every((turn) => turn.toolId !== "__conversation_state"));
+  assert.deepEqual(executions[0].input, { guests: 2, checkIn: "2027-01-15", checkOut: "2027-01-17" });
 });
