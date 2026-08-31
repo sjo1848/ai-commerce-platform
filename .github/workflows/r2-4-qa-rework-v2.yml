@@ -1,0 +1,40 @@
+name: r2-4-qa-rework-v2
+
+on:
+  push:
+    branches:
+      - feat/acp-2.6.9-r2.4-multi-room-conversation
+    paths:
+      - .github/workflows/r2-4-qa-rework-v2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  rework:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/acp-2.6.9-r2.4-multi-room-conversation
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Apply R2.4 QA rework
+        run: python .orchestration/tmp/r2_4_qa_rework.py
+      - name: Full QA
+        run: |
+          npm ci
+          npm run qa
+          node --check scripts/staging-e2e-reservation.mjs
+          npx wrangler deploy --dry-run
+      - name: Commit verified rework
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/r2-4-qa-rework.yml .github/workflows/r2-4-qa-rework-v2.yml .orchestration/tmp/r2_4_qa_rework.py
+          git add src test
+          git commit -m "fix(r2.4): ground relational multi-room references safely"
+          git push origin HEAD:feat/acp-2.6.9-r2.4-multi-room-conversation
