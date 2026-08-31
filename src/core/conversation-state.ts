@@ -187,7 +187,6 @@ function parseStoredState(value: unknown): ConversationState | undefined {
     }
   }
 
-  // Backward-compatible migration: old snapshots had stay values but no provenance.
   if (state.stay.checkIn && !memory.stay.checkIn) memory.stay.checkIn = { source: "legacy", revision: memory.revision };
   if (state.stay.checkOut && !memory.stay.checkOut) memory.stay.checkOut = { source: "legacy", revision: memory.revision };
   if (state.stay.guests !== undefined && !memory.stay.guests) memory.stay.guests = { source: "legacy", revision: memory.revision };
@@ -208,12 +207,7 @@ function factValue(state: ConversationState, field: keyof StayState): string | n
   return state.stay[field];
 }
 
-function applyChosenFact(
-  target: ConversationState,
-  source: ConversationState,
-  field: keyof StayState,
-  meta: SemanticFactProvenance | undefined,
-): void {
+function applyChosenFact(target: ConversationState, source: ConversationState, field: keyof StayState, meta: SemanticFactProvenance | undefined): void {
   if (!meta) return;
   target.semanticMemory.stay[field] = structuredClone(meta);
   if (meta.cleared) {
@@ -226,11 +220,6 @@ function applyChosenFact(
   else target.stay[field] = String(value);
 }
 
-/**
- * Merge full state snapshots by semantic field revision instead of last-writer-wins.
- * This makes overlapping requests additive when they learned different facts, while
- * equal-revision conflicts follow durable append order (the incoming snapshot wins).
- */
 export function mergeConcurrentConversationState(current: ConversationState, incoming: ConversationState): ConversationState {
   const left = structuredClone(current);
   const right = structuredClone(incoming);
@@ -239,7 +228,8 @@ export function mergeConcurrentConversationState(current: ConversationState, inc
   if (!sameScope(leftMemory.scope, rightMemory.scope)) throw new CoreError("FORBIDDEN", "Conversation semantic memory scope mismatch", 403);
 
   const next = emptyConversationState();
-  next.semanticMemory.scope = rightMemory.scope ? structuredClone(rightMemory.scope) : leftMemory.scope ? structuredClone(leftMemory.scope) : undefined;
+  const mergedScope = rightMemory.scope ?? leftMemory.scope;
+  if (mergedScope) next.semanticMemory.scope = structuredClone(mergedScope);
   const equalRevisionSemanticConflict = leftMemory.revision === rightMemory.revision && !sameStay(left, right);
   next.semanticMemory.revision = Math.max(leftMemory.revision, rightMemory.revision) + (equalRevisionSemanticConflict ? 1 : 0);
 
@@ -278,8 +268,8 @@ export function mergeConcurrentConversationState(current: ConversationState, inc
     if (left.selectedRoomId && next.availabilityRoomIds.includes(left.selectedRoomId)) next.selectedRoomId = left.selectedRoomId;
   }
 
-  // Booking ownership is operational truth; a stale semantic snapshot must not erase it.
-  next.activeBookingId = right.activeBookingId ?? left.activeBookingId;
+  const mergedBookingId = right.activeBookingId ?? left.activeBookingId;
+  if (mergedBookingId) next.activeBookingId = mergedBookingId;
   if (right.activeBookingId && left.activeBookingId && right.activeBookingId !== left.activeBookingId) next.activeBookingId = left.activeBookingId;
   if (next.activeBookingId === right.activeBookingId && right.bookingStatus) next.bookingStatus = right.bookingStatus;
   else if (left.bookingStatus) next.bookingStatus = left.bookingStatus;
@@ -334,11 +324,7 @@ export type ApplyConversationStateOptions = {
   activeIntentSource?: "user" | "server" | "legacy";
 };
 
-export function applyConversationStatePatch(
-  current: ConversationState,
-  patch: ConversationStatePatch | undefined,
-  options: ApplyConversationStateOptions = {},
-): ConversationState {
+export function applyConversationStatePatch(current: ConversationState, patch: ConversationStatePatch | undefined, options: ApplyConversationStateOptions = {}): ConversationState {
   const next = structuredClone(current);
   const memory = ensureSemanticMemory(next);
   const source = options.semanticSource ?? "legacy";
@@ -411,9 +397,7 @@ export function applyConversationStatePatch(
   const preferencesWillClear = Boolean(options.clearPreferences && (memory.preferences.length > 0 || memory.preferencesClearedAtRevision === undefined));
   const activeIntentWillClear = options.activeIntent === null && memory.activeIntent !== undefined;
   const activeIntentSource = options.activeIntentSource ?? (source === "server" ? "server" : source === "legacy" ? "legacy" : "user");
-  const activeIntentWillChange = options.activeIntent !== undefined && options.activeIntent !== null && (
-    memory.activeIntent?.value !== options.activeIntent || memory.activeIntent.source !== activeIntentSource
-  );
+  const activeIntentWillChange = options.activeIntent !== undefined && options.activeIntent !== null && (memory.activeIntent?.value !== options.activeIntent || memory.activeIntent.source !== activeIntentSource);
 
   const semanticChanged = changedStay.size > 0 || clearedStay.size > 0 || preferencesWillClear || addedPreferences.length > 0 || activeIntentWillClear || activeIntentWillChange;
   if (semanticChanged) {
@@ -428,9 +412,7 @@ export function applyConversationStatePatch(
     for (const preference of addedPreferences) memory.preferences.push({ value: preference, source: "user", revision });
     if (memory.preferences.length > 8) memory.preferences = memory.preferences.slice(-8);
     if (activeIntentWillClear) delete memory.activeIntent;
-    if (options.activeIntent !== undefined && options.activeIntent !== null && activeIntentWillChange) {
-      memory.activeIntent = { value: options.activeIntent, source: activeIntentSource, revision };
-    }
+    if (options.activeIntent !== undefined && options.activeIntent !== null && activeIntentWillChange) memory.activeIntent = { value: options.activeIntent, source: activeIntentSource, revision };
   }
   return next;
 }
@@ -439,7 +421,6 @@ const MONTHS: Readonly<Record<string, number>> = {
   enero: 1, febrero: 2, marzo: 3, abril: 4, mayo: 5, junio: 6,
   julio: 7, agosto: 8, septiembre: 9, setiembre: 9, octubre: 10, noviembre: 11, diciembre: 12,
 };
-
 const NUMBER_WORDS: Readonly<Record<string, number>> = {
   un: 1, uno: 1, una: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6, siete: 7, ocho: 8, nueve: 9,
   diez: 10, once: 11, doce: 12, trece: 13, catorce: 14, quince: 15, dieciseis: 16, diecisiete: 17,
@@ -472,7 +453,6 @@ function extractDateRange(message: string, current: Readonly<ConversationState>)
   const text = normalizeText(message);
   const iso = message.match(/\b\d{4}-\d{2}-\d{2}\b/g)?.filter(validIsoDate) ?? [];
   if (iso.length >= 2) return { checkIn: iso[iso.length - 2]!, checkOut: iso[iso.length - 1]! };
-
   const slashMatches = [...text.matchAll(/\b(\d{1,2})\/(\d{1,2})\/(\d{4})\b/g)];
   if (slashMatches.length >= 2) {
     const first = slashMatches[slashMatches.length - 2]!;
@@ -481,7 +461,6 @@ function extractDateRange(message: string, current: Readonly<ConversationState>)
     const checkOut = formatIsoDate(Number(second[3]), Number(second[2]), Number(second[1]));
     if (checkIn && checkOut && checkOut > checkIn) return { checkIn, checkOut };
   }
-
   const monthNames = Object.keys(MONTHS).join("|");
   const fullRanges = [...text.matchAll(new RegExp(`\\b(?:del|de)?\\s*(\\d{1,2})\\s+(?:al|a)\\s+(\\d{1,2})\\s+de\\s+(${monthNames})\\s+(?:de\\s+)?(\\d{4})\\b`, "gi"))];
   const fullRange = fullRanges.at(-1);
@@ -491,7 +470,6 @@ function extractDateRange(message: string, current: Readonly<ConversationState>)
     const checkOut = month ? formatIsoDate(Number(fullRange[4]), month, Number(fullRange[2])) : undefined;
     if (checkIn && checkOut && checkOut > checkIn) return { checkIn, checkOut };
   }
-
   const starts = [...text.matchAll(new RegExp(`\\b(?:a partir del|desde el|desde)\\s+(\\d{1,2})\\s+de\\s+(${monthNames})\\s+(?:de\\s+)?(\\d{4})\\b`, "gi"))];
   const nightsMatches = [...text.matchAll(new RegExp(`\\b(${NUMBER_TOKEN})\\s+noches?\\b`, "gi"))];
   const start = starts.at(-1);
@@ -503,7 +481,6 @@ function extractDateRange(message: string, current: Readonly<ConversationState>)
     const checkOut = checkIn && count ? addUtcDays(checkIn, count) : undefined;
     if (checkIn && checkOut) return { checkIn, checkOut };
   }
-
   const partialRanges = [...text.matchAll(/\b(?:del|de)?\s*(\d{1,2})\s+(?:al|a)\s+(\d{1,2})\b/gi)];
   const partialRange = partialRanges.at(-1);
   if (partialRange && current.stay.checkIn && current.stay.checkOut && current.stay.checkIn.slice(0, 7) === current.stay.checkOut.slice(0, 7)) {
@@ -525,7 +502,6 @@ function asksToClearPreferences(text: string): boolean { return !NEGATED_CLEAR_C
 
 function extractGuests(message: string, dateRange: { checkIn: string; checkOut: string } | undefined): number | undefined {
   const text = normalizeText(message);
-
   const categoryPattern = new RegExp(`\\b(${NUMBER_TOKEN})\\s+(adultos?|adultas?|ninos?|ninas?|menores?|chicos?|chicas?|bebes?)\\b`, "gi");
   const categoryLatest = new Map<string, { count: number; index: number }>();
   for (const match of text.matchAll(categoryPattern)) {
@@ -539,22 +515,18 @@ function extractGuests(message: string, dateRange: { checkIn: string; checkOut: 
     const total = [...categoryLatest.values()].reduce((sum, item) => sum + item.count, 0);
     if (validGuests(total)) return total;
   }
-
   const candidates: Array<{ count: number; index: number }> = [];
   const patterns = [
     new RegExp(`\\b(?:somos|seremos|seriamos|vamos\\s+a\\s+ser|viajamos)\\s+(${NUMBER_TOKEN})\\b`, "gi"),
     new RegExp(`\\b(${NUMBER_TOKEN})\\s+(?:personas?|huespedes?|pax)\\b`, "gi"),
   ];
-  for (const pattern of patterns) {
-    for (const match of text.matchAll(pattern)) {
-      const count = parseCountToken(match[1]);
-      if (count !== undefined) candidates.push({ count, index: match.index ?? 0 });
-    }
+  for (const pattern of patterns) for (const match of text.matchAll(pattern)) {
+    const count = parseCountToken(match[1]);
+    if (count !== undefined) candidates.push({ count, index: match.index ?? 0 });
   }
   candidates.sort((a, b) => a.index - b.index);
   const latest = candidates.at(-1);
   if (latest) return latest.count;
-
   const hasRoomAllocationCue = /\b(?:habitacion|room)\s*(?:nro\.?\s*)?\d+/i.test(text) || /\b(?:la|el)\s+\d{2,4}\s+para\b/i.test(text);
   if (!hasRoomAllocationCue && (dateRange || /\b(?:estadia|alojarnos|quedarnos|hospedarnos)\b/i.test(text))) {
     const matches = [...text.matchAll(new RegExp(`\\bpara\\s+(${NUMBER_TOKEN})\\b`, "gi"))];
@@ -605,13 +577,8 @@ export function extractUserSemanticMemoryUpdate(message: string, current: Readon
   const clearDates = asksToClearDates(text);
   const clearGuests = asksToClearGuests(text);
   const dateRange = clearDates ? undefined : extractDateRange(message, current);
-  if (clearDates) {
-    update.checkIn = null;
-    update.checkOut = null;
-  } else if (dateRange) {
-    update.checkIn = dateRange.checkIn;
-    update.checkOut = dateRange.checkOut;
-  }
+  if (clearDates) { update.checkIn = null; update.checkOut = null; }
+  else if (dateRange) { update.checkIn = dateRange.checkIn; update.checkOut = dateRange.checkOut; }
   if (clearGuests) update.guests = null;
   else {
     const guests = extractGuests(message, dateRange);
@@ -638,11 +605,7 @@ function semanticUpdatePatch(update: UserSemanticMemoryUpdate): ConversationStat
   return patch;
 }
 
-export function applyUserSemanticTurn(
-  current: ConversationState,
-  message: string,
-  scope: ConversationMemoryScope,
-): ConversationState {
+export function applyUserSemanticTurn(current: ConversationState, message: string, scope: ConversationMemoryScope): ConversationState {
   const scoped = bindConversationStateScope(current, scope);
   const update = extractUserSemanticMemoryUpdate(message, scoped);
   return applyConversationStatePatch(scoped, semanticUpdatePatch(update), {
@@ -653,11 +616,6 @@ export function applyUserSemanticTurn(
   });
 }
 
-/**
- * R2.3: the model may still emit legacy semantic statePatch fields for routing
- * compatibility, but only current-turn server extraction may make dates/guests
- * durable. Keep only grounded room/booking references from model state patches.
- */
 export function stripModelSemanticStatePatch(patch: ConversationStatePatch | undefined): ConversationStatePatch | undefined {
   if (!patch) return undefined;
   const safe: ConversationStatePatch = {};
@@ -678,7 +636,6 @@ export function conversationIntentForTool(toolId: string): ConversationIntent | 
 export function enrichPlanInputFromState(toolId: string, input: unknown, state: ConversationState): unknown {
   const raw = input && typeof input === "object" && !Array.isArray(input) ? { ...(input as Record<string, unknown>) } : {};
   if (toolId === "hms.checkAvailability") {
-    // R2.3 memory is authoritative over conflicting model-proposed semantic args.
     if (state.stay.checkIn) raw.checkIn = state.stay.checkIn;
     if (state.stay.checkOut) raw.checkOut = state.stay.checkOut;
     if (state.stay.guests !== undefined) raw.guests = state.stay.guests;
@@ -705,27 +662,19 @@ export function updateConversationStateFromTool(current: ConversationState, tool
   const checkIn = stringField(rawInput.checkIn) ?? stringField(rawData.start);
   const checkOut = stringField(rawInput.checkOut) ?? stringField(rawData.end);
   const guests = validGuests(rawInput.guests) ? Number(rawInput.guests) : undefined;
-  const staleStayTool = userOwnedConflict(current, "checkIn", checkIn)
-    || userOwnedConflict(current, "checkOut", checkOut)
-    || userOwnedConflict(current, "guests", guests);
-
+  const staleStayTool = userOwnedConflict(current, "checkIn", checkIn) || userOwnedConflict(current, "checkOut", checkOut) || userOwnedConflict(current, "guests", guests);
   const stayPatch: ConversationStatePatch = {};
   if (validIsoDate(checkIn)) stayPatch.checkIn = checkIn;
   if (validIsoDate(checkOut)) stayPatch.checkOut = checkOut;
   if (guests !== undefined) stayPatch.guests = guests;
   const toolIntent = conversationIntentForTool(toolId);
   const semanticOptions: ApplyConversationStateOptions = { semanticSource: "tool" };
-  if (toolIntent) {
-    semanticOptions.activeIntent = toolIntent;
-    semanticOptions.activeIntentSource = "server";
-  }
+  if (toolIntent) { semanticOptions.activeIntent = toolIntent; semanticOptions.activeIntentSource = "server"; }
   const next = applyConversationStatePatch(current, stayPatch, semanticOptions);
 
   if (toolId === "hms.checkAvailability") {
-    if (staleStayTool) {
-      next.availabilityRoomIds = [];
-      delete next.selectedRoomId;
-    } else {
+    if (staleStayTool) { next.availabilityRoomIds = []; delete next.selectedRoomId; }
+    else {
       const rooms = Array.isArray(rawData.rooms) ? rawData.rooms : [];
       next.availabilityRoomIds = rooms.map((room) => room && typeof room === "object" ? stringField((room as Record<string, unknown>).id) : undefined).filter((v): v is string => Boolean(v)).slice(0, 25);
       if (next.selectedRoomId && !next.availabilityRoomIds.includes(next.selectedRoomId)) delete next.selectedRoomId;
