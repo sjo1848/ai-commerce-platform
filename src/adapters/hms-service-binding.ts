@@ -35,8 +35,27 @@ export type HmsTenantRoutes = Readonly<Record<string, HmsTenantRoute>>;
 type CheckAvailabilityInput = { checkIn: string; checkOut: string; guests: number };
 type QuoteInput = { roomId: string; checkIn: string; checkOut: string };
 type CreateReservationInput = { guestId: string; roomId: string; checkIn: string; checkOut: string; notes?: string | null };
+type CreateMultiReservationInput = { guestId: string; roomIds: string[]; checkIn: string; checkOut: string; notes?: string | null };
 type CancelReservationInput = { bookingId: string };
 export type LiveAvailabilityResult = HmsRpcAvailabilityData & { requestedGuests: number; capacityFilterApplied: false };
+export type MultiReservationCreateOutcome = "confirmed" | "compensated" | "compensation_failed";
+export type MultiReservationCreateResult = {
+  source: "hms";
+  truth: "transactional";
+  hotelId: string;
+  outcome: MultiReservationCreateOutcome;
+  bookingIds: string[];
+  createdBookingIds: string[];
+  compensatedBookingIds: string[];
+  failedRoomId?: string;
+  traceId: string;
+};
+
+type CreatedChild = {
+  roomId: string;
+  bookingId: string;
+  operationToken: string;
+};
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 function parseStrictIsoDate(value: string): number | null {
@@ -60,6 +79,12 @@ function operationToken(meta: ToolExecutionMeta): string {
   const key = meta.idempotencyKey?.trim();
   if (!key) throw new CoreError("IDEMPOTENCY_REQUIRED", "Idempotency key required for reservation operation", 400);
   return key;
+}
+async function childCreateOperationToken(rootToken: string, index: number, roomId: string): Promise<string> {
+  const payload = new TextEncoder().encode(`r2.5:create\u0000${rootToken}\u0000${index}\u0000${roomId}`);
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", payload));
+  const hex = Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `r25c_${hex}`;
 }
 function unwrap<T>(result: HmsRpcResult<T>): T {
   if (result.ok) return result.data;
@@ -139,6 +164,110 @@ export class HmsServiceBindingAdapter {
           bookingId: result.bookingId, operationToken: token,
         });
         return result;
+      },
+    };
+  }
+
+  public createMultiReservationTool(): ToolDefinition<CreateMultiReservationInput, MultiReservationCreateResult> {
+    return {
+      id: "hms.createMultiReservation",
+      primitive: "RESERVE",
+      description: "Crea varias reservas HMS como una operación lógica controlada, con tokens hijo server-side y compensación explícita ante fallos parciales.",
+      risk: "write",
+      sideEffect: "reversible",
+      idempotencyMode: "core",
+      requiredPermissions: ["hms.reservation.write"],
+      validateInput(input: unknown): ValidationResult<CreateMultiReservationInput> {
+        if (!input || typeof input !== "object") return { ok: false, message: "Invalid multi-room reservation input" };
+        const value = input as Record<string, unknown>;
+        if (typeof value.guestId !== "string" || !value.guestId.trim()) return { ok: false, message: "guestId is required" };
+        if (!Array.isArray(value.roomIds) || value.roomIds.length < 2 || value.roomIds.length > 10) return { ok: false, message: "roomIds must contain 2 to 10 rooms" };
+        const roomIds = value.roomIds.map((roomId) => typeof roomId === "string" ? roomId.trim() : "");
+        if (roomIds.some((roomId) => !roomId)) return { ok: false, message: "roomIds must contain non-empty strings" };
+        if (new Set(roomIds).size !== roomIds.length) return { ok: false, message: "roomIds must be unique" };
+        if (typeof value.checkIn !== "string" || typeof value.checkOut !== "string" || !validRange(value.checkIn, value.checkOut)) return { ok: false, message: "Invalid date range" };
+        if (value.notes != null && (typeof value.notes !== "string" || value.notes.trim().length > 500)) return { ok: false, message: "notes length is invalid" };
+        return {
+          ok: true,
+          value: {
+            guestId: value.guestId.trim(),
+            roomIds,
+            checkIn: value.checkIn,
+            checkOut: value.checkOut,
+            ...(typeof value.notes === "string" ? { notes: value.notes.trim() || null } : {}),
+          },
+        };
+      },
+      execute: async (input, context, meta) => {
+        if (!this.reservationOperations) throw new CoreError("FORBIDDEN", "Reservation ownership storage is not configured", 403);
+        const rootToken = operationToken(meta);
+        const rpc = rpcContext(context, this.routes);
+        const created: CreatedChild[] = [];
+        let failedRoomId: string | undefined;
+
+        try {
+          for (const [index, roomId] of input.roomIds.entries()) {
+            failedRoomId = roomId;
+            const token = await childCreateOperationToken(rootToken, index, roomId);
+            const result = unwrap(await this.service.createReservation(rpc, {
+              operationToken: token,
+              guestId: input.guestId,
+              roomId,
+              start: input.checkIn,
+              end: input.checkOut,
+              ...(input.notes !== undefined ? { notes: input.notes } : {}),
+            }));
+            const child = { roomId, bookingId: result.bookingId, operationToken: token };
+            created.push(child);
+            await this.reservationOperations.bind({
+              sessionId: context.session.id,
+              tenantId: context.tenant.id,
+              actorId: context.actor.id,
+              bookingId: result.bookingId,
+              operationToken: token,
+            });
+          }
+        } catch (error) {
+          if (created.length === 0) throw error;
+
+          const compensatedBookingIds: string[] = [];
+          const survivingBookingIds: string[] = [];
+          for (const child of [...created].reverse()) {
+            try {
+              unwrap(await this.service.cancelReservation(rpc, {
+                operationToken: child.operationToken,
+                bookingId: child.bookingId,
+              }));
+              compensatedBookingIds.push(child.bookingId);
+            } catch {
+              survivingBookingIds.push(child.bookingId);
+            }
+          }
+          survivingBookingIds.reverse();
+          compensatedBookingIds.reverse();
+          return {
+            source: "hms",
+            truth: "transactional",
+            hotelId: rpc.hotelId,
+            outcome: survivingBookingIds.length === 0 ? "compensated" : "compensation_failed",
+            bookingIds: survivingBookingIds,
+            createdBookingIds: created.map((child) => child.bookingId),
+            compensatedBookingIds,
+            ...(failedRoomId ? { failedRoomId } : {}),
+            traceId: rpc.traceId,
+          };
+        }
+
+        return {
+          source: "hms",
+          truth: "transactional",
+          hotelId: rpc.hotelId,
+          outcome: "confirmed",
+          bookingIds: created.map((child) => child.bookingId),
+          createdBookingIds: created.map((child) => child.bookingId),
+          compensatedBookingIds: [],
+          traceId: rpc.traceId,
+        };
       },
     };
   }
