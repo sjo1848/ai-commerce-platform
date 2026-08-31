@@ -41,13 +41,13 @@ function availabilityTool() {
         start: input.checkIn,
         end: input.checkOut,
         requestedGuests: input.guests,
-        rooms: [],
+        rooms: [{ id: "room-from-old-stay", roomNumber: "101", roomType: "DOUBLE", priceCents: 10000 }],
       };
     },
   };
 }
 
-test("an older approved/tool plan cannot roll back newer user-owned stay memory", async () => {
+test("an older approved/tool plan cannot roll back newer user-owned stay memory or ground old rooms", async () => {
   const stateStore = new InMemoryConversationStateStore();
   const runtime = new AgentCoreRuntime({
     tenants: [tenant],
@@ -61,6 +61,8 @@ test("an older approved/tool plan cannot roll back newer user-owned stay memory"
     "No, pará: somos tres del 15 al 17 de enero de 2027",
     scope,
   );
+  corrected.availabilityRoomIds = ["room-current-stay"];
+  corrected.selectedRoomId = "room-current-stay";
   await stateStore.put(context.session.id, corrected);
 
   await runtime.orchestrator.executeApprovedPlan(
@@ -74,4 +76,6 @@ test("an older approved/tool plan cannot roll back newer user-owned stay memory"
   assert.equal(stored.semanticMemory.stay.checkIn.source, "user");
   assert.equal(stored.semanticMemory.stay.checkOut.source, "user");
   assert.equal(stored.semanticMemory.stay.guests.source, "user");
+  assert.deepEqual(stored.availabilityRoomIds, []);
+  assert.equal(stored.selectedRoomId, undefined);
 });
