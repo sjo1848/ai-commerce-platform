@@ -25,6 +25,8 @@ export type ConversationState = {
   selectedRoomId?: string;
   activeBookingId?: string;
   bookingStatus?: string;
+  /** Server-owned revision for operational booking grounding; never model-authored. */
+  bookingStateRevision?: number;
 };
 export type ConversationStatePatch = {
   checkIn?: string | null;
@@ -125,6 +127,8 @@ function parseStoredState(value: unknown): ConversationState | undefined {
   if (activeBookingId) state.activeBookingId = activeBookingId;
   const bookingStatus = stringField(value.bookingStatus);
   if (bookingStatus) state.bookingStatus = bookingStatus;
+  if (validRevision(value.bookingStateRevision)) state.bookingStateRevision = value.bookingStateRevision;
+  else if (activeBookingId || bookingStatus) state.bookingStateRevision = 0;
 
   const rawMemory = isRecord(value.semanticMemory) ? value.semanticMemory : {};
   const memory = state.semanticMemory;
@@ -276,9 +280,18 @@ export function mergeConcurrentConversationState(current: ConversationState, inc
     }
   }
 
+  const leftIntent = leftMemory.activeIntent;
+  const rightIntent = rightMemory.activeIntent;
+  const intentConflict = Boolean(
+    leftIntent
+    && rightIntent
+    && leftIntent.revision === rightIntent.revision
+    && leftIntent.value !== rightIntent.value
+    && leftMemory.revision === rightMemory.revision
+  );
   const concurrentRevision = leftMemory.revision === rightMemory.revision && !sameStay(left, right);
   next.semanticMemory.revision = Math.max(leftMemory.revision, rightMemory.revision)
-    + (concurrentRevision || trueConcurrentConflict ? 1 : 0);
+    + (concurrentRevision || trueConcurrentConflict || intentConflict ? 1 : 0);
 
   const clearAt = Math.max(
     leftMemory.preferencesClearedAtRevision ?? -1,
@@ -298,8 +311,6 @@ export function mergeConcurrentConversationState(current: ConversationState, inc
   for (const item of rightMemory.preferences) addPreference(item, rightMemory.revision, true);
   next.semanticMemory.preferences = [...preferences.values()].sort((a, b) => a.revision - b.revision).slice(-8);
 
-  const leftIntent = leftMemory.activeIntent;
-  const rightIntent = rightMemory.activeIntent;
   if (leftIntent && rightIntent) {
     if (leftIntent.revision > rightIntent.revision) next.semanticMemory.activeIntent = structuredClone(leftIntent);
     else if (rightIntent.revision > leftIntent.revision) next.semanticMemory.activeIntent = structuredClone(rightIntent);
@@ -319,10 +330,25 @@ export function mergeConcurrentConversationState(current: ConversationState, inc
     }
   }
 
-  const bookingId = right.activeBookingId ?? left.activeBookingId;
-  if (bookingId) next.activeBookingId = bookingId;
-  if (right.activeBookingId && right.bookingStatus) next.bookingStatus = right.bookingStatus;
-  else if (left.bookingStatus) next.bookingStatus = left.bookingStatus;
+  const leftBookingRevision = left.bookingStateRevision ?? (left.activeBookingId || left.bookingStatus ? 0 : -1);
+  const rightBookingRevision = right.bookingStateRevision ?? (right.activeBookingId || right.bookingStatus ? 0 : -1);
+  const bookingConflict = leftBookingRevision >= 0
+    && leftBookingRevision === rightBookingRevision
+    && (left.activeBookingId !== right.activeBookingId || left.bookingStatus !== right.bookingStatus);
+  let bookingSource = right;
+  if (leftBookingRevision > rightBookingRevision) bookingSource = left;
+  else if (rightBookingRevision === leftBookingRevision) {
+    if (leftMemory.revision > rightMemory.revision) bookingSource = left;
+    else if (rightMemory.revision > leftMemory.revision) bookingSource = right;
+  }
+  // Any equal-revision divergence is a booking conflict. Promote the
+  // operational revision immediately so unrelated semantic-memory revisions
+  // cannot later make the stale booking win a replay.
+  const mergedBookingRevision = Math.max(leftBookingRevision, rightBookingRevision)
+    + (bookingConflict ? 1 : 0);
+  if (mergedBookingRevision >= 0) next.bookingStateRevision = mergedBookingRevision;
+  if (bookingSource.activeBookingId) next.activeBookingId = bookingSource.activeBookingId;
+  if (bookingSource.bookingStatus) next.bookingStatus = bookingSource.bookingStatus;
   return next;
 }
 
@@ -349,10 +375,13 @@ export class ConversationBackedStateStore implements ConversationStateStore {
     let state: ConversationState | undefined;
     for (const turn of turns) {
       if (turn.role !== "tool" || turn.toolId !== CONVERSATION_STATE_TOOL_ID) continue;
+      let parsed: ConversationState | undefined;
       try {
-        const parsed = parseStoredState(JSON.parse(turn.content));
-        if (parsed) state = state ? mergeConcurrentConversationState(state, parsed) : parsed;
-      } catch {}
+        parsed = parseStoredState(JSON.parse(turn.content));
+      } catch {
+        continue;
+      }
+      if (parsed) state = state ? mergeConcurrentConversationState(state, parsed) : parsed;
     }
     return state ?? emptyConversationState();
   }
@@ -610,23 +639,50 @@ function extractDateRange(message: string, current: Readonly<ConversationState>)
 }
 
 const CLEAR_CUE = /\b(?:olvida(?:te)?|olvides|borra|borres|limpia|limpies|quita|quites|saca|saques|dejemos\s+sin\s+definir|deja\s+sin\s+definir|resetea|resetees)\b/i;
-const NEGATED_CLEAR = /\bno\s+(?:te\s+)?(?:olvides|borres|limpies|quites|saques|resetees)\b/i;
 
-function positiveClear(text: string): boolean {
-  return CLEAR_CUE.test(text) && !NEGATED_CLEAR.test(text);
+function positiveClearSegments(text: string): string[] {
+  const matches = [...text.matchAll(new RegExp(CLEAR_CUE.source, "gi"))];
+  const result: string[] = [];
+  let previousNegated = false;
+  let previousEnd = 0;
+  for (let index = 0; index < matches.length; index += 1) {
+    const match = matches[index];
+    const start = match?.index ?? 0;
+    const matchEnd = start + (match?.[0]?.length ?? 0);
+    const end = matches[index + 1]?.index ?? text.length;
+    const directPrefix = text.slice(Math.max(previousEnd, start - 20), start);
+    const directlyNegated = /\bno\s+(?:te\s+)?$/i.test(directPrefix);
+    const coordinatedPrefix = text.slice(previousEnd, start);
+    const coordinatedNegated: boolean = previousNegated && /^\s*(?:,\s*)?ni\s+$/i.test(coordinatedPrefix);
+    const negated: boolean = directlyNegated || coordinatedNegated;
+    if (!negated) result.push(text.slice(start, end));
+    previousNegated = negated;
+    previousEnd = matchEnd;
+  }
+  return result;
+}
+
+function clearOwnedClause(segment: string): string {
+  // A clear cue owns only its clause. A later follow-up such as
+  // `limpia mis preferencias y usa las fechas que ya te dije` must not turn
+  // that later date reference into another clear target.
+  return segment.split(
+    /[;.!?]|\by\s+(?:muestr\w*|mostr\w*|decim\w*|dime|consult\w*|list\w*|quiero|quisiera|prefiero|usa\w*|utiliza\w*)\b/i,
+    1,
+  )[0] ?? segment;
 }
 
 function asksToClearDates(text: string): boolean {
-  return positiveClear(text) && /\b(?:fecha|fechas|entrada|salida|checkin|checkout)\b/i.test(text);
+  return positiveClearSegments(text).some((segment) => /\b(?:fecha|fechas|entrada|salida|checkin|checkout)\b/i.test(clearOwnedClause(segment)));
 }
 
 function asksToClearGuests(text: string): boolean {
-  return positiveClear(text) && /\b(?:personas|huespedes|cantidad|cuantos\s+somos)\b/i.test(text);
+  return positiveClearSegments(text).some((segment) => /\b(?:personas|huespedes|cantidad|cuantos\s+somos)\b/i.test(clearOwnedClause(segment)));
 }
 
 function asksToClearPreferences(text: string): boolean {
-  return !NEGATED_CLEAR.test(text)
-    && /\b(?:sin preferencias|olvida(?:te)?\s+(?:de\s+)?mis\s+preferencias|borra\s+(?:mis\s+)?preferencias|limpia\s+(?:mis\s+)?preferencias)\b/i.test(text);
+  if (/\bsin preferencias\b/i.test(text)) return true;
+  return positiveClearSegments(text).some((segment) => /\bpreferencias?\b/i.test(clearOwnedClause(segment)));
 }
 
 function affirmedPartySegment(text: string): string {
@@ -635,10 +691,41 @@ function affirmedPartySegment(text: string): string {
     const latest = introductions.at(-1);
     if (latest?.index !== undefined) return text.slice(latest.index);
   }
-  const corrections = [...text.matchAll(/\b(?:mejor|en realidad|perdon|corrijo|correccion)\b/gi)];
-  const latestCorrection = corrections.at(-1);
-  if (latestCorrection?.index !== undefined) return text.slice(latestCorrection.index);
   return text;
+}
+
+type PartyCategory = "adult" | "child" | "infant";
+
+function partyCategoryCounts(text: string): Map<PartyCategory, number> {
+  const categories = new Map<PartyCategory, number>();
+  for (const match of text.matchAll(new RegExp(
+    `\\b(${NUMBER_TOKEN})\\s+(adultos?|adultas?|ninos?|ninas?|menores?|chicos?|chicas?|bebes?)\\b`,
+    "gi",
+  ))) {
+    const count = parseCountToken(match[1]);
+    if (count === undefined) continue;
+    const rawCategory = match[2] ?? "";
+    const category: PartyCategory = /adult/.test(rawCategory) ? "adult" : /bebe/.test(rawCategory) ? "infant" : "child";
+    categories.set(category, (categories.get(category) ?? 0) + count);
+  }
+  return categories;
+}
+
+function correctedPartyCategoryCounts(text: string): Map<PartyCategory, number> {
+  const correctionPattern = /(?:[;,]\s*)?\b(?:no|mejor|en realidad|perdon|corrijo|correccion)\b[:,]?\s*/gi;
+  const corrections = [...text.matchAll(correctionPattern)];
+  if (!corrections.length) return partyCategoryCounts(text);
+
+  const firstIndex = corrections[0]?.index ?? text.length;
+  const categories = partyCategoryCounts(text.slice(0, firstIndex));
+  for (let index = 0; index < corrections.length; index += 1) {
+    const match = corrections[index];
+    const start = (match?.index ?? 0) + (match?.[0]?.length ?? 0);
+    const end = corrections[index + 1]?.index ?? text.length;
+    const replacement = partyCategoryCounts(text.slice(start, end));
+    for (const [category, count] of replacement) categories.set(category, count);
+  }
+  return categories;
 }
 
 function extractGuests(
@@ -647,16 +734,7 @@ function extractGuests(
 ): number | undefined {
   const text = normalizeText(message);
   const partyText = affirmedPartySegment(text);
-  const categories = new Map<string, number>();
-  for (const match of partyText.matchAll(new RegExp(
-    `\\b(${NUMBER_TOKEN})\\s+(adultos?|adultas?|ninos?|ninas?|menores?|chicos?|chicas?|bebes?)\\b`,
-    "gi",
-  ))) {
-    const count = parseCountToken(match[1]);
-    if (count === undefined) continue;
-    const rawCategory = match[2] ?? "";
-    categories.set(/adult/.test(rawCategory) ? "adult" : /bebe/.test(rawCategory) ? "infant" : "child", count);
-  }
+  const categories = correctedPartyCategoryCounts(partyText);
   if (categories.size) {
     const total = [...categories.values()].reduce((sum, count) => sum + count, 0);
     if (validGuests(total)) return total;
@@ -686,8 +764,10 @@ function extractGuests(
 
 const PREFERENCE_TRUSTED_OR_META = /\b(?:admin|administrador|permiso|permission|role|rol|tool|herramienta|system|sistema|prompt|aprobad|approved|operationtoken|idempotency|tenantid|hotelid|actorid|guestid)\b/i;
 const PREFERENCE_INSTRUCTION_CONTEXT = /\b(?:a partir de ahora|desde ahora|de ahora en adelante|en adelante|proximo turno|siguiente turno|cada turno|futuros? turnos?)\b/i;
-const PREFERENCE_CONTROL_VERB = /\b(?:ignora|ignore|obedece|obedecer|cumple|cumplir|sigue|seguir|selecciona|seleccionar|elige|elegi|escoge|ejecuta|ejecutar|responde|responder|contesta|contestar|actua|actuar|comportate|haz|hace|haceme|recorda|recuerda|debes|tenes que|tienes que)\b/i;
+const PREFERENCE_CONTROL_VERB = /\b(?:ignora|ignore|obedece|obedecer|cumple|cumplir|sigue|seguir|selecciona|seleccionar|elige|elegi|escoge|ejecuta|ejecutar|responde|responder|contesta|contestar|actua|actuar|comportate|haz|hace|haceme|recorda|recuerda|debes|tenes que|tienes que|confirma|confirmar|confirmes|reservar|cancela|cancelar|anula|anular|aprueba|aprobar|autoriza|autorizar)\b/i;
 const PREFERENCE_INSTRUCTION_OBJECT = /\b(?:orden|ordenes|instruccion|instrucciones|regla|reglas|primera opcion|segunda opcion|tercera opcion)\b/i;
+const PREFERENCE_OPERATIONAL_TERM = /\b(?:booking|confirm\w*|cancel\w*|anul\w*|aprob\w*|autoriz\w*|pag\w*|cobr\w*|proces\w*|gestion\w*)\b/i;
+const PREFERENCE_RESERVATION_COMMAND = /(?:^|[;,]|\b(?:y|que)\s+)\s*(?:reserva|reserve|reservame|reservanos)\b(?=\s+(?:automaticamente|siempre|todas?|cualquier|la|las|el|los|mi|mis|una|un|primera|segunda|tercera|habitacion|opcion|para)\b)/i;
 
 function sanitizePreference(value: string): string | undefined {
   const compact = value.replace(/\s+/g, " ").trim().replace(/[;,]+$/g, "");
@@ -697,6 +777,8 @@ function sanitizePreference(value: string): string | undefined {
   if (PREFERENCE_INSTRUCTION_CONTEXT.test(normalized)) return undefined;
   if (PREFERENCE_CONTROL_VERB.test(normalized)) return undefined;
   if (PREFERENCE_INSTRUCTION_OBJECT.test(normalized)) return undefined;
+  if (PREFERENCE_OPERATIONAL_TERM.test(normalized)) return undefined;
+  if (PREFERENCE_RESERVATION_COMMAND.test(normalized)) return undefined;
   if (!/\b(?:habitacion|cama|matrimonial|individual|silenc|tranquil|planta\s+baja|piso\s+alto|vista|acces|mascota|fumador|no\s+fumador|cerca|lejos|ascensor)\b/i.test(normalized)) return undefined;
   return compact;
 }
@@ -788,7 +870,8 @@ export function stripModelSemanticStatePatch(patch: ConversationStatePatch | und
   const safe: ConversationStatePatch = {};
   if (patch.selectedRoomId !== undefined) safe.selectedRoomId = patch.selectedRoomId;
   if (patch.selectedRoomIndex !== undefined) safe.selectedRoomIndex = patch.selectedRoomIndex;
-  if (patch.activeBookingId !== undefined) safe.activeBookingId = patch.activeBookingId;
+  // Booking grounding is exclusively server/tool-owned. The model may use
+  // the current active booking for planning, but cannot mutate or clear it.
   return Object.keys(safe).length ? safe : undefined;
 }
 
@@ -877,8 +960,18 @@ export function updateConversationStateFromTool(
   }
 
   const bookingId = stringField(rawData.bookingId);
-  if (toolId === "hms.createReservation" && bookingId) next.activeBookingId = bookingId;
   const status = stringField(rawData.status);
-  if ((toolId === "hms.createReservation" || toolId === "hms.cancelReservation") && status) next.bookingStatus = status;
+  if (toolId === "hms.createReservation" || toolId === "hms.cancelReservation") {
+    const resultingBookingId = toolId === "hms.createReservation" && bookingId
+      ? bookingId
+      : normalized.activeBookingId;
+    const resultingStatus = status ?? normalized.bookingStatus;
+    const bookingChanged = resultingBookingId !== normalized.activeBookingId
+      || resultingStatus !== normalized.bookingStatus;
+    if (bookingChanged) next.bookingStateRevision = (normalized.bookingStateRevision ?? 0) + 1;
+    else if (normalized.bookingStateRevision !== undefined) next.bookingStateRevision = normalized.bookingStateRevision;
+    if (toolId === "hms.createReservation" && bookingId) next.activeBookingId = bookingId;
+    if (status) next.bookingStatus = status;
+  }
   return next;
 }
