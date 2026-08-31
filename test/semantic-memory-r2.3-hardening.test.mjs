@@ -148,12 +148,12 @@ test("current-turn semantic facts persist even when model routing throws", async
     conversationStateStore: stateStore,
     model: { async route() { throw new Error("provider exploded"); } },
   });
-  const context = await runtime.createContext({ tenantId: tenant.id, actor, channel: "webchat", sessionId: scope.sessionId });
+  const context = await runtime.createContext({ tenantId: tenant.id, actor, channel: "webchat" });
   await assert.rejects(
     runtime.orchestrator.chat("Somos dos del 15 al 17 de enero de 2027", context),
     /provider exploded/,
   );
-  const stored = await stateStore.get(scope.sessionId);
+  const stored = await stateStore.get(context.session.id);
   assert.deepEqual(stored.stay, { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 2 });
 });
 
@@ -170,7 +170,7 @@ test("overlapping chat requests retain facts learned by both turns", async () =>
       },
     },
   });
-  const context = await runtime.createContext({ tenantId: tenant.id, actor, channel: "webchat", sessionId: "session-r23-overlap" });
+  const context = await runtime.createContext({ tenantId: tenant.id, actor, channel: "webchat" });
   await Promise.all([
     runtime.orchestrator.chat("Quiero del 15 al 17 de enero de 2027", context),
     runtime.orchestrator.chat("Somos cuatro", context),
