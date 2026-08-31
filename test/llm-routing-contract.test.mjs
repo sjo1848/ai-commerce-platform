@@ -59,4 +59,58 @@ test("router prompt separates capability requirements and prioritizes durable co
   assert.match(system, /server may fill omitted arguments from durable state/i);
   assert.match(system, /del 15 al 17 de enero de 2027/i);
   assert.match(system, /para las que te dije ya/i);
+  assert.match(system, /Pure greeting with no operational request/i);
+  assert.match(system, /Social-only turns never clear/i);
+});
+
+test("pure greeting is classified as a conversational message, not an operational tool", async () => {
+  const provider = {
+    async completeStructured() {
+      return {
+        value: {
+          kind: "message",
+          toolId: "",
+          input: {},
+          clarificationReason: "greeting",
+          missing: [],
+          statePatch: {},
+        },
+      };
+    },
+  };
+  const fallback = { async route() { throw new Error("fallback must not run"); } };
+  const router = new LLMModelRouter(provider, fallback);
+  const result = await router.route("Hola", context, tools);
+  assert.equal(result.kind, "message");
+  assert.equal(result.purpose, "greeting");
+  assert.match(result.message, /hola/i);
+});
+
+test("social-only model output cannot mutate durable operational state", async () => {
+  let fallbackCalled = false;
+  const provider = {
+    async completeStructured() {
+      return {
+        value: {
+          kind: "message",
+          toolId: "",
+          input: {},
+          clarificationReason: "social",
+          missing: [],
+          statePatch: { guests: 9 },
+        },
+      };
+    },
+  };
+  const fallback = {
+    async route() {
+      fallbackCalled = true;
+      return { kind: "message", purpose: "social", message: "De nada. Cuando quieras, seguimos con la estadía." };
+    },
+  };
+  const router = new LLMModelRouter(provider, fallback);
+  const result = await router.route("Gracias", context, tools);
+  assert.equal(fallbackCalled, true);
+  assert.equal(result.kind, "message");
+  assert.equal(result.purpose, "social");
 });
