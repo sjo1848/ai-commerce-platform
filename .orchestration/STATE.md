@@ -1,62 +1,55 @@
 # AI Commerce Platform — Agent Core State
 
 Phase: `ACP INTEGRATION — PHASE 2.6`
-Task: `ACP-2.6-LLM-MODEL-ROUTER`
-Status: `HUMAN_GATE`
-Current sub-stage: `2.6.9 — HUMAN PRODUCT ACCEPTANCE`
+Task: `ACP-2.6.9-R2-NATURAL-RECEPTIONIST`
+Status: `REWORK / IN PROGRESS`
+Current sub-stage: `2.6.9-R2.1 — RECEPTIONIST PRODUCT CONTRACT + ACCEPTANCE CORPUS`
 
-## Last closed gate
-`2.6.9 — HUMAN PRODUCT ACCEPTANCE REWORK` — `TECHNICAL_PASS / CLOSED`.
-Closure evidence: `.orchestration/evidence/ACP-2.6.9-REWORK-CLOSURE.md`.
+## Why R2 is open
+The second Human Product Acceptance returned `REWORK` after free-form staging testing showed four product gaps:
+- greeting/social behavior still feels abrupt rather than like a hotel receptionist;
+- user-facing operational prose remains largely template-deterministic even though routing uses a real LLM;
+- previously supplied guest count is not reliable enough in unconstrained conversation;
+- the state/execution model cannot represent a multi-room request such as rooms 101 + 102.
 
-Final REWORK evidence is anchored to:
-- substantive Artifact A `9ec9f062dfdc8ad9a73bb2646338d932b77c4c19`;
-- exact-artifact core-ci `33322906416` — PASS;
-- Foundation regression `84/84 PASS`;
-- QA / Pre-Critic Gate — PASS;
-- Independent Critic on PR #38 — PASS, zero blocking P0/P1/P2;
-- integration head `38ed24aa272e9e75e1ee0a62c0dab37019a5b408`;
-- post-merge core-ci `33322945318` — PASS;
-- staging head `aa8f2ae1562cb67094714efb5cfeb29777c843ec`;
-- staging deploy `33322986328` — PASS;
-- E1 natural availability + ordinal quote — PASS;
-- expanded real Workers AI conversational evaluator — PASS;
-- date-only → guest clarification regression — PASS;
-- prior-date reservation continuation regression — PASS;
-- E2 controlled reservation/cancel — PASS, including HITL, idempotency, ownership and inventory restoration;
-- staging handoff — PASS.
+The current Workers AI model is real Llama 3.3 70B. R2 therefore treats this as a product/architecture gap first and postpones model replacement decisions until the architecture stops constraining natural response composition.
 
-## Why the REWORK existed
-The initial Human Product Acceptance correctly returned `REWORK` after free-form testing showed that the agent could lose dates/guest count across turns and repeat questions already answered. Subsequent real-model staging found two adjacent gaps: ordinal room references and incomplete model tool plans reaching HTTP 400 rather than conversational clarification.
+Canonical R2 contract:
+`.orchestration/contracts/ACP-2.6.9-R2-NATURAL-RECEPTIONIST.md`
 
-The REWORK now uses durable structured conversation state for stay dates, guest count, authoritative HMS room candidates, current selection and active booking. The LLM interprets language; Core owns state and execution authority.
+## R2 execution sequence
+Only one substage is active at a time:
+1. `2.6.9-R2.1` — Receptionist Product Contract + Acceptance Corpus — **ACTIVE**
+2. `2.6.9-R2.2` — Natural Receptionist Dialogue Layer
+3. `2.6.9-R2.3` — Durable Semantic Memory v2
+4. `2.6.9-R2.4` — Multi-Room Conversation Model
+5. `2.6.9-R2.5` — Multi-Room Reservation Orchestration
+6. `2.6.9-R2.6` — Model Quality / Latency / Cost Evaluation
+7. `2.6.9-R2.7` — Adversarial QA + Independent Critic
+8. `2.6.9-R2.8` — Real-Model Receptionist Staging E2E
+9. `2.6.9-R2.9` — Human Product Acceptance — Natural Receptionist
 
-## Current gate — 2.6.9
-A fresh Human Product Acceptance is mandatory before Phase 2.6 can be marked `PRODUCT_ACCEPTED` and before Fase 3 — Alquileres is unblocked.
+## Current objective — R2.1
+Freeze the product contract before changing runtime. Define observable acceptance behavior for:
+- greeting and social acknowledgement;
+- cordial, concise receptionist tone;
+- natural Argentine Spanish and colloquial phrasing;
+- continuation without re-asking known facts;
+- correction/change-of-mind semantics;
+- references such as “la primera”, room numbers and “las dos”;
+- multi-room requests and occupancy ambiguity;
+- unsupported questions and graceful boundaries;
+- grounded operational facts only.
 
-Required human verdicts:
-- `ACCEPT` — closes 2.6 as Product Accepted and enables the next roadmap phase under the same Agent Core + LLM Model Router architecture.
-- `REWORK` — reopens only the concrete product findings reported by the human reviewer, then repeats the bounded method cycle and returns to this gate.
-
-The Controller must not self-approve this gate.
-
-## Product capability now proven technically
-The HMS staging experience uses Workers AI as a real natural-language planning layer while authoritative operations remain outside the model. It can technically:
-- retain stay dates and guest count across turns in durable server-side state;
-- interpret natural Argentine Spanish for availability and follow-up questions;
-- ground ordinal references such as “la primera” to the ordered HMS result without model-authored room IDs;
-- reuse known dates/guest facts instead of asking them again;
-- clarify only truly missing business fields rather than exposing technical HTTP 400 validation errors;
-- ground prices and operational facts in HMS transactional results;
-- reject trusted tenant/hotel/guest authority from user/model input;
-- require HITL before reservation/cancellation writes;
-- preserve idempotency, ownership, audit and inventory consistency.
+R2.1 closes only when the corpus and thresholds are frozen and technically reviewed. R2.1 has no Human Gate.
 
 ## Non-negotiable architecture
-The LLM may interpret, plan, clarify and compose. It may not choose trusted tenant/hotel/actor context, permissions, approval metadata, operation tokens or arbitrary tools. Tool Registry, structured conversation state, validation, Policy Engine, HITL, idempotency, audit, ownership and HMS transactional truth remain deterministic and authoritative.
+The LLM may interpret language, maintain conversational intent through bounded structured state patches and compose natural prose from server-grounded facts. It may not author operational truth or trusted authority.
+
+Tool Registry, tenant/hotel/actor bindings, canonical validation, HMS facts, Policy/HITL, exact approval plan, idempotency, ownership, audit and multi-room execution semantics remain deterministic/server-authoritative.
 
 ## Gate to Fase 3
-Fase 3 — Alquileres remains blocked until the explicit Human Product Acceptance verdict for 2.6 is `ACCEPT`.
+Fase 3 — Alquileres remains blocked until `2.6.9-R2.9` receives explicit human `ACCEPT`.
 
 ## Boundaries still in force
-No production cutover, real customer data, payments, paid-resource expansion, WhatsApp requirement, broader autonomous writes or second-vertical implementation is authorized while this Human Gate is open.
+No production cutover, real customer data, payments, paid-resource expansion, WhatsApp requirement, broader autonomous writes or second-vertical implementation is authorized during R2.
