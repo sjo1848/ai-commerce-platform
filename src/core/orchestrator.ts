@@ -11,7 +11,15 @@ import {
 } from "./conversation-state.js";
 import type { AgentCoreExecutor } from "./executor.js";
 import type { ModelResponder } from "./model-responder.js";
-import type { ModelRouter, ExecutionContext, ModelConversationTurn, ToolDescriptor, ToolExecutionMeta, ToolPlan } from "./types.js";
+import type {
+  ModelRouter,
+  ExecutionContext,
+  ModelClarificationField,
+  ModelConversationTurn,
+  ToolDescriptor,
+  ToolExecutionMeta,
+  ToolPlan,
+} from "./types.js";
 import type { ToolRegistry } from "./tool-registry.js";
 import type { UsageSink } from "./usage.js";
 
@@ -56,6 +64,15 @@ function missingRequiredClarification(fields: readonly string[]): string {
   if (roomMissing) return "¿Qué habitación u opción querés elegir?";
   if (bookingMissing) return "¿Qué reserva querés usar? Necesito identificarla de forma inequívoca.";
   return "Me falta información necesaria para continuar con seguridad.";
+}
+
+function missingRequiredClarificationFields(fields: readonly string[]): ModelClarificationField[] {
+  const result: ModelClarificationField[] = [];
+  if (fields.includes("checkIn") || fields.includes("checkOut")) result.push("dates");
+  if (fields.includes("guests")) result.push("guests");
+  if (fields.includes("roomId")) result.push("room");
+  if (fields.includes("bookingId")) result.push("booking");
+  return result;
 }
 
 export class ChatOrchestrator {
@@ -113,8 +130,18 @@ export class ChatOrchestrator {
     await this.conversationState.put(context.session.id, nextState);
 
     if (route.kind === "message") {
-      await this.conversation.append(context.session.id, { role: "assistant", content: route.message });
-      return { message: route.message, sessionId: context.session.id };
+      const conversationalContext = modelVisibleConversation(await this.conversation.list(context.session.id, 32));
+      const reply = await this.responder.compose({
+        kind: "message",
+        purpose: route.purpose ?? "clarification",
+        baseMessage: route.message,
+        userMessage: normalized,
+        ...(route.missing?.length ? { missing: route.missing } : {}),
+        conversation: conversationalContext,
+        context,
+      });
+      await this.conversation.append(context.session.id, { role: "assistant", content: reply });
+      return { message: reply, sessionId: context.session.id };
     }
 
     const plan: ToolPlan = { toolId: route.plan.toolId, input: enrichPlanInputFromState(route.plan.toolId, route.plan.input, nextState) };
@@ -123,8 +150,19 @@ export class ChatOrchestrator {
       const missing = missingRequiredBusinessFields(visibleTool, plan.input);
       if (missing.length > 0) {
         const clarification = missingRequiredClarification(missing);
-        await this.conversation.append(context.session.id, { role: "assistant", content: clarification });
-        return { message: clarification, sessionId: context.session.id };
+        const clarificationFields = missingRequiredClarificationFields(missing);
+        const conversationalContext = modelVisibleConversation(await this.conversation.list(context.session.id, 32));
+        const reply = await this.responder.compose({
+          kind: "message",
+          purpose: "clarification",
+          baseMessage: clarification,
+          userMessage: normalized,
+          ...(clarificationFields.length ? { missing: clarificationFields } : {}),
+          conversation: conversationalContext,
+          context,
+        });
+        await this.conversation.append(context.session.id, { role: "assistant", content: reply });
+        return { message: reply, sessionId: context.session.id };
       }
     }
 
