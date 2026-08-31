@@ -1,67 +1,33 @@
-# ACP 2.6.9-R2.3 — Durable Semantic Memory v2 — Closure
+# ACP 2.6.9-R2.3 — Durable Semantic Memory v2 — Closure Attempt
 
-Status: `TECHNICAL_PASS / CLOSED`
-Closed: `2026-08-31`
+Status: `INVALIDATED / REWORK`
+Closure attempt date: `2026-08-31`
+Invalidated: `2026-08-31`
 
-## Substantive artifact
+## Why this closure is invalidated
+The initial R2.3 closure attempt had exact-artifact CI, QA, Pre-Critic, Independent Critic, merge and post-merge regression PASS. A later fresh Codex review completed after PR #44 had already merged and surfaced six additional technical findings. Per the project method, P1/P2 findings automatically invalidate technical closure and reopen REWORK.
+
+## Historical closure attempt
 - Artifact A: `35de13ba292d4bddb7554d0105abed982d42c39d`
-- Exact-artifact core-ci: `33356166030`
-- Exact-artifact result: `121/121 PASS`
-- TypeScript typecheck: PASS
-- staging E2 runner syntax: PASS
-- Wrangler Worker dry-run: PASS
+- Exact-artifact core-ci: `33356166030` — `121/121 PASS`
+- PR #44 integration: `8ad5eafd8bcfec077fa12a012c75b973291e1335`
+- Post-merge core-ci: `33356508067` — `121/121 PASS`
 
-## Quality gates
-- QA: PASS
-- Pre-Critic: PASS
-- Independent Critic: PASS — review `5063064799`, anchored to Artifact A
-- Open P0/P1/P2: `0/0/0`
-- All PR #44 historical and fresh review threads resolved with regression evidence.
+These remain valid historical evidence only; they no longer satisfy the R2.3 exit gate.
 
-## Integration
-- PR: `#44 — ACP 2.6.9 R2.3 durable semantic memory v2`
-- Integration main SHA: `8ad5eafd8bcfec077fa12a012c75b973291e1335`
-- Post-merge core-ci: `33356508067`
-- Post-merge result: `121/121 PASS`
-- Post-merge typecheck: PASS
-- Post-merge staging E2 syntax: PASS
-- Post-merge Wrangler dry-run: PASS
+## Late fresh-critic findings — OPEN
+1. P1 — preserve newer booking grounding during snapshot merges; stale snapshots can otherwise roll back `activeBookingId` / booking status.
+2. P1 — sum repeated affirmed child-category mentions (`2 adultos, 1 niño y 1 niña` must equal 4).
+3. P2 — scope mismatch errors from conversation-backed snapshot merges must escape parsing and fail closed.
+4. P2 — concurrent equal-revision active-intent conflicts must advance global revision so stale replays cannot reverse intent.
+5. P2 — clear negation must be scoped to its own cue/clause (`No olvides las fechas; borra la cantidad`).
+6. P2 — reservation-control imperatives must be rejected from durable lodging preferences.
 
-## Technical outcome
-R2.3 now provides server-owned durable single-stay semantic memory for:
-- stay dates and total guest count;
-- explicit correction/change-of-mind semantics;
-- durable explicit-clear tombstones;
-- bounded lodging preferences with durable prompt/instruction poisoning controls;
-- active hotel conversational intent;
-- source/provenance and monotonic revision metadata;
-- tenant/actor/session isolation;
-- merge behavior for overlapping requests and stale snapshots;
-- protection against stale tool results rolling back newer user-owned facts or room grounding;
-- model-safe state projection that excludes trusted scope/provenance/revision metadata.
+Open severity after late review: `P0/P1/P2 = 0/2/4`.
 
-The LLM remains interpretation/planning only. Core remains authoritative for persistence, validation, precedence, Policy/HITL, idempotency, trusted routing and HMS operational truth.
+## Gate
+R2.3 remains `REWORK` until all six findings have dedicated regressions, exact-head CI PASS, QA PASS, Pre-Critic PASS, fresh Independent Critic PASS with zero P0/P1/P2, merge, post-merge regression and source-of-truth convergence.
 
-## Rework findings closed
-The final artifact includes regression coverage for all review findings, including:
-- latest affirmed guest/date corrections;
-- category aggregation and corrected-party replacement;
-- accented preferences;
-- instruction/meta-turn preference poisoning;
-- negated clears;
-- persist-before-model failure behavior;
-- durable tombstones;
-- concurrent state merge and monotonic revision;
-- globally stale equal-field-revision snapshots;
-- explicit replacement dates after clear cues;
-- stale tool/approved-plan rollback prevention;
-- legacy snapshot normalization.
+R2.4 is blocked. R2.5 and Fase 3 remain blocked by their existing gates.
 
-## Scope boundary
-R2.3 does not implement multi-room conversation or reservation execution.
-
-Next authorized substage: `2.6.9-R2.4 — Multi-Room Conversation Model`.
-R2.5 and later substages remain sequentially blocked until their preceding gates close.
-Fase 3 — Alquileres remains blocked until R2.9 receives explicit Human Product Acceptance `ACCEPT`.
-
-Verdict: `TECHNICAL_PASS_CLOSED`
+Verdict: `CLOSURE_INVALIDATED_REWORK`
