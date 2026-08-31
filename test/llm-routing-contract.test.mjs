@@ -25,7 +25,7 @@ const tools = [
   },
 ];
 
-test("router prompt separates capability requirements and prioritizes durable conversational state", async () => {
+test("router prompt separates capability requirements and exposes only model-safe durable state", async () => {
   const provider = {
     request: null,
     async completeStructured(request) {
@@ -44,10 +44,27 @@ test("router prompt separates capability requirements and prioritizes durable co
   };
   const fallback = { async route() { throw new Error("fallback must not run"); } };
   const router = new LLMModelRouter(provider, fallback);
+  const durableState = {
+    stay: { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 2 },
+    semanticMemory: {
+      revision: 7,
+      scope: { tenantId: "secret-tenant-scope", actorId: "secret-actor-scope", sessionId: "secret-session-scope" },
+      stay: {
+        checkIn: { source: "user", revision: 4 },
+        checkOut: { source: "user", revision: 4 },
+        guests: { source: "user", revision: 7 },
+      },
+      preferences: [{ value: "cama matrimonial", source: "user", revision: 6 }],
+      activeIntent: { value: "availability", source: "user", revision: 7 },
+    },
+    availabilityRoomIds: [],
+  };
   const result = await router.route(
     "Hola, somos dos y queremos quedarnos del 15 al 17 de enero de 2027. ¿Tenés algo disponible?",
     context,
     tools,
+    [],
+    durableState,
   );
   assert.equal(result.kind, "tool");
   const system = provider.request.messages[0].content;
@@ -61,6 +78,14 @@ test("router prompt separates capability requirements and prioritizes durable co
   assert.match(system, /para las que te dije ya/i);
   assert.match(system, /Pure greeting with no operational request/i);
   assert.match(system, /Social-only turns never clear/i);
+  assert.match(system, /cama matrimonial/i);
+  assert.match(system, /unverified user requests\/context only/i);
+  assert.match(system, /Core independently owns durable semantic persistence/i);
+  assert.doesNotMatch(system, /secret-tenant-scope/i);
+  assert.doesNotMatch(system, /secret-actor-scope/i);
+  assert.doesNotMatch(system, /secret-session-scope/i);
+  assert.doesNotMatch(system, /"revision"/i);
+  assert.doesNotMatch(system, /"source"/i);
 });
 
 test("pure greeting is classified as a conversational message, not an operational tool", async () => {
