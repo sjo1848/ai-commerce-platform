@@ -65,6 +65,16 @@ test("unsupported hotel claims invalidate model draft and fall back deterministi
   assert.doesNotMatch(message, /desayuno/i);
 });
 
+test("invented qualitative room claims invalidate model draft", async () => {
+  const responder = new LLMGroundedResponder(provider({
+    text: "Encontré {{room_count}} opción. La habitación {{room_1_number}} es amplia y silenciosa, a {{room_1_price_per_night}} por noche.",
+  }));
+  const message = await responder.compose(availabilityInput());
+  assert.match(message, /habitación 101/i);
+  assert.match(message, /\$250/);
+  assert.doesNotMatch(message, /amplia|silenciosa/i);
+});
+
 test("raw operational values or unknown placeholders cannot bypass grounded hydration", async () => {
   const raw = new LLMGroundedResponder(provider({
     text: "Encontré {{room_count}} opción: habitación 999 a $1 por noche y {{room_1_number}} cuesta {{room_1_price_per_night}}.",
