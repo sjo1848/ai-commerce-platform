@@ -124,6 +124,30 @@ test("date correction inherits known month/year and preserves guest count", () =
   assert.equal(corrected.semanticMemory.stay.guests.source, "user");
 });
 
+test("stay correction invalidates room availability and selection before the model can reuse them", async () => {
+  const stateStore = new InMemoryConversationStateStore();
+  let observed;
+  const runtime = new AgentCoreRuntime({
+    tenants: [tenant], tools: [availabilityTool()], conversationStateStore: stateStore,
+    model: {
+      async route(_message, _context, _tools, _history, state) {
+        observed = structuredClone(state);
+        return { kind: "message", purpose: "help", message: "Perfecto." };
+      },
+    },
+  });
+  const context = await runtime.createContext({ tenantId: tenant.id, actor, channel: "webchat" });
+  const seeded = applyUserSemanticTurn(emptyConversationState(), "Somos dos del 15 al 17 de enero de 2027", contextScope(context));
+  seeded.availabilityRoomIds = ["room-old-dates"];
+  seeded.selectedRoomId = "room-old-dates";
+  await stateStore.put(context.session.id, seeded);
+
+  await runtime.orchestrator.chat("Me equivoqué, del 16 al 18", context);
+  assert.deepEqual(observed.stay, { checkIn: "2027-01-16", checkOut: "2027-01-18", guests: 2 });
+  assert.deepEqual(observed.availabilityRoomIds, []);
+  assert.equal(observed.selectedRoomId, undefined);
+});
+
 test("explicit clear removes only the requested semantic fact", () => {
   const scope = { tenantId: "hotel", actorId: "actor", sessionId: "session" };
   const initial = applyUserSemanticTurn(emptyConversationState(), "Somos cuatro del 15 al 17 de enero de 2027", scope);
