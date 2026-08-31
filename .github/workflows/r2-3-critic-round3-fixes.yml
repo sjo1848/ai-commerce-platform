@@ -1,0 +1,174 @@
+name: r2-3-critic-round3-fixes
+
+on:
+  push:
+    branches:
+      - fix/acp-2.6.9-r2.3-late-critic-rework
+    paths:
+      - .github/workflows/r2-3-critic-round3-fixes.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/acp-2.6.9-r2.3-late-critic-rework
+          fetch-depth: 0
+      - name: Apply critic round3 fixes
+        shell: python
+        run: |
+          from pathlib import Path
+
+          p = Path('src/core/conversation-state.ts')
+          text = p.read_text()
+
+          old = '''function positiveClearSegments(text: string): string[] {
+            const matches = [...text.matchAll(new RegExp(CLEAR_CUE.source, "gi"))];
+            const result: string[] = [];
+            for (let index = 0; index < matches.length; index += 1) {
+              const match = matches[index];
+              const start = match?.index ?? 0;
+              const end = matches[index + 1]?.index ?? text.length;
+              const prefix = text.slice(Math.max(0, start - 16), start);
+              if (/\\bno\\s+(?:te\\s+)?$/i.test(prefix)) continue;
+              result.push(text.slice(start, end));
+            }
+            return result;
+          }'''.replace('          ', '')
+          new = '''function positiveClearSegments(text: string): string[] {
+            const matches = [...text.matchAll(new RegExp(CLEAR_CUE.source, "gi"))];
+            const result: string[] = [];
+            let previousNegated = false;
+            let previousEnd = 0;
+            for (let index = 0; index < matches.length; index += 1) {
+              const match = matches[index];
+              const start = match?.index ?? 0;
+              const matchEnd = start + (match?.[0]?.length ?? 0);
+              const end = matches[index + 1]?.index ?? text.length;
+              const directPrefix = text.slice(Math.max(previousEnd, start - 20), start);
+              const directlyNegated = /\\bno\\s+(?:te\\s+)?$/i.test(directPrefix);
+              const coordinatedPrefix = text.slice(previousEnd, start);
+              const coordinatedNegated = previousNegated && /^\\s*(?:,\\s*)?ni\\s+$/i.test(coordinatedPrefix);
+              const negated = directlyNegated || coordinatedNegated;
+              if (!negated) result.push(text.slice(start, end));
+              previousNegated = negated;
+              previousEnd = matchEnd;
+            }
+            return result;
+          }'''.replace('          ', '')
+          if old not in text:
+              raise SystemExit('positiveClearSegments target not found')
+          text = text.replace(old, new)
+
+          old = '''function affirmedPartySegment(text: string): string {
+            const introductions = [...text.matchAll(/\\b(?:somos|seremos|seriamos|vamos\\s+a\\s+ser|viajamos)\\b/gi)];
+            if (introductions.length > 1) {
+              const latest = introductions.at(-1);
+              if (latest?.index !== undefined) return text.slice(latest.index);
+            }
+            const corrections = [...text.matchAll(/\\b(?:mejor|en realidad|perdon|corrijo|correccion)\\b/gi)];
+            const latestCorrection = corrections.at(-1);
+            if (latestCorrection?.index !== undefined) return text.slice(latestCorrection.index);
+            return text;
+          }
+
+          function extractGuests(
+            message: string,
+            dateRange: { checkIn: string; checkOut: string } | undefined,
+          ): number | undefined {
+            const text = normalizeText(message);
+            const partyText = affirmedPartySegment(text);
+            const categories = new Map<string, number>();
+            for (const match of partyText.matchAll(new RegExp(
+              `\\\\b(${NUMBER_TOKEN})\\\\s+(adultos?|adultas?|ninos?|ninas?|menores?|chicos?|chicas?|bebes?)\\\\b`,
+              "gi",
+            ))) {
+              const count = parseCountToken(match[1]);
+              if (count === undefined) continue;
+              const rawCategory = match[2] ?? "";
+              const category = /adult/.test(rawCategory) ? "adult" : /bebe/.test(rawCategory) ? "infant" : "child";
+              categories.set(category, (categories.get(category) ?? 0) + count);
+            }
+            if (categories.size) {
+              const total = [...categories.values()].reduce((sum, count) => sum + count, 0);
+              if (validGuests(total)) return total;
+            }
+'''.replace('          ', '')
+          new = '''function affirmedPartySegment(text: string): string {
+            const introductions = [...text.matchAll(/\\b(?:somos|seremos|seriamos|vamos\\s+a\\s+ser|viajamos)\\b/gi)];
+            if (introductions.length > 1) {
+              const latest = introductions.at(-1);
+              if (latest?.index !== undefined) return text.slice(latest.index);
+            }
+            return text;
+          }
+
+          type PartyCategory = "adult" | "child" | "infant";
+
+          function partyCategoryCounts(text: string): Map<PartyCategory, number> {
+            const categories = new Map<PartyCategory, number>();
+            for (const match of text.matchAll(new RegExp(
+              `\\\\b(${NUMBER_TOKEN})\\\\s+(adultos?|adultas?|ninos?|ninas?|menores?|chicos?|chicas?|bebes?)\\\\b`,
+              "gi",
+            ))) {
+              const count = parseCountToken(match[1]);
+              if (count === undefined) continue;
+              const rawCategory = match[2] ?? "";
+              const category: PartyCategory = /adult/.test(rawCategory) ? "adult" : /bebe/.test(rawCategory) ? "infant" : "child";
+              categories.set(category, (categories.get(category) ?? 0) + count);
+            }
+            return categories;
+          }
+
+          function correctedPartyCategoryCounts(text: string): Map<PartyCategory, number> {
+            const correctionPattern = /(?:[;,]\\s*)?\\b(?:no|mejor|en realidad|perdon|corrijo|correccion)\\b[:,]?\\s*/gi;
+            const corrections = [...text.matchAll(correctionPattern)];
+            if (!corrections.length) return partyCategoryCounts(text);
+
+            const firstIndex = corrections[0]?.index ?? text.length;
+            const categories = partyCategoryCounts(text.slice(0, firstIndex));
+            for (let index = 0; index < corrections.length; index += 1) {
+              const match = corrections[index];
+              const start = (match?.index ?? 0) + (match?.[0]?.length ?? 0);
+              const end = corrections[index + 1]?.index ?? text.length;
+              const replacement = partyCategoryCounts(text.slice(start, end));
+              for (const [category, count] of replacement) categories.set(category, count);
+            }
+            return categories;
+          }
+
+          function extractGuests(
+            message: string,
+            dateRange: { checkIn: string; checkOut: string } | undefined,
+          ): number | undefined {
+            const text = normalizeText(message);
+            const partyText = affirmedPartySegment(text);
+            const categories = correctedPartyCategoryCounts(partyText);
+            if (categories.size) {
+              const total = [...categories.values()].reduce((sum, count) => sum + count, 0);
+              if (validGuests(total)) return total;
+            }
+'''.replace('          ', '')
+          if old not in text:
+              raise SystemExit('party extraction target not found')
+          text = text.replace(old, new)
+
+          old = 'const PREFERENCE_RESERVATION_COMMAND = /\\breserva\\b(?=\\s+(?:automaticamente|siempre|todas?|cualquier|la|las|el|los|mi|mis|una|un|primera|segunda|tercera|habitacion|opcion|para)\\b)/i;'
+          new = 'const PREFERENCE_RESERVATION_COMMAND = /(?:^|[;,]|\\b(?:y|que)\\s+)\\s*(?:reserva|reserve|reservame|reservanos)\\b(?=\\s+(?:automaticamente|siempre|todas?|cualquier|la|las|el|los|mi|mis|una|un|primera|segunda|tercera|habitacion|opcion|para)\\b)/i;'
+          if old not in text:
+              raise SystemExit('reservation command target not found')
+          text = text.replace(old, new)
+
+          p.write_text(text)
+      - name: Commit patch and remove temporary workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/r2-3-critic-round3-fixes.yml
+          git add src/core/conversation-state.ts
+          git commit -m "fix(r2.3): preserve correction and negation semantics"
+          git push origin HEAD:fix/acp-2.6.9-r2.3-late-critic-rework
