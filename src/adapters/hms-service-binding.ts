@@ -37,6 +37,7 @@ type QuoteInput = { roomId: string; checkIn: string; checkOut: string };
 type CreateReservationInput = { guestId: string; roomId: string; checkIn: string; checkOut: string; notes?: string | null };
 type CreateMultiReservationInput = { guestId: string; roomIds: string[]; checkIn: string; checkOut: string; notes?: string | null };
 type CancelReservationInput = { bookingId: string };
+type CancelMultiReservationInput = { bookingIds: string[] };
 export type LiveAvailabilityResult = HmsRpcAvailabilityData & { requestedGuests: number; capacityFilterApplied: false };
 export type MultiReservationCreateOutcome = "confirmed" | "compensated" | "compensation_failed";
 export type MultiReservationCreateResult = {
@@ -50,9 +51,25 @@ export type MultiReservationCreateResult = {
   failedRoomId?: string;
   traceId: string;
 };
+export type MultiReservationCancelOutcome = "cancelled" | "partial_failure";
+export type MultiReservationCancelResult = {
+  source: "hms";
+  truth: "transactional";
+  hotelId: string;
+  outcome: MultiReservationCancelOutcome;
+  bookingIds: string[];
+  cancelledBookingIds: string[];
+  failedBookingIds: string[];
+  traceId: string;
+};
 
 type CreatedChild = {
   roomId: string;
+  bookingId: string;
+  operationToken: string;
+};
+
+type OwnedBooking = {
   bookingId: string;
   operationToken: string;
 };
@@ -292,6 +309,71 @@ export class HmsServiceBindingAdapter {
         });
         if (!originalToken) throw new CoreError("FORBIDDEN", "Reservation is not owned by this trusted session", 403);
         return unwrap(await this.service.cancelReservation(rpcContext(context, this.routes), { operationToken: originalToken, bookingId: input.bookingId }));
+      },
+    };
+  }
+
+  public cancelMultiReservationTool(): ToolDefinition<CancelMultiReservationInput, MultiReservationCancelResult> {
+    return {
+      id: "hms.cancelMultiReservation",
+      primitive: "CANCEL",
+      description: "Cancela varias reservas HMS de un grupo previamente creado, verificando ownership completo antes del primer side effect.",
+      risk: "write",
+      sideEffect: "irreversible",
+      idempotencyMode: "core",
+      requiredPermissions: ["hms.reservation.cancel"],
+      validateInput(input: unknown): ValidationResult<CancelMultiReservationInput> {
+        if (!input || typeof input !== "object") return { ok: false, message: "Invalid multi-room cancellation input" };
+        const value = input as Record<string, unknown>;
+        if (!Array.isArray(value.bookingIds) || value.bookingIds.length < 2 || value.bookingIds.length > 10) return { ok: false, message: "bookingIds must contain 2 to 10 bookings" };
+        const bookingIds = value.bookingIds.map((bookingId) => typeof bookingId === "string" ? bookingId.trim() : "");
+        if (bookingIds.some((bookingId) => !bookingId)) return { ok: false, message: "bookingIds must contain non-empty strings" };
+        if (new Set(bookingIds).size !== bookingIds.length) return { ok: false, message: "bookingIds must be unique" };
+        return { ok: true, value: { bookingIds } };
+      },
+      execute: async (input, context, meta) => {
+        operationToken(meta);
+        if (!this.reservationOperations) throw new CoreError("FORBIDDEN", "Reservation ownership storage is not configured", 403);
+        const rpc = rpcContext(context, this.routes);
+        const owned: OwnedBooking[] = [];
+
+        for (const bookingId of input.bookingIds) {
+          const originalToken = await this.reservationOperations.get({
+            sessionId: context.session.id,
+            tenantId: context.tenant.id,
+            actorId: context.actor.id,
+            bookingId,
+          });
+          if (!originalToken) {
+            throw new CoreError("FORBIDDEN", "One or more reservations are not owned by this trusted session", 403);
+          }
+          owned.push({ bookingId, operationToken: originalToken });
+        }
+
+        const cancelledBookingIds: string[] = [];
+        const failedBookingIds: string[] = [];
+        for (const booking of owned) {
+          try {
+            unwrap(await this.service.cancelReservation(rpc, {
+              operationToken: booking.operationToken,
+              bookingId: booking.bookingId,
+            }));
+            cancelledBookingIds.push(booking.bookingId);
+          } catch {
+            failedBookingIds.push(booking.bookingId);
+          }
+        }
+
+        return {
+          source: "hms",
+          truth: "transactional",
+          hotelId: rpc.hotelId,
+          outcome: failedBookingIds.length === 0 ? "cancelled" : "partial_failure",
+          bookingIds: failedBookingIds,
+          cancelledBookingIds,
+          failedBookingIds,
+          traceId: rpc.traceId,
+        };
       },
     };
   }
