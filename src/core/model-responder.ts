@@ -167,6 +167,14 @@ function placeholderFor(key: string): string {
   return `{{${key}}}`;
 }
 
+function containsRawFactValue(text: string, envelope: GroundedFactEnvelope): boolean {
+  const normalized = text.toLocaleLowerCase("es-AR");
+  return envelope.facts.some((fact) => {
+    const raw = fact.value.trim().toLocaleLowerCase("es-AR");
+    return raw.length >= 3 && normalized.includes(raw);
+  });
+}
+
 function validateGroundedDraft(value: unknown, envelope: GroundedFactEnvelope): string | undefined {
   if (!isTextObject(value)) return undefined;
   const text = value.text.trim();
@@ -183,6 +191,7 @@ function validateGroundedDraft(value: unknown, envelope: GroundedFactEnvelope): 
   if (withoutPlaceholders.includes("{{") || withoutPlaceholders.includes("}}")) return undefined;
   if (envelope.requiredKeys.some((key) => !seen.has(key))) return undefined;
   if (UUID.test(withoutPlaceholders) || RAW_OPERATIONAL_VALUE.test(withoutPlaceholders)) return undefined;
+  if (containsRawFactValue(withoutPlaceholders, envelope)) return undefined;
   if (UNSUPPORTED_HOTEL_DETAIL.test(withoutPlaceholders) || TRUSTED_FIELD_WORD.test(withoutPlaceholders)) return undefined;
   return text;
 }
@@ -202,8 +211,8 @@ function fieldMentioned(text: string, field: ModelClarificationField): boolean {
     case "dates": return /\b(fecha|fechas|cu[aá]ndo|entrada|salida)\b/i.test(text);
     case "guests": return /\b(persona|personas|hu[eé]sped|hu[eé]spedes|cu[aá]ntos|cu[aá]ntas)\b/i.test(text);
     case "room":
-    case "selection": return /\b(habitaci[oó]n|opci[oó]n|cu[aá]l)\b/i.test(text);
-    case "booking": return /\b(reserva|booking|cu[aá]l)\b/i.test(text);
+    case "selection": return /\b(habitaci[oó]n|opci[oó]n)\b/i.test(text);
+    case "booking": return /\b(reserva|booking)\b/i.test(text);
   }
 }
 
@@ -218,8 +227,12 @@ function validateConversationalDraft(input: ConversationalResponseInput, value: 
     const missing = input.missing ?? [];
     if (missing.length === 0) return undefined;
     if (missing.some((field) => !fieldMentioned(text, field))) return undefined;
-    const allFields: readonly ModelClarificationField[] = ["dates", "guests", "room", "booking", "selection"];
-    const forbidden = allFields.filter((field) => !missing.includes(field));
+    const roomGroupMissing = missing.includes("room") || missing.includes("selection");
+    const forbidden: ModelClarificationField[] = [];
+    if (!missing.includes("dates")) forbidden.push("dates");
+    if (!missing.includes("guests")) forbidden.push("guests");
+    if (!roomGroupMissing) forbidden.push("room");
+    if (!missing.includes("booking")) forbidden.push("booking");
     if (forbidden.some((field) => fieldMentioned(text, field))) return undefined;
   }
   return text;
@@ -264,6 +277,7 @@ export class LLMGroundedResponder implements ModelResponder {
     }
 
     const missing = input.missing ?? [];
+    const history = historyText(input.conversation);
     const prompt = [
       "You are a concise, cordial human hotel receptionist speaking natural Argentine Spanish.",
       "Write only the user-facing reply. Do not state or invent hotel facts, availability, prices, policies, room numbers, booking IDs or technical/internal data.",
@@ -274,7 +288,7 @@ export class LLMGroundedResponder implements ModelResponder {
       `PURPOSE=${input.purpose}`,
       `MISSING=${JSON.stringify(missing)}`,
       `SAFE_MEANING=${input.baseMessage}`,
-      historyText(input.conversation) ? `HISTORY=${historyText(input.conversation)}` : "",
+      history ? `HISTORY=${history}` : "",
     ].filter(Boolean).join("\n");
 
     try {
@@ -303,6 +317,7 @@ export class LLMGroundedResponder implements ModelResponder {
       "Compose a natural response for a completed hotel operation.",
       "Every concrete operational value MUST be emitted only as its exact placeholder token from FACTS. Never copy the raw value into prose.",
       "Use every REQUIRED placeholder at least once. You may omit optional placeholders.",
+      "Do not number list items with raw digits; raw digits are invalid outside placeholders.",
       "Do not add amenities, policies, availability, prices, identifiers or other hotel facts that are not represented by placeholders.",
       "Do not mention tools, JSON, the model, internal systems or trusted routing metadata.",
       `COMPLETED_TOOL=${input.toolId}`,
