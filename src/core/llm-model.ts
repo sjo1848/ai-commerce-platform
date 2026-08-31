@@ -37,6 +37,7 @@ const STATE_PATCH_SCHEMA: JsonSchema = {
     selectedRoomIds: { type: ["array", "null"], items: { type: "string" }, maxItems: 10 },
     selectedRoomIndexes: { type: ["array", "null"], items: { type: "integer", minimum: 1, maximum: 25 }, maxItems: 10 },
     selectedRoomNumbers: { type: ["array", "null"], items: { type: "string", minLength: 1, maxLength: 20 }, maxItems: 10 },
+    selectedRoomRelation: { type: ["string", "null"], enum: ["both", "other", null] },
     requestedRoomCount: { type: ["integer", "null"], minimum: 1, maximum: 10 },
     roomOccupancy: {
       type: ["array", "null"],
@@ -153,7 +154,7 @@ function parseStatePatch(value: unknown): ConversationStatePatch | undefined {
   if (!isRecord(value)) return undefined;
   const allowed = new Set([
     "checkIn", "checkOut", "guests", "selectedRoomId", "selectedRoomIndex",
-    "selectedRoomIds", "selectedRoomIndexes", "selectedRoomNumbers", "requestedRoomCount", "roomOccupancy",
+    "selectedRoomIds", "selectedRoomIndexes", "selectedRoomNumbers", "selectedRoomRelation", "requestedRoomCount", "roomOccupancy",
   ]);
   if (Object.keys(value).some((key) => !allowed.has(key))) return undefined;
   const patch: ConversationStatePatch = {};
@@ -188,6 +189,11 @@ function parseStatePatch(value: unknown): ConversationStatePatch | undefined {
     const parsed = parseStringArray(value.selectedRoomNumbers);
     if (parsed === undefined) return undefined;
     patch.selectedRoomNumbers = parsed;
+  }
+  if (value.selectedRoomRelation !== undefined) {
+    if (value.selectedRoomRelation === null || value.selectedRoomRelation === "both" || value.selectedRoomRelation === "other") {
+      patch.selectedRoomRelation = value.selectedRoomRelation;
+    } else return undefined;
   }
   if (value.requestedRoomCount !== undefined) {
     if (value.requestedRoomCount === null) patch.requestedRoomCount = null;
@@ -345,6 +351,7 @@ export class LLMModelRouter implements ModelRouter {
       "For dates and guest count, combine the current message with CURRENT_CONVERSATION_STATE. Never ask again for a value already present there unless the user explicitly changed it ambiguously.",
       "For one displayed option by position, selectedRoomIndex is the ONE-BASED list position/index. For several ordinals such as 'las dos primeras', use selectedRoomIndexes=[1,2]. Core resolves every index server-side.",
       "For natural room numbers such as 'la 101 y la 102', use selectedRoomNumbers=['101','102']. They must come from CURRENT_CONVERSATION_STATE.availabilityRooms. Never derive a roomId from the number yourself.",
+      "Natural relational references are explicit too: if exactly TWO current candidates exist, 'las dos' => selectedRoomRelation='both'. If exactly one room is selected and exactly one other candidate exists, 'la otra' => selectedRoomRelation='other'. Otherwise these references are ambiguous and you must ask which room(s), never choose arbitrarily.",
       "selectedRoomIds may only copy exact IDs already present in CURRENT_CONVERSATION_STATE.availabilityRoomIds. Core rejects unknown IDs, numbers and out-of-range ordinals.",
       "selectedRoomIds/Indexes/Numbers represent the FINAL desired selected set for this turn. A correction like 'cambiá la 102 por la 103' must preserve unaffected 101 and emit the final set 101+103.",
       "For 'quiero dos habitaciones' or 'reservame dos' without exact rooms, set requestedRoomCount=2 and ask only which rooms/selection. Never choose arbitrary candidates.",
@@ -366,6 +373,8 @@ export class LLMModelRouter implements ModelRouter {
       "Interpret ordinary date phrasing. 'del 15 al 17 de enero de 2027' => checkIn=2027-01-15, checkOut=2027-01-17.",
       "Example: state has checkIn=2027-01-15/checkOut=2027-01-17, user says 'somos dos' => statePatch={guests:2}; if availability is the active intent/context, use the stored dates and guests=2 rather than asking dates again.",
       "Example after availabilityRoomIds=[roomA,roomB,roomC]: user says '¿Cuánto sale la primera?' => kind=tool, toolId=hms.getQuote, input={}, statePatch={selectedRoomIndex:1}, clarificationReason=none, missing=[].",
+      "Example with exactly two availability candidates 101 and 102: 'Me quedo con las dos' => kind=message, clarificationReason=acknowledgement, statePatch={selectedRoomRelation:'both'}, missing=[].",
+      "Example with exactly two candidates and 101 currently selected: 'Mejor la otra' => kind=message, clarificationReason=acknowledgement, statePatch={selectedRoomRelation:'other'}, missing=[]. With three or more candidates, ask which one instead.",
       "Example after availabilityRooms=[{id:roomA,roomNumber:'101'},{id:roomB,roomNumber:'102'},{id:roomC,roomNumber:'103'}]: 'Quiero la 101 y la 102' => kind=message, clarificationReason=acknowledgement, statePatch={selectedRoomNumbers:['101','102']}, missing=[].",
       "Example with that same state: 'Mejor cambiá la 102 por la 103' => kind=message, clarificationReason=acknowledgement, statePatch={selectedRoomNumbers:['101','103']}, missing=[].",
       "Example: total guests=5, selected 101+102, 'la 101 para dos y la 102 para dos' => kind=message, clarificationReason=ambiguous, missing=['occupancy'], statePatch includes both selections and both explicit allocations; never assign the fifth guest yourself.",

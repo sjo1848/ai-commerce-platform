@@ -32,6 +32,9 @@ export type ConversationState = {
   selectedRoomIds: string[];
   requestedRoomCount?: number;
   roomOccupancy: RoomOccupancy[];
+  /** Server-owned markers: invalid/ambiguous references require clarification, never silent acknowledgement. */
+  roomSelectionNeedsClarification?: boolean;
+  roomOccupancyNeedsClarification?: boolean;
   /** Server-managed revision preventing stale/concurrent room-selection rollback. */
   roomSelectionRevision?: number;
   activeBookingId?: string;
@@ -48,6 +51,7 @@ export type ConversationStatePatch = {
   selectedRoomIds?: string[] | null;
   selectedRoomIndexes?: number[] | null;
   selectedRoomNumbers?: string[] | null;
+  selectedRoomRelation?: "both" | "other" | null;
   requestedRoomCount?: number | null;
   roomOccupancy?: RoomOccupancyPatch[] | null;
   activeBookingId?: string | null;
@@ -143,13 +147,19 @@ function sameRoomOccupancy(left: readonly RoomOccupancy[], right: readonly RoomO
 }
 
 function hasRoomSelectionState(state: ConversationState): boolean {
-  return state.selectedRoomIds.length > 0 || state.requestedRoomCount !== undefined || state.roomOccupancy.length > 0;
+  return state.selectedRoomIds.length > 0
+    || state.requestedRoomCount !== undefined
+    || state.roomOccupancy.length > 0
+    || state.roomSelectionNeedsClarification === true
+    || state.roomOccupancyNeedsClarification === true;
 }
 
 function sameRoomSelectionState(left: ConversationState, right: ConversationState): boolean {
   return sameStringArray(left.selectedRoomIds, right.selectedRoomIds)
     && left.requestedRoomCount === right.requestedRoomCount
-    && sameRoomOccupancy(left.roomOccupancy, right.roomOccupancy);
+    && sameRoomOccupancy(left.roomOccupancy, right.roomOccupancy)
+    && left.roomSelectionNeedsClarification === right.roomSelectionNeedsClarification
+    && left.roomOccupancyNeedsClarification === right.roomOccupancyNeedsClarification;
 }
 
 function validIsoDate(value: unknown): value is string {
@@ -207,6 +217,8 @@ function parseStoredState(value: unknown): ConversationState | undefined {
   state.selectedRoomIds = selectedIds.filter((roomId) => state.availabilityRoomIds.includes(roomId)).slice(0, 10);
   syncSingleSelectionAlias(state);
   if (validRoomCount(value.requestedRoomCount)) state.requestedRoomCount = Number(value.requestedRoomCount);
+  if (value.roomSelectionNeedsClarification === true) state.roomSelectionNeedsClarification = true;
+  if (value.roomOccupancyNeedsClarification === true) state.roomOccupancyNeedsClarification = true;
 
   if (Array.isArray(value.roomOccupancy)) {
     const seen = new Set<string>();
@@ -440,6 +452,10 @@ export function mergeConcurrentConversationState(current: ConversationState, inc
   const mergedRoomRevision = Math.max(leftRoomRevision, rightRoomRevision) + (roomConflict ? 1 : 0);
   if (mergedRoomRevision >= 0) next.roomSelectionRevision = mergedRoomRevision;
   if (roomSource.requestedRoomCount !== undefined) next.requestedRoomCount = roomSource.requestedRoomCount;
+  if (roomSource.roomSelectionNeedsClarification === true) next.roomSelectionNeedsClarification = true;
+  else delete next.roomSelectionNeedsClarification;
+  if (roomSource.roomOccupancyNeedsClarification === true) next.roomOccupancyNeedsClarification = true;
+  else delete next.roomOccupancyNeedsClarification;
   next.selectedRoomIds = roomSource.selectedRoomIds.filter((roomId) => next.availabilityRoomIds.includes(roomId));
   next.roomOccupancy = roomSource.roomOccupancy
     .filter((entry) => next.selectedRoomIds.includes(entry.roomId))
@@ -561,6 +577,8 @@ function roomSelectionFingerprint(state: ConversationState): string {
     selectedRoomIds: state.selectedRoomIds,
     requestedRoomCount: state.requestedRoomCount ?? null,
     roomOccupancy: state.roomOccupancy,
+    roomSelectionNeedsClarification: state.roomSelectionNeedsClarification === true,
+    roomOccupancyNeedsClarification: state.roomOccupancyNeedsClarification === true,
   });
 }
 
@@ -578,6 +596,8 @@ export function clearStaleRoomGrounding(current: ConversationState): Conversatio
   next.selectedRoomIds = [];
   next.roomOccupancy = [];
   delete next.selectedRoomId;
+  delete next.roomSelectionNeedsClarification;
+  delete next.roomOccupancyNeedsClarification;
   bumpRoomSelectionRevisionIfChanged(next, before);
   return next;
 }
@@ -586,7 +606,9 @@ export type MultiRoomConversationIssue = "which_rooms" | "occupancy_distribution
 
 export function multiRoomConversationIssue(current: ConversationState): MultiRoomConversationIssue | undefined {
   const state = normalizeConversationState(current);
+  if (state.roomSelectionNeedsClarification === true) return "which_rooms";
   if (state.requestedRoomCount !== undefined && state.selectedRoomIds.length !== state.requestedRoomCount) return "which_rooms";
+  if (state.roomOccupancyNeedsClarification === true) return "occupancy_distribution";
   if (state.roomOccupancy.length > 0) {
     if (state.roomOccupancy.length !== state.selectedRoomIds.length) return "occupancy_distribution";
     if (state.stay.guests !== undefined) {
@@ -655,7 +677,8 @@ export function applyConversationStatePatch(
   const roomBefore = roomSelectionFingerprint(next);
   const multiSelectionTouched = patch?.selectedRoomIds !== undefined
     || patch?.selectedRoomIndexes !== undefined
-    || patch?.selectedRoomNumbers !== undefined;
+    || patch?.selectedRoomNumbers !== undefined
+    || patch?.selectedRoomRelation !== undefined;
   const legacySelectionTouched = !multiSelectionTouched
     && (patch?.selectedRoomId !== undefined || patch?.selectedRoomIndex !== undefined);
   const selectionTouched = multiSelectionTouched || legacySelectionTouched;
@@ -664,6 +687,7 @@ export function applyConversationStatePatch(
     const explicitClear = patch?.selectedRoomIds === null
       || patch?.selectedRoomIndexes === null
       || patch?.selectedRoomNumbers === null
+      || patch?.selectedRoomRelation === null
       || patch?.selectedRoomId === null
       || patch?.selectedRoomIndex === null;
     let resolved: string[] | undefined = explicitClear ? [] : undefined;
@@ -691,13 +715,32 @@ export function applyConversationStatePatch(
           ids.push(roomId);
         }
       }
-      resolved = valid ? uniqueStrings(ids).slice(0, 10) : [];
+      if (valid && patch?.selectedRoomRelation === "both") {
+        if (next.availabilityRoomIds.length === 2) ids.push(...next.availabilityRoomIds);
+        else valid = false;
+      }
+      if (valid && patch?.selectedRoomRelation === "other") {
+        if (next.availabilityRoomIds.length === 2 && next.selectedRoomIds.length === 1) {
+          const other = next.availabilityRoomIds.find((roomId) => roomId !== next.selectedRoomIds[0]);
+          if (other) ids.push(other);
+          else valid = false;
+        } else valid = false;
+      }
+      resolved = valid ? uniqueStrings(ids).slice(0, 10) : undefined;
+      if (!valid) next.roomSelectionNeedsClarification = true;
+      else delete next.roomSelectionNeedsClarification;
     } else if (!explicitClear && legacySelectionTouched) {
       const roomId = validSelectionIndex(patch?.selectedRoomIndex)
         ? roomIdForIndex(next, patch!.selectedRoomIndex!)
         : stringField(patch?.selectedRoomId);
-      resolved = roomId && next.availabilityRoomIds.includes(roomId) ? [roomId] : [];
+      if (roomId && next.availabilityRoomIds.includes(roomId)) {
+        resolved = [roomId];
+        delete next.roomSelectionNeedsClarification;
+      } else {
+        next.roomSelectionNeedsClarification = true;
+      }
     }
+    if (explicitClear) delete next.roomSelectionNeedsClarification;
     next.selectedRoomIds = resolved ?? next.selectedRoomIds;
     next.roomOccupancy = next.roomOccupancy.filter((entry) => next.selectedRoomIds.includes(entry.roomId));
     syncSingleSelectionAlias(next);
@@ -715,9 +758,17 @@ export function applyConversationStatePatch(
     next.requestedRoomCount = next.selectedRoomIds.length;
   }
 
-  if (patch?.roomOccupancy === null) next.roomOccupancy = [];
-  else if (Array.isArray(patch?.roomOccupancy)) {
-    next.roomOccupancy = resolveRoomOccupancyPatch(next, patch.roomOccupancy) ?? [];
+  if (patch?.roomOccupancy === null) {
+    next.roomOccupancy = [];
+    delete next.roomOccupancyNeedsClarification;
+  } else if (Array.isArray(patch?.roomOccupancy)) {
+    const resolvedOccupancy = resolveRoomOccupancyPatch(next, patch.roomOccupancy);
+    if (resolvedOccupancy) {
+      next.roomOccupancy = resolvedOccupancy;
+      delete next.roomOccupancyNeedsClarification;
+    } else {
+      next.roomOccupancyNeedsClarification = true;
+    }
   }
   bumpRoomSelectionRevisionIfChanged(next, roomBefore);
 
@@ -1120,6 +1171,7 @@ export function stripModelSemanticStatePatch(patch: ConversationStatePatch | und
   if (patch.selectedRoomIds !== undefined) safe.selectedRoomIds = patch.selectedRoomIds;
   if (patch.selectedRoomIndexes !== undefined) safe.selectedRoomIndexes = patch.selectedRoomIndexes;
   if (patch.selectedRoomNumbers !== undefined) safe.selectedRoomNumbers = patch.selectedRoomNumbers;
+  if (patch.selectedRoomRelation !== undefined) safe.selectedRoomRelation = patch.selectedRoomRelation;
   if (patch.requestedRoomCount !== undefined) safe.requestedRoomCount = patch.requestedRoomCount;
   if (patch.roomOccupancy !== undefined) safe.roomOccupancy = patch.roomOccupancy;
   // Booking grounding is exclusively server/tool-owned. The model may use

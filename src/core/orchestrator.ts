@@ -244,6 +244,23 @@ export class ChatOrchestrator {
       return { message: reply, sessionId: context.session.id };
     }
 
+    const routeIssue = multiRoomConversationIssue(durableNextState);
+    if (routeIssue) {
+      const bounded = multiRoomClarification(routeIssue);
+      const conversationalContext = modelVisibleConversation(await this.conversation.list(context.session.id, 32));
+      const reply = await this.responder.compose({
+        kind: "message",
+        purpose: "clarification",
+        baseMessage: bounded.message,
+        userMessage: normalized,
+        missing: bounded.missing,
+        conversation: conversationalContext,
+        context,
+      });
+      await this.conversation.append(context.session.id, { role: "assistant", content: reply });
+      return { message: reply, sessionId: context.session.id };
+    }
+
     const selectedRoomIds = canonicalSelectedRoomIds(durableNextState);
     if (route.plan.toolId === "hms.createReservation" && (selectedRoomIds.length > 1 || (durableNextState.requestedRoomCount ?? 0) > 1)) {
       const issue = multiRoomConversationIssue(durableNextState);
