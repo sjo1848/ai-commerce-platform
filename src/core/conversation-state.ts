@@ -98,8 +98,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function validIsoDate(value: unknown): value is string {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-  const [yearText, monthText, dayText] = value.split("-");
-  const year = Number(yearText); const month = Number(monthText); const day = Number(dayText);
+  const year = Number(value.slice(0, 4));
+  const month = Number(value.slice(5, 7));
+  const day = Number(value.slice(8, 10));
   const timestamp = Date.UTC(year, month - 1, day);
   const date = new Date(timestamp);
   return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
@@ -282,8 +283,9 @@ export function applyConversationStatePatch(
   setGuests(patch?.guests);
 
   if (patch?.selectedRoomId === null || patch?.selectedRoomIndex === null) delete next.selectedRoomId;
-  if (validSelectionIndex(patch?.selectedRoomIndex)) {
-    const candidate = next.availabilityRoomIds[patch.selectedRoomIndex - 1];
+  const selectionIndex = patch?.selectedRoomIndex;
+  if (validSelectionIndex(selectionIndex)) {
+    const candidate = next.availabilityRoomIds[selectionIndex - 1];
     if (candidate) next.selectedRoomId = candidate;
     else delete next.selectedRoomId;
   } else {
@@ -359,7 +361,9 @@ function formatIsoDate(year: number, month: number, day: number): string | undef
 
 function addUtcDays(iso: string, days: number): string | undefined {
   if (!validIsoDate(iso) || !Number.isInteger(days) || days < 1 || days > 30) return undefined;
-  const [year, month, day] = iso.split("-").map(Number);
+  const year = Number(iso.slice(0, 4));
+  const month = Number(iso.slice(5, 7));
+  const day = Number(iso.slice(8, 10));
   const date = new Date(Date.UTC(year, month - 1, day + days));
   return formatIsoDate(date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate());
 }
@@ -398,9 +402,10 @@ function extractDateRange(message: string, current: Readonly<ConversationState>)
 
   const partialRange = text.match(/\b(?:del|de)?\s*(\d{1,2})\s+(?:al|a)\s+(\d{1,2})\b/i);
   if (partialRange && current.stay.checkIn && current.stay.checkOut && current.stay.checkIn.slice(0, 7) === current.stay.checkOut.slice(0, 7)) {
-    const [yearText, monthText] = current.stay.checkIn.split("-");
-    const checkIn = formatIsoDate(Number(yearText), Number(monthText), Number(partialRange[1]));
-    const checkOut = formatIsoDate(Number(yearText), Number(monthText), Number(partialRange[2]));
+    const year = Number(current.stay.checkIn.slice(0, 4));
+    const month = Number(current.stay.checkIn.slice(5, 7));
+    const checkIn = formatIsoDate(year, month, Number(partialRange[1]));
+    const checkOut = formatIsoDate(year, month, Number(partialRange[2]));
     if (checkIn && checkOut && checkOut > checkIn) return { checkIn, checkOut };
   }
   return undefined;
@@ -458,7 +463,7 @@ export function inferConversationIntent(message: string, dateRange?: { checkIn: 
   if (/\b(?:cancelar|cancela|anular|anula)\b/i.test(text) && /\b(?:reserva|booking)\b/i.test(text)) return "cancellation";
   if (/\b(?:reservar|reserva|confirmar\s+(?:la\s+)?reserva|hacer\s+(?:una\s+)?reserva)\b/i.test(text)) return "reservation";
   if (/\b(?:cotiz|precio|tarifa|cuanto\s+sale|cuanto\s+cuesta)\b/i.test(text)) return "quote";
-  if (/\b(?:dispon|hay\s+lugar|tenes\s+lugar|que\s+tenes|que\s+hay|aloj|qued|hosped|estadia)\b/i.test(text)) return "availability";
+  if (/\b(?:dispon|hay\s+lugar|tenes\s+lugar|que\s+tenes|que\s+hay|aloj|qued|hosped|estadia|somos|seremos|seriamos)\b/i.test(text)) return "availability";
   if (dateRange && /\b(?:quiero|queremos|necesito|necesitamos|vamos|ir|viajar)\b/i.test(text)) return "availability";
   return undefined;
 }
@@ -493,9 +498,12 @@ export function extractUserSemanticMemoryUpdate(message: string, current: Readon
 
 function semanticUpdatePatch(update: UserSemanticMemoryUpdate): ConversationStatePatch {
   const patch: ConversationStatePatch = {};
-  if (Object.prototype.hasOwnProperty.call(update, "checkIn")) patch.checkIn = update.checkIn;
-  if (Object.prototype.hasOwnProperty.call(update, "checkOut")) patch.checkOut = update.checkOut;
-  if (Object.prototype.hasOwnProperty.call(update, "guests")) patch.guests = update.guests;
+  const checkIn = update.checkIn;
+  const checkOut = update.checkOut;
+  const guests = update.guests;
+  if (checkIn === null || typeof checkIn === "string") patch.checkIn = checkIn;
+  if (checkOut === null || typeof checkOut === "string") patch.checkOut = checkOut;
+  if (guests === null || typeof guests === "number") patch.guests = guests;
   return patch;
 }
 
@@ -510,7 +518,7 @@ export function applyUserSemanticTurn(
     semanticSource: "user",
     ...(update.preferences ? { preferences: update.preferences } : {}),
     ...(update.clearPreferences ? { clearPreferences: true } : {}),
-    ...(update.activeIntent ? { activeIntent: update.activeIntent, activeIntentSource: "user" } : {}),
+    ...(update.activeIntent ? { activeIntent: update.activeIntent, activeIntentSource: "user" as const } : {}),
   });
 }
 
@@ -562,10 +570,13 @@ export function updateConversationStateFromTool(current: ConversationState, tool
   if (validIsoDate(checkIn)) stayPatch.checkIn = checkIn;
   if (validIsoDate(checkOut)) stayPatch.checkOut = checkOut;
   if (validGuests(rawInput.guests)) stayPatch.guests = Number(rawInput.guests);
-  let next = applyConversationStatePatch(current, stayPatch, {
-    semanticSource: "tool",
-    ...(conversationIntentForTool(toolId) ? { activeIntent: conversationIntentForTool(toolId), activeIntentSource: "server" as const } : {}),
-  });
+  const toolIntent = conversationIntentForTool(toolId);
+  const semanticOptions: ApplyConversationStateOptions = { semanticSource: "tool" };
+  if (toolIntent) {
+    semanticOptions.activeIntent = toolIntent;
+    semanticOptions.activeIntentSource = "server";
+  }
+  const next = applyConversationStatePatch(current, stayPatch, semanticOptions);
 
   if (toolId === "hms.checkAvailability") {
     const rooms = Array.isArray(rawData.rooms) ? rawData.rooms : [];
