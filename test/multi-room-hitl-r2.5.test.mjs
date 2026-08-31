@@ -160,6 +160,20 @@ function request(handler, path, body, key) {
   }));
 }
 
+async function createGroup(env, key = "multi-create-seed") {
+  const message = "reservalas";
+  const first = await request(env.handler, "/api/chat", { message, sessionId: env.sessionId }, key);
+  const pending = await first.json();
+  assert.equal(first.status, 409);
+  const approved = await request(env.handler, "/api/approve", {
+    message,
+    sessionId: env.sessionId,
+    approvalToken: pending.approvalToken,
+  }, key);
+  assert.equal(approved.status, 200);
+  return approved.json();
+}
+
 test("R2.5 grounds multi-room create from durable state, requires one exact approval, and executes without model reroute", async () => {
   const env = await setup();
   const message = "reservalas";
@@ -211,16 +225,45 @@ test("R2.5 stale HMS availability rejects the approved group before any reservat
   assert.equal(env.mock.calls.filter((call) => call.method === "createReservation").length, 0);
 });
 
+test("R2.5 a changed room selection invalidates an already-issued group approval", async () => {
+  const env = await setup();
+  const message = "reservalas";
+  const first = await request(env.handler, "/api/chat", { message, sessionId: env.sessionId }, "multi-plan-stale-1");
+  const pending = await first.json();
+  assert.equal(first.status, 409);
+
+  const state = await env.runtime.conversationState.get(env.sessionId);
+  state.selectedRoomIds = [roomA];
+  state.requestedRoomCount = 1;
+  state.roomSelectionRevision = (state.roomSelectionRevision ?? 0) + 10;
+  await env.runtime.conversationState.put(env.sessionId, state);
+
+  const approved = await request(env.handler, "/api/approve", {
+    message,
+    sessionId: env.sessionId,
+    approvalToken: pending.approvalToken,
+  }, "multi-plan-stale-1");
+  const body = await approved.json();
+  assert.equal(approved.status, 409);
+  assert.equal(body.error.code, "CONFLICT");
+  assert.equal(env.mock.calls.filter((call) => call.method === "createReservation").length, 0);
+});
+
+test("R2.5 ambiguous cancellation scope asks one-vs-all instead of letting the model choose", async () => {
+  const env = await setup();
+  await createGroup(env, "multi-ambiguous-seed");
+  const cancelsBefore = env.mock.calls.filter((call) => call.method === "cancelReservation").length;
+  const response = await request(env.handler, "/api/chat", { message: "cancelá una reserva", sessionId: env.sessionId }, "multi-ambiguous-cancel");
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.match(body.message, /una reserva específica o todas/i);
+  assert.equal(body.approvalToken, undefined);
+  assert.equal(env.mock.calls.filter((call) => call.method === "cancelReservation").length, cancelsBefore);
+});
+
 test("R2.5 group cancellation is server-grounded, exact-approved, and never uses a forged model booking id", async () => {
   const env = await setup();
-  const reserveMessage = "reservalas";
-  const reserve = await request(env.handler, "/api/chat", { message: reserveMessage, sessionId: env.sessionId }, "multi-create-cancel-seed");
-  const reservePending = await reserve.json();
-  assert.equal((await request(env.handler, "/api/approve", {
-    message: reserveMessage,
-    sessionId: env.sessionId,
-    approvalToken: reservePending.approvalToken,
-  }, "multi-create-cancel-seed")).status, 200);
+  await createGroup(env, "multi-create-cancel-seed");
 
   const beforeCancelCalls = env.mock.calls.filter((call) => call.method === "cancelReservation").length;
   const cancelMessage = "cancelá todas las reservas";
