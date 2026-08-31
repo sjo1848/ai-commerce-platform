@@ -1,8 +1,11 @@
 # ACP 2.6.9-R2.1 — Receptionist Product Contract + Acceptance Corpus
 
-Status: `FROZEN CANDIDATE`
+Status: `TECHNICAL_PASS / CLOSED`
 Parent: `ACP 2.6.9 R2 — Natural Receptionist Experience`
 Fixture: `test/fixtures/acp-2.6.9-r2-receptionist-conversations.json`
+Validation test: `test/r2-receptionist-corpus.test.mjs`
+Exact corpus head: `421a2e0d618fedb42a60ac370f2c91fffdd3133e`
+CI: `33346138654` — PASS (typecheck/tests, staging runner syntax, Cloudflare dry-run)
 
 ## Product standard
 The user must experience a competent human hotel receptionist, not a command parser wrapped in chat.
@@ -95,7 +98,7 @@ Naturalness is evaluated against four observable dimensions:
 A response cannot pass naturalness if it violates grounding or safety.
 
 ## Corpus coverage
-The frozen candidate includes:
+The frozen corpus includes 31 scenarios covering:
 - greeting;
 - social acknowledgement;
 - colloquial natural-language search;
@@ -112,11 +115,20 @@ The frozen candidate includes:
 - exact-plan HITL;
 - model/provider failure.
 
-## R2.1 exit criteria
-R2.1 can close when:
-1. fixture is schema-validated by test;
-2. all user-reported gaps have explicit scenarios;
-3. thresholds above are immutable for the next implementation substages;
-4. QA finds no missing critical scenario class.
+## QA verdict
+`PASS` — no missing critical scenario class was found for the reported R2 product gap. The corpus explicitly anchors every Human Product Acceptance R2 finding:
+- bad/abrupt greeting → `GRT-*`;
+- guest-count/context loss → `CTX-*` and `COR-*`;
+- 101 + 102 multi-room request → `MR-*`;
+- safety/grounding constraints while increasing naturalness → `GRD-*`, `ADV-*`, `HITL-*`, `FAIL-*`.
 
-Closing R2.1 does **not** claim the runtime already passes this corpus. It only freezes what later substages must achieve.
+One deliberate boundary is preserved: R2.1 does not define the internal runtime implementation or claim the current runtime passes these scenarios. That work starts in R2.2 onward.
+
+## Closure
+R2.1 exit criteria are satisfied:
+1. fixture schema/coverage validation PASS;
+2. all user-reported gaps have explicit scenarios;
+3. thresholds are frozen for later R2 substages;
+4. technical QA found no missing critical scenario category.
+
+Next active substage: `2.6.9-R2.2 — Natural Receptionist Dialogue Layer`.
