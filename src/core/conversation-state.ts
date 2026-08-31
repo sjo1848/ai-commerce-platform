@@ -661,7 +661,16 @@ function asksToClearGuests(text: string): boolean {
 
 function asksToClearPreferences(text: string): boolean {
   if (/\bsin preferencias\b/i.test(text)) return true;
-  return positiveClearSegments(text).some((segment) => /\bpreferencias?\b/i.test(segment));
+  return positiveClearSegments(text).some((segment) => {
+    // A clear cue only owns the preferences target inside its own clause.
+    // `borra las fechas y muéstrame mis preferencias` must not erase them,
+    // while `borra las fechas y también mis preferencias` still may.
+    const ownedClause = segment.split(
+      /[;.!?]|\by\s+(?:muestr\w*|mostr\w*|decim\w*|dime|consult\w*|list\w*|quiero|quisiera|prefiero)\b/i,
+      1,
+    )[0] ?? segment;
+    return /\bpreferencias?\b/i.test(ownedClause);
+  });
 }
 
 function affirmedPartySegment(text: string): string {
@@ -722,9 +731,10 @@ function extractGuests(
 
 const PREFERENCE_TRUSTED_OR_META = /\b(?:admin|administrador|permiso|permission|role|rol|tool|herramienta|system|sistema|prompt|aprobad|approved|operationtoken|idempotency|tenantid|hotelid|actorid|guestid)\b/i;
 const PREFERENCE_INSTRUCTION_CONTEXT = /\b(?:a partir de ahora|desde ahora|de ahora en adelante|en adelante|proximo turno|siguiente turno|cada turno|futuros? turnos?)\b/i;
-const PREFERENCE_CONTROL_VERB = /\b(?:ignora|ignore|obedece|obedecer|cumple|cumplir|sigue|seguir|selecciona|seleccionar|elige|elegi|escoge|ejecuta|ejecutar|responde|responder|contesta|contestar|actua|actuar|comportate|haz|hace|haceme|recorda|recuerda|debes|tenes que|tienes que|confirma|confirmar|confirmes|reserva|reservar|cancela|cancelar|anula|anular|aprueba|aprobar|autoriza|autorizar)\b/i;
+const PREFERENCE_CONTROL_VERB = /\b(?:ignora|ignore|obedece|obedecer|cumple|cumplir|sigue|seguir|selecciona|seleccionar|elige|elegi|escoge|ejecuta|ejecutar|responde|responder|contesta|contestar|actua|actuar|comportate|haz|hace|haceme|recorda|recuerda|debes|tenes que|tienes que|confirma|confirmar|confirmes|reservar|cancela|cancelar|anula|anular|aprueba|aprobar|autoriza|autorizar)\b/i;
 const PREFERENCE_INSTRUCTION_OBJECT = /\b(?:orden|ordenes|instruccion|instrucciones|regla|reglas|primera opcion|segunda opcion|tercera opcion)\b/i;
-const PREFERENCE_OPERATIONAL_TERM = /\b(?:reserv\w*|booking|confirm\w*|cancel\w*|anul\w*|aprob\w*|autoriz\w*|pag\w*|cobr\w*|proces\w*|gestion\w*)\b/i;
+const PREFERENCE_OPERATIONAL_TERM = /\b(?:booking|confirm\w*|cancel\w*|anul\w*|aprob\w*|autoriz\w*|pag\w*|cobr\w*|proces\w*|gestion\w*)\b/i;
+const PREFERENCE_RESERVATION_COMMAND = /\breserva\b(?=\s+(?:automaticamente|siempre|todas?|cualquier|la|las|el|los|mi|mis|una|un|primera|segunda|tercera|habitacion|opcion|para)\b)/i;
 
 function sanitizePreference(value: string): string | undefined {
   const compact = value.replace(/\s+/g, " ").trim().replace(/[;,]+$/g, "");
@@ -735,6 +745,7 @@ function sanitizePreference(value: string): string | undefined {
   if (PREFERENCE_CONTROL_VERB.test(normalized)) return undefined;
   if (PREFERENCE_INSTRUCTION_OBJECT.test(normalized)) return undefined;
   if (PREFERENCE_OPERATIONAL_TERM.test(normalized)) return undefined;
+  if (PREFERENCE_RESERVATION_COMMAND.test(normalized)) return undefined;
   if (!/\b(?:habitacion|cama|matrimonial|individual|silenc|tranquil|planta\s+baja|piso\s+alto|vista|acces|mascota|fumador|no\s+fumador|cerca|lejos|ascensor)\b/i.test(normalized)) return undefined;
   return compact;
 }
