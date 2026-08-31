@@ -1,0 +1,1 @@
+R2.2 CI is triggered through a pull request because the repository workflow listens to pull_request against main and push only on main/feature/**.
