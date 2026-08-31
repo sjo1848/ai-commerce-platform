@@ -1,8 +1,8 @@
 # ACP 2.6.9-R2.4 — Multi-Room Conversation Model — Technical Closure Evidence
 
-Status: `TECHNICAL_PASS — READY TO MERGE`
+Status: `TECHNICAL_PASS / CLOSED`
 Date: `2026-08-31`
-PR: `#46`
+PR: `#46 — MERGED`
 
 ## Final substantive Artifact A
 
@@ -72,14 +72,31 @@ Final Independent Controller Critic:
 - comment `5482058912` — **PASS**;
 - open P0/P1/P2 = `0/0/0`.
 
+Final PR-head CI:
+- `33420205641` — PASS.
+
+Integration:
+- PR #46 squash-merged to `main` at `bb4b0ec42058fb7292091d3b8ec09e4b3650f6eb`.
+
+Post-merge main regression:
+- `33420280296` — PASS;
+- typecheck PASS;
+- tests PASS;
+- staging E2 syntax PASS;
+- Wrangler dry-run PASS.
+
 ## Gate status
 
 QA: `PASS`
 Pre-Critic: `PASS`
 Independent Critic: `PASS`
+Integration: `PASS`
+Post-merge regression: `PASS`
 Open P0/P1/P2: `0/0/0`
-Multi-room side effects: `NOT IMPLEMENTED / BLOCKED FOR R2.5`
+Multi-room side effects: `NOT IMPLEMENTED IN R2.4 / AUTHORIZED SCOPE BEGINS IN R2.5`
 
-## Integration requirement
+## Closure
 
-PR #46 may be merged only if its final head remains orchestration-only beyond Artifact A and final PR CI stays green. After merge, `main` core-ci must pass before R2.4 is marked CLOSED and R2.5 becomes ACTIVE.
+`2.6.9-R2.4 — Multi-Room Conversation Model` is **TECHNICAL_PASS / CLOSED**.
+
+The next active technical substage is `2.6.9-R2.5 — Multi-Room Reservation Orchestration`. Overall ACP 2.6 remains unaccepted until the explicit human Product Acceptance gate at R2.9.
