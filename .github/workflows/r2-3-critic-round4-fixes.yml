@@ -18,71 +18,23 @@ jobs:
         with:
           ref: fix/acp-2.6.9-r2.3-late-critic-rework
           fetch-depth: 0
-      - name: Patch booking revision and clear-clause ownership
-        shell: python
+      - name: Patch source
         run: |
+          python - <<'PY'
           from pathlib import Path
-          p = Path('src/core/conversation-state.ts')
+          p = Path("src/core/conversation-state.ts")
           text = p.read_text()
-
-          old = '''  const mergedBookingRevision = Math.max(leftBookingRevision, rightBookingRevision)
-    + (bookingConflict && leftMemory.revision === rightMemory.revision ? 1 : 0);'''
-          new = '''  // Any equal-revision divergence is a booking conflict. Promote the
-  // operational revision immediately so unrelated semantic-memory revisions
-  // cannot later make the stale booking win a replay.
-  const mergedBookingRevision = Math.max(leftBookingRevision, rightBookingRevision)
-    + (bookingConflict ? 1 : 0);'''
+          old = """  const mergedBookingRevision = Math.max(leftBookingRevision, rightBookingRevision)\n    + (bookingConflict && leftMemory.revision === rightMemory.revision ? 1 : 0);"""
+          new = """  // Any equal-revision divergence is a booking conflict. Promote the\n  // operational revision immediately so unrelated semantic-memory revisions\n  // cannot later make the stale booking win a replay.\n  const mergedBookingRevision = Math.max(leftBookingRevision, rightBookingRevision)\n    + (bookingConflict ? 1 : 0);"""
           if old not in text:
-              raise SystemExit('booking revision target not found')
+              raise SystemExit("booking revision target not found")
           text = text.replace(old, new)
-
-          old = '''function asksToClearDates(text: string): boolean {
-  return positiveClearSegments(text).some((segment) => /\\b(?:fecha|fechas|entrada|salida|checkin|checkout)\\b/i.test(segment));
-}
-
-function asksToClearGuests(text: string): boolean {
-  return positiveClearSegments(text).some((segment) => /\\b(?:personas|huespedes|cantidad|cuantos\\s+somos)\\b/i.test(segment));
-}
-
-function asksToClearPreferences(text: string): boolean {
-  if (/\\bsin preferencias\\b/i.test(text)) return true;
-  return positiveClearSegments(text).some((segment) => {
-    // A clear cue only owns the preferences target inside its own clause.
-    // `borra las fechas y muéstrame mis preferencias` must not erase them,
-    // while `borra las fechas y también mis preferencias` still may.
-    const ownedClause = segment.split(
-      /[;.!?]|\\by\\s+(?:muestr\\w*|mostr\\w*|decim\\w*|dime|consult\\w*|list\\w*|quiero|quisiera|prefiero)\\b/i,
-      1,
-    )[0] ?? segment;
-    return /\\bpreferencias?\\b/i.test(ownedClause);
-  });
-}'''
-          new = '''function clearOwnedClause(segment: string): string {
-  // A clear cue owns only its clause. A later follow-up such as
-  // `limpia mis preferencias y usa las fechas que ya te dije` must not turn
-  // that later date reference into another clear target.
-  return segment.split(
-    /[;.!?]|\\by\\s+(?:muestr\\w*|mostr\\w*|decim\\w*|dime|consult\\w*|list\\w*|quiero|quisiera|prefiero|usa\\w*|utiliza\\w*)\\b/i,
-    1,
-  )[0] ?? segment;
-}
-
-function asksToClearDates(text: string): boolean {
-  return positiveClearSegments(text).some((segment) => /\\b(?:fecha|fechas|entrada|salida|checkin|checkout)\\b/i.test(clearOwnedClause(segment)));
-}
-
-function asksToClearGuests(text: string): boolean {
-  return positiveClearSegments(text).some((segment) => /\\b(?:personas|huespedes|cantidad|cuantos\\s+somos)\\b/i.test(clearOwnedClause(segment)));
-}
-
-function asksToClearPreferences(text: string): boolean {
-  if (/\\bsin preferencias\\b/i.test(text)) return true;
-  return positiveClearSegments(text).some((segment) => /\\bpreferencias?\\b/i.test(clearOwnedClause(segment)));
-}'''
+          old = """function asksToClearDates(text: string): boolean {\n  return positiveClearSegments(text).some((segment) => /\\b(?:fecha|fechas|entrada|salida|checkin|checkout)\\b/i.test(segment));\n}\n\nfunction asksToClearGuests(text: string): boolean {\n  return positiveClearSegments(text).some((segment) => /\\b(?:personas|huespedes|cantidad|cuantos\\s+somos)\\b/i.test(segment));\n}\n\nfunction asksToClearPreferences(text: string): boolean {\n  if (/\\bsin preferencias\\b/i.test(text)) return true;\n  return positiveClearSegments(text).some((segment) => {\n    // A clear cue only owns the preferences target inside its own clause.\n    // `borra las fechas y muéstrame mis preferencias` must not erase them,\n    // while `borra las fechas y también mis preferencias` still may.\n    const ownedClause = segment.split(\n      /[;.!?]|\\by\\s+(?:muestr\\w*|mostr\\w*|decim\\w*|dime|consult\\w*|list\\w*|quiero|quisiera|prefiero)\\b/i,\n      1,\n    )[0] ?? segment;\n    return /\\bpreferencias?\\b/i.test(ownedClause);\n  });\n}"""
+          new = """function clearOwnedClause(segment: string): string {\n  // A clear cue owns only its clause. A later follow-up such as\n  // `limpia mis preferencias y usa las fechas que ya te dije` must not turn\n  // that later date reference into another clear target.\n  return segment.split(\n    /[;.!?]|\\by\\s+(?:muestr\\w*|mostr\\w*|decim\\w*|dime|consult\\w*|list\\w*|quiero|quisiera|prefiero|usa\\w*|utiliza\\w*)\\b/i,\n    1,\n  )[0] ?? segment;\n}\n\nfunction asksToClearDates(text: string): boolean {\n  return positiveClearSegments(text).some((segment) => /\\b(?:fecha|fechas|entrada|salida|checkin|checkout)\\b/i.test(clearOwnedClause(segment)));\n}\n\nfunction asksToClearGuests(text: string): boolean {\n  return positiveClearSegments(text).some((segment) => /\\b(?:personas|huespedes|cantidad|cuantos\\s+somos)\\b/i.test(clearOwnedClause(segment)));\n}\n\nfunction asksToClearPreferences(text: string): boolean {\n  if (/\\bsin preferencias\\b/i.test(text)) return true;\n  return positiveClearSegments(text).some((segment) => /\\bpreferencias?\\b/i.test(clearOwnedClause(segment)));\n}"""
           if old not in text:
-              raise SystemExit('clear target ownership block not found')
-          text = text.replace(old, new)
-          p.write_text(text)
+              raise SystemExit("clear target ownership block not found")
+          p.write_text(text.replace(old, new))
+          PY
       - name: Commit patch and self-remove
         run: |
           git config user.name "github-actions[bot]"
