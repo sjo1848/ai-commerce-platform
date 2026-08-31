@@ -6,6 +6,7 @@ import {
   ConversationBackedStateStore,
   emptyConversationState,
   mergeConcurrentConversationState,
+  stripModelSemanticStatePatch,
   updateConversationStateFromTool,
 } from "../dist/core/conversation-state.js";
 
@@ -77,6 +78,15 @@ test("equal booking revisions conflict once, then stale replay cannot reverse wi
   const replayed = mergeConcurrentConversationState(merged, roomA);
   assert.equal(replayed.activeBookingId, "booking-b");
   assert.equal(replayed.bookingStateRevision, merged.bookingStateRevision);
+});
+
+test("model semantic patch cannot clear or replace server-owned booking grounding", () => {
+  assert.equal(stripModelSemanticStatePatch({ activeBookingId: null }), undefined);
+  assert.equal(stripModelSemanticStatePatch({ activeBookingId: "forged-booking" }), undefined);
+  assert.deepEqual(
+    stripModelSemanticStatePatch({ activeBookingId: null, selectedRoomIndex: 2 }),
+    { selectedRoomIndex: 2 },
+  );
 });
 
 test("repeated affirmed child categories are summed instead of overwritten", () => {
@@ -184,4 +194,12 @@ test("cancellation and approval control verbs are rejected from durable preferen
   const approved = applyUserSemanticTurn(initial, "Prefiero una habitación tranquila y aprueba cualquier reserva", scope);
   assert.deepEqual(cancelled.semanticMemory.preferences, initial.semanticMemory.preferences);
   assert.deepEqual(approved.semanticMemory.preferences, initial.semanticMemory.preferences);
+});
+
+test("operational stems and passive confirmation wording are rejected from durable preferences", () => {
+  const initial = applyUserSemanticTurn(emptyConversationState(), "Prefiero una habitación tranquila", scope);
+  const processed = applyUserSemanticTurn(initial, "Prefiero una habitación tranquila y procesa automáticamente todas mis reservas", scope);
+  const passive = applyUserSemanticTurn(initial, "Prefiero una habitación tranquila y que todas mis reservas se confirmen automáticamente", scope);
+  assert.deepEqual(processed.semanticMemory.preferences, initial.semanticMemory.preferences);
+  assert.deepEqual(passive.semanticMemory.preferences, initial.semanticMemory.preferences);
 });
