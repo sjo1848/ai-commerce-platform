@@ -18,28 +18,17 @@ jobs:
         with:
           ref: fix/acp-2.6.9-r2.3-late-critic-rework
           fetch-depth: 0
-      - name: Apply critic round3 fixes
-        shell: python
+      - name: Patch conversation memory edges
         run: |
+          python - <<'PY'
           from pathlib import Path
 
-          p = Path('src/core/conversation-state.ts')
+          p = Path("src/core/conversation-state.ts")
           text = p.read_text()
 
-          old = '''function positiveClearSegments(text: string): string[] {
-            const matches = [...text.matchAll(new RegExp(CLEAR_CUE.source, "gi"))];
-            const result: string[] = [];
-            for (let index = 0; index < matches.length; index += 1) {
-              const match = matches[index];
-              const start = match?.index ?? 0;
-              const end = matches[index + 1]?.index ?? text.length;
-              const prefix = text.slice(Math.max(0, start - 16), start);
-              if (/\\bno\\s+(?:te\\s+)?$/i.test(prefix)) continue;
-              result.push(text.slice(start, end));
-            }
-            return result;
-          }'''.replace('          ', '')
-          new = '''function positiveClearSegments(text: string): string[] {
+          start = text.index("function positiveClearSegments")
+          end = text.index("\n\nfunction asksToClearDates", start)
+          text = text[:start] + r'''function positiveClearSegments(text: string): string[] {
             const matches = [...text.matchAll(new RegExp(CLEAR_CUE.source, "gi"))];
             const result: string[] = [];
             let previousNegated = false;
@@ -50,56 +39,21 @@ jobs:
               const matchEnd = start + (match?.[0]?.length ?? 0);
               const end = matches[index + 1]?.index ?? text.length;
               const directPrefix = text.slice(Math.max(previousEnd, start - 20), start);
-              const directlyNegated = /\\bno\\s+(?:te\\s+)?$/i.test(directPrefix);
+              const directlyNegated = /\bno\s+(?:te\s+)?$/i.test(directPrefix);
               const coordinatedPrefix = text.slice(previousEnd, start);
-              const coordinatedNegated = previousNegated && /^\\s*(?:,\\s*)?ni\\s+$/i.test(coordinatedPrefix);
+              const coordinatedNegated = previousNegated && /^\s*(?:,\s*)?ni\s+$/i.test(coordinatedPrefix);
               const negated = directlyNegated || coordinatedNegated;
               if (!negated) result.push(text.slice(start, end));
               previousNegated = negated;
               previousEnd = matchEnd;
             }
             return result;
-          }'''.replace('          ', '')
-          if old not in text:
-              raise SystemExit('positiveClearSegments target not found')
-          text = text.replace(old, new)
+          }'''.replace("          ", "") + text[end:]
 
-          old = '''function affirmedPartySegment(text: string): string {
-            const introductions = [...text.matchAll(/\\b(?:somos|seremos|seriamos|vamos\\s+a\\s+ser|viajamos)\\b/gi)];
-            if (introductions.length > 1) {
-              const latest = introductions.at(-1);
-              if (latest?.index !== undefined) return text.slice(latest.index);
-            }
-            const corrections = [...text.matchAll(/\\b(?:mejor|en realidad|perdon|corrijo|correccion)\\b/gi)];
-            const latestCorrection = corrections.at(-1);
-            if (latestCorrection?.index !== undefined) return text.slice(latestCorrection.index);
-            return text;
-          }
-
-          function extractGuests(
-            message: string,
-            dateRange: { checkIn: string; checkOut: string } | undefined,
-          ): number | undefined {
-            const text = normalizeText(message);
-            const partyText = affirmedPartySegment(text);
-            const categories = new Map<string, number>();
-            for (const match of partyText.matchAll(new RegExp(
-              `\\\\b(${NUMBER_TOKEN})\\\\s+(adultos?|adultas?|ninos?|ninas?|menores?|chicos?|chicas?|bebes?)\\\\b`,
-              "gi",
-            ))) {
-              const count = parseCountToken(match[1]);
-              if (count === undefined) continue;
-              const rawCategory = match[2] ?? "";
-              const category = /adult/.test(rawCategory) ? "adult" : /bebe/.test(rawCategory) ? "infant" : "child";
-              categories.set(category, (categories.get(category) ?? 0) + count);
-            }
-            if (categories.size) {
-              const total = [...categories.values()].reduce((sum, count) => sum + count, 0);
-              if (validGuests(total)) return total;
-            }
-'''.replace('          ', '')
-          new = '''function affirmedPartySegment(text: string): string {
-            const introductions = [...text.matchAll(/\\b(?:somos|seremos|seriamos|vamos\\s+a\\s+ser|viajamos)\\b/gi)];
+          start = text.index("function affirmedPartySegment")
+          end = text.index("\n\nconst PREFERENCE_TRUSTED_OR_META", start)
+          text = text[:start] + r'''function affirmedPartySegment(text: string): string {
+            const introductions = [...text.matchAll(/\b(?:somos|seremos|seriamos|vamos\s+a\s+ser|viajamos)\b/gi)];
             if (introductions.length > 1) {
               const latest = introductions.at(-1);
               if (latest?.index !== undefined) return text.slice(latest.index);
@@ -112,7 +66,7 @@ jobs:
           function partyCategoryCounts(text: string): Map<PartyCategory, number> {
             const categories = new Map<PartyCategory, number>();
             for (const match of text.matchAll(new RegExp(
-              `\\\\b(${NUMBER_TOKEN})\\\\s+(adultos?|adultas?|ninos?|ninas?|menores?|chicos?|chicas?|bebes?)\\\\b`,
+              `\\b(${NUMBER_TOKEN})\\s+(adultos?|adultas?|ninos?|ninas?|menores?|chicos?|chicas?|bebes?)\\b`,
               "gi",
             ))) {
               const count = parseCountToken(match[1]);
@@ -125,7 +79,7 @@ jobs:
           }
 
           function correctedPartyCategoryCounts(text: string): Map<PartyCategory, number> {
-            const correctionPattern = /(?:[;,]\\s*)?\\b(?:no|mejor|en realidad|perdon|corrijo|correccion)\\b[:,]?\\s*/gi;
+            const correctionPattern = /(?:[;,]\s*)?\b(?:no|mejor|en realidad|perdon|corrijo|correccion)\b[:,]?\s*/gi;
             const corrections = [...text.matchAll(correctionPattern)];
             if (!corrections.length) return partyCategoryCounts(text);
 
@@ -152,19 +106,37 @@ jobs:
               const total = [...categories.values()].reduce((sum, count) => sum + count, 0);
               if (validGuests(total)) return total;
             }
-'''.replace('          ', '')
-          if old not in text:
-              raise SystemExit('party extraction target not found')
-          text = text.replace(old, new)
 
-          old = 'const PREFERENCE_RESERVATION_COMMAND = /\\breserva\\b(?=\\s+(?:automaticamente|siempre|todas?|cualquier|la|las|el|los|mi|mis|una|un|primera|segunda|tercera|habitacion|opcion|para)\\b)/i;'
-          new = 'const PREFERENCE_RESERVATION_COMMAND = /(?:^|[;,]|\\b(?:y|que)\\s+)\\s*(?:reserva|reserve|reservame|reservanos)\\b(?=\\s+(?:automaticamente|siempre|todas?|cualquier|la|las|el|los|mi|mis|una|un|primera|segunda|tercera|habitacion|opcion|para)\\b)/i;'
-          if old not in text:
-              raise SystemExit('reservation command target not found')
-          text = text.replace(old, new)
+            const candidates: Array<{ count: number; index: number }> = [];
+            for (const pattern of [
+              new RegExp(`\\b(?:somos|seremos|seriamos|vamos\\s+a\\s+ser|viajamos)\\s+(${NUMBER_TOKEN})\\b`, "gi"),
+              new RegExp(`\\b(${NUMBER_TOKEN})\\s+(?:personas?|huespedes?|pax)\\b`, "gi"),
+            ]) {
+              for (const match of partyText.matchAll(pattern)) {
+                const count = parseCountToken(match[1]);
+                if (count !== undefined) candidates.push({ count, index: match.index ?? 0 });
+              }
+            }
+            candidates.sort((a, b) => a.index - b.index);
+            if (candidates.length) return candidates.at(-1)!.count;
 
+            const allocation = /\b(?:habitacion|room)\s*(?:nro\.?\s*)?\d+/i.test(text)
+              || /\b(?:la|el)\s+\d{2,4}\s+para\b/i.test(text);
+            if (!allocation && (dateRange || /\b(?:estadia|alojarnos|quedarnos|hospedarnos)\b/i.test(text))) {
+              const matches = [...partyText.matchAll(new RegExp(`\\bpara\\s+(${NUMBER_TOKEN})\\b`, "gi"))];
+              return parseCountToken(matches.at(-1)?.[1]);
+            }
+            return undefined;
+          }'''.replace("          ", "") + text[end:]
+
+          old = r'''const PREFERENCE_RESERVATION_COMMAND = /\breserva\b(?=\s+(?:automaticamente|siempre|todas?|cualquier|la|las|el|los|mi|mis|una|un|primera|segunda|tercera|habitacion|opcion|para)\b)/i;'''
+          new = r'''const PREFERENCE_RESERVATION_COMMAND = /(?:^|[;,]|\b(?:y|que)\s+)\s*(?:reserva|reserve|reservame|reservanos)\b(?=\s+(?:automaticamente|siempre|todas?|cualquier|la|las|el|los|mi|mis|una|un|primera|segunda|tercera|habitacion|opcion|para)\b)/i;'''
+          if old not in text:
+            raise SystemExit("reservation command marker not found")
+          text = text.replace(old, new)
           p.write_text(text)
-      - name: Commit patch and remove temporary workflow
+          PY
+      - name: Commit and self-remove
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
