@@ -3,9 +3,12 @@ import type { AuditSink } from "./audit.js";
 import { serializeToolResult, type ConversationStore } from "./conversation.js";
 import {
   applyConversationStatePatch,
+  applyUserSemanticTurn,
   CONVERSATION_STATE_TOOL_ID,
+  conversationIntentForTool,
   enrichPlanInputFromState,
   InMemoryConversationStateStore,
+  stripModelSemanticStatePatch,
   updateConversationStateFromTool,
   type ConversationStateStore,
 } from "./conversation-state.js";
@@ -119,14 +122,25 @@ export class ChatOrchestrator {
     if (normalized.length > this.maxMessageChars) throw new CoreError("LIMIT_EXCEEDED", "Message too long", 413);
 
     const priorConversation = modelVisibleConversation(await this.conversation.list(context.session.id, 32));
-    const priorState = await this.conversationState.get(context.session.id);
+    const rawPriorState = await this.conversationState.get(context.session.id);
+    // R2.3: semantic stay facts are extracted and scope-bound by Core from the
+    // current user turn before the LLM sees state. The model cannot create
+    // durable dates/guest memory by replaying prose history.
+    const priorState = applyUserSemanticTurn(rawPriorState, normalized, {
+      tenantId: context.tenant.id,
+      actorId: context.actor.id,
+      sessionId: context.session.id,
+    });
     await this.conversation.append(context.session.id, { role: "user", content: normalized });
     await this.usage.record({ timestamp: context.now, tenantId: context.tenant.id, sessionId: context.session.id, kind: "message", units: 1, estimatedCostUsd: 0 });
 
     const tools = this.registry.descriptorsFor(context.tenant);
     await this.usage.record({ timestamp: context.now, tenantId: context.tenant.id, sessionId: context.session.id, kind: "model_route", units: 1, estimatedCostUsd: 0 });
     const route = await this.model.route(normalized, context, tools, priorConversation, priorState);
-    const nextState = applyConversationStatePatch(priorState, route.statePatch);
+    const routeIntent = route.kind === "tool" ? conversationIntentForTool(route.plan.toolId) : undefined;
+    const nextState = applyConversationStatePatch(priorState, stripModelSemanticStatePatch(route.statePatch), {
+      ...(routeIntent ? { activeIntent: routeIntent, activeIntentSource: "server" as const } : {}),
+    });
     await this.conversationState.put(context.session.id, nextState);
 
     if (route.kind === "message") {
