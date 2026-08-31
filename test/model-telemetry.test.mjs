@@ -81,13 +81,20 @@ test("invalid model plan records both paid inference and explicit fallback reaso
   assert.equal(usage.events[1].fallbackReason, "trusted_field_attempt");
 });
 
-test("grounded response facts stay deterministic while LLM only chooses bounded CTA", async () => {
+test("natural grounded response records inference telemetry while Core hydrates authoritative facts", async () => {
   const usage = new InMemoryUsageSink();
   let fail = false;
   const provider = {
     async completeStructured() {
       if (fail) throw new Error("provider down");
-      return { value: { style: "warm", nextStep: "quote" }, model: "test-model", inputTokens: 80, outputTokens: 12, latencyMs: 40, estimatedCostUsd: 0.00005 };
+      return {
+        value: { text: "Sí, encontré {{room_count}} opción. La habitación {{room_1_number}} está a {{room_1_price_per_night}} por noche. Si querés, te la cotizo." },
+        model: "test-model",
+        inputTokens: 80,
+        outputTokens: 28,
+        latencyMs: 40,
+        estimatedCostUsd: 0.00005,
+      };
     },
   };
   const responder = new LLMGroundedResponder(provider, undefined, usage);
@@ -98,6 +105,8 @@ test("grounded response facts stay deterministic while LLM only chooses bounded 
   assert.match(message, /cotizo/i);
   assert.equal(usage.events[0].label, "agent_core_grounded_response");
   assert.equal(usage.events[0].kind, "model_inference");
+  assert.equal(usage.events[0].model, "test-model");
+  assert.equal(usage.events[0].estimatedCostUsd, 0.00005);
 
   fail = true;
   const fallbackMessage = await responder.compose(input);
@@ -107,11 +116,15 @@ test("grounded response facts stay deterministic while LLM only chooses bounded 
   assert.equal(usage.events.at(-1).fallbackReason, "provider_failure");
 });
 
-test("response model cannot inject unsupported operational facts or an unsafe next step", async () => {
+test("response model cannot inject unsupported operational facts", async () => {
   const usage = new InMemoryUsageSink();
   const provider = {
     async completeStructured() {
-      return { value: { style: "warm", nextStep: "reserve", message: "Incluye desayuno gratis por $1" }, model: "evil-model", latencyMs: 1 };
+      return {
+        value: { text: "Encontré {{room_count}} opción: habitación {{room_1_number}} a {{room_1_price_per_night}} por noche, con desayuno incluido." },
+        model: "evil-model",
+        latencyMs: 1,
+      };
     },
   };
   const responder = new LLMGroundedResponder(provider, undefined, usage);
@@ -119,8 +132,7 @@ test("response model cannot inject unsupported operational facts or an unsafe ne
   const message = await responder.compose(input);
   assert.match(message, /habitación 101/i);
   assert.match(message, /\$250/);
-  assert.doesNotMatch(message, /desayuno|\$1/i);
-  assert.doesNotMatch(message, /preparo la reserva/i);
+  assert.doesNotMatch(message, /desayuno/i);
   assert.equal(usage.events.at(-1).kind, "model_fallback");
-  assert.equal(usage.events.at(-1).fallbackReason, "invalid_response_decision");
+  assert.equal(usage.events.at(-1).fallbackReason, "invalid_grounded_draft");
 });

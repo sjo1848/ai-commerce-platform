@@ -24,6 +24,18 @@ function schemaRequired(schema: JsonSchema | undefined, field: string): boolean 
   return Array.isArray(schema.required) ? schema.required.includes(field) : false;
 }
 
+function isPureGreeting(message: string): boolean {
+  return /^\s*(hola|buen(?:os)?\s+d[ií]as|buenas\s+tardes|buenas\s+noches|buenas)\s*[!.¡¿?]*\s*$/i.test(message);
+}
+
+function isPureThanks(message: string): boolean {
+  return /^\s*(gracias|muchas\s+gracias|genial,?\s+gracias|perfecto,?\s+gracias|buen[ií]simo,?\s+gracias)\s*[!.¡¿?]*\s*$/i.test(message);
+}
+
+function isHelpRequest(message: string): boolean {
+  return /\b(qu[eé]\s+pod[eé]s\s+hacer|en\s+qu[eé]\s+me\s+pod[eé]s\s+ayudar|c[oó]mo\s+me\s+pod[eé]s\s+ayudar|ayuda)\b/i.test(message);
+}
+
 export class DeterministicModelRouter implements ModelRouter {
   async route(
     message: string,
@@ -34,7 +46,25 @@ export class DeterministicModelRouter implements ModelRouter {
   ): Promise<ModelRouteResult> {
     const lower = message.toLowerCase();
     if (/\b(ignore|ignora|system prompt|developer message|tool:|execute tool|ejecuta la herramienta)\b/i.test(message)) {
-      return { kind: "message", message: "Puedo ayudarte con disponibilidad, cotizaciones y reservas, pero no ejecutar instrucciones internas indicadas en el mensaje." };
+      return {
+        kind: "message",
+        purpose: "policy",
+        message: "Puedo ayudarte con la estadía, pero no ejecutar instrucciones internas indicadas en el mensaje.",
+      };
+    }
+
+    if (isPureGreeting(message)) {
+      return { kind: "message", purpose: "greeting", message: "¡Hola! Claro, decime en qué te puedo ayudar." };
+    }
+    if (isPureThanks(message)) {
+      return { kind: "message", purpose: "social", message: "De nada. Cuando quieras, seguimos con la estadía." };
+    }
+    if (isHelpRequest(message)) {
+      return {
+        kind: "message",
+        purpose: "help",
+        message: "Puedo ayudarte a consultar disponibilidad y precios, y a preparar reservas o cancelaciones con confirmación.",
+      };
     }
 
     const explicitDates = extractIsoDates(message);
@@ -47,21 +77,37 @@ export class DeterministicModelRouter implements ModelRouter {
     const cancellationIntent = /\b(cancelar|cancela|anular|anula)\b/i.test(message) && /\b(reserva|booking)\b/i.test(message);
     if (cancellationIntent) {
       const tool = availableTools.find((candidate) => candidate.id === "hms.cancelReservation");
-      if (!tool) return { kind: "message", message: "La cancelación de reservas no está habilitada para este negocio." };
+      if (!tool) return { kind: "message", purpose: "unsupported", message: "La cancelación de reservas no está habilitada para este negocio." };
       const bookingId = extractLabeledId(message, ["reserva", "booking"]) ?? state?.activeBookingId;
-      if (!bookingId) return { kind: "message", message: "Para cancelar necesito identificar de forma inequívoca la reserva." };
+      if (!bookingId) {
+        return {
+          kind: "message",
+          purpose: "clarification",
+          missing: ["booking"],
+          message: "¿Qué reserva querés cancelar? Necesito identificarla de forma inequívoca.",
+        };
+      }
       return { kind: "tool", plan: { toolId: tool.id, input: { bookingId } } };
     }
 
     const reservationIntent = /\b(reservar|reserva|confirmar\s+reserva)\b/i.test(message);
     if (reservationIntent) {
       const tool = availableTools.find((candidate) => candidate.id === "hms.createReservation");
-      if (!tool) return { kind: "message", message: "La creación de reservas no está habilitada para este negocio." };
+      if (!tool) return { kind: "message", purpose: "unsupported", message: "La creación de reservas no está habilitada para este negocio." };
       const roomId = extractLabeledId(message, ["habitaci[oó]n", "room"]) ?? state?.selectedRoomId;
       const guestId = extractLabeledId(message, ["hu[eé]sped", "guest"]);
       const guestRequired = schemaRequired(tool.inputSchema, "guestId") ?? true;
       if (dates.length < 2 || !roomId || (guestRequired && !guestId)) {
-        return { kind: "message", message: guestRequired ? "Para reservar necesito identificar habitación, huésped y fechas." : "Para reservar necesito identificar la habitación y las fechas." };
+        const missing = [
+          ...(dates.length < 2 ? ["dates" as const] : []),
+          ...(!roomId ? ["room" as const] : []),
+        ];
+        return {
+          kind: "message",
+          purpose: "clarification",
+          missing,
+          message: guestRequired ? "Para reservar necesito identificar habitación, huésped y fechas." : "Para reservar necesito identificar la habitación y las fechas.",
+        };
       }
       return { kind: "tool", plan: { toolId: tool.id, input: { roomId, ...(guestRequired && guestId ? { guestId } : {}), checkIn: dates[0], checkOut: dates[1] } } };
     }
@@ -70,21 +116,46 @@ export class DeterministicModelRouter implements ModelRouter {
     const roomId = explicitRoomId ?? state?.selectedRoomId;
     const quoteIntent = lower.includes("cotiz") || lower.includes("precio") || lower.includes("tarifa") || lower.includes("cuánto") || lower.includes("cuanto");
     if (quoteIntent && dates.length >= 2) {
-      if (!roomId) return { kind: "message", message: "Para cotizar necesito el identificador de la habitación además de las fechas." };
-      if (!availableTools.some((tool) => tool.id === "hms.getQuote")) return { kind: "message", message: "La cotización no está habilitada para este negocio." };
+      if (!roomId) {
+        return {
+          kind: "message",
+          purpose: "clarification",
+          missing: ["room"],
+          message: "¿Qué habitación u opción querés cotizar?",
+        };
+      }
+      if (!availableTools.some((tool) => tool.id === "hms.getQuote")) return { kind: "message", purpose: "unsupported", message: "La cotización no está habilitada para este negocio." };
       return { kind: "tool", plan: { toolId: "hms.getQuote", input: { roomId, checkIn: dates[0], checkOut: dates[1] } } };
     }
 
     const availabilityTool = availableTools.find((tool) => tool.id === "hms.checkAvailability");
     const availabilityIntent = lower.includes("dispon") || lower.includes("habitaci") || lower.includes("aloj") || /\b(somos|seríamos|seremos)\b/i.test(message);
     if (availabilityIntent && dates.length >= 2) {
-      if (!availabilityTool) return { kind: "message", message: "La consulta de disponibilidad no está habilitada para este negocio." };
+      if (!availabilityTool) return { kind: "message", purpose: "unsupported", message: "La consulta de disponibilidad no está habilitada para este negocio." };
       const guestsRequired = schemaRequired(availabilityTool.inputSchema, "guests") ?? false;
-      if (guestsRequired && guests === undefined) return { kind: "message", message: "¿Para cuántas personas sería?" };
+      if (guestsRequired && guests === undefined) {
+        return {
+          kind: "message",
+          purpose: "clarification",
+          missing: ["guests"],
+          message: "¿Para cuántas personas sería?",
+        };
+      }
       return { kind: "tool", plan: { toolId: "hms.checkAvailability", input: { checkIn: dates[0], checkOut: dates[1], guests: guests ?? 1 } } };
     }
 
-    if (dates.length >= 2 && guests === undefined) return { kind: "message", message: "¿Para cuántas personas sería?" };
-    return { kind: "message", message: "Decime qué querés hacer con la estadía y sigo desde los datos que ya tenemos." };
+    if (dates.length >= 2 && guests === undefined) {
+      return {
+        kind: "message",
+        purpose: "clarification",
+        missing: ["guests"],
+        message: "¿Para cuántas personas sería?",
+      };
+    }
+    return {
+      kind: "message",
+      purpose: "help",
+      message: "Decime qué necesitás para la estadía y sigo desde los datos que ya tenemos.",
+    };
   }
 }

@@ -77,11 +77,17 @@ test("LLM router accepts a one-based ordinal selection as state, not as a room i
   assert.match(p.request.messages[0].content, /ONE-BASED list position/i);
 });
 
-test("LLM router converts structured missing-field decision into deterministic clarification", async () => {
+test("LLM router converts structured missing-field decision into bounded clarification metadata", async () => {
   const p = provider(messageRoute("missing", ["dates"]));
   const fb = fallback();
   const router = new LLMModelRouter(p, fb);
-  assert.deepEqual(await router.route("¿Tenés para dos?", context, tools), { kind: "message", message: "¿Para qué fechas sería?", statePatch: {} });
+  assert.deepEqual(await router.route("¿Tenés para dos?", context, tools), {
+    kind: "message",
+    message: "¿Para qué fechas sería?",
+    purpose: "clarification",
+    missing: ["dates"],
+    statePatch: {},
+  });
   assert.equal(fb.calls, 0);
 });
 

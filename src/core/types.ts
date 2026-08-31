@@ -88,9 +88,18 @@ export type ToolPlan = {
   input: unknown;
 };
 
+export type ModelMessagePurpose = "clarification" | "unsupported" | "greeting" | "social" | "help" | "policy";
+export type ModelClarificationField = "dates" | "guests" | "room" | "booking" | "selection";
+
 export type ModelRouteResult =
   | { kind: "tool"; plan: ToolPlan; statePatch?: ConversationStatePatch }
-  | { kind: "message"; message: string; statePatch?: ConversationStatePatch };
+  | {
+      kind: "message";
+      message: string;
+      purpose?: ModelMessagePurpose;
+      missing?: readonly ModelClarificationField[];
+      statePatch?: ConversationStatePatch;
+    };
 
 export type ModelConversationTurn = {
   role: "user" | "assistant" | "tool";
