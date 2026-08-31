@@ -3,11 +3,11 @@
   "runtime_status": "IN_PROGRESS",
   "resume_authorized": true,
   "active_task": "ACP-2.6.9-R2-NATURAL-RECEPTIONIST",
-  "last_completed_task": "ACP-2.6.9-R2.2-NATURAL-RECEPTIONIST-DIALOGUE-LAYER",
-  "last_completed_head": "5d65d9ff962cd0000fbf5ded1f0facc37efb9fe4",
-  "current_substage": "2.6.9-R2.3_DURABLE_SEMANTIC_MEMORY_V2_LATE_CRITIC_REWORK",
-  "next_action": "FIX_R2_3_LATE_CRITIC_FINDINGS_AND_REVALIDATE",
-  "stop_reason": null,
+  "last_completed_task": "ACP-2.6.9-R2.3-DURABLE-SEMANTIC-MEMORY-V2",
+  "last_completed_head": "d6bb6577241156820bbf0596b1be505e40971133",
+  "current_substage": "2.6.9-R2.4_MULTI_ROOM_CONVERSATION_MODEL_READY_NOT_STARTED",
+  "next_action": "START_R2_4_MULTI_ROOM_CONVERSATION_MODEL",
+  "stop_reason": "R2_3_SUBSTAGE_COMPLETED",
   "product_decision": {
     "id": "DEC-002",
     "decision": "CONSOLIDATE_AI_EXPERIENCE_IN_HMS_BEFORE_SECOND_VERTICAL",
@@ -37,24 +37,27 @@
     "post_merge_ci_run": 33348976381
   },
   "r2_3": {
-    "status": "REWORK",
+    "status": "TECHNICAL_PASS_CLOSED",
     "semantic_memory_v2": true,
     "multi_room": false,
     "prior_closure_invalidated": true,
     "invalidated_artifact_head": "35de13ba292d4bddb7554d0105abed982d42c39d",
     "invalidated_integration_head": "8ad5eafd8bcfec077fa12a012c75b973291e1335",
-    "late_critic_findings": [
-      "P1_STALE_BOOKING_GROUNDING_SNAPSHOT_ROLLBACK",
-      "P1_REPEATED_CHILD_CATEGORY_MENTIONS_NOT_SUMMED",
-      "P2_SCOPE_MISMATCH_SWALLOWED_BY_CONVERSATION_BACKED_STORE",
-      "P2_CONCURRENT_ACTIVE_INTENT_CONFLICT_DOES_NOT_ADVANCE_REVISION",
-      "P2_CLEAR_NEGATION_NOT_SCOPED_TO_OWN_CUE",
-      "P2_RESERVATION_IMPERATIVE_PREFERENCE_POISONING"
-    ],
-    "open_p0_p1_p2": "0/2/4"
+    "final_artifact_head": "29e3f52f8bc928f2ead2200a8cf0c7e18b1e2e6e",
+    "artifact_ci_run": 33378252316,
+    "artifact_tests": "146/146_PASS",
+    "independent_critic_review": 5065007457,
+    "integration_pr": 45,
+    "integration_head": "d6bb6577241156820bbf0596b1be505e40971133",
+    "post_merge_ci_run": 33378550861,
+    "qa": "PASS",
+    "pre_critic": "PASS",
+    "independent_critic": "PASS",
+    "open_p0_p1_p2": "0/0/0",
+    "evidence": ".orchestration/evidence/ACP-2.6.9-R2.3-LATE-CRITIC-RECLOSURE.md"
   },
   "r2_4": {
-    "status": "BLOCKED_BY_R2_3_REWORK",
+    "status": "READY_NOT_STARTED",
     "multi_room_conversation_model": false,
     "multi_room_execution": false
   },
@@ -86,8 +89,8 @@
     "human_approval_required_for_mutations": true
   },
   "event": {
-    "id": "ACP-2.6.9-R2.3-LATE-CRITIC-REWORK",
-    "type": "AUTOMATIC_REWORK",
-    "seq": 16
+    "id": "ACP-2.6.9-R2.3-TECHNICAL-PASS-CLOSED",
+    "type": "SUBSTAGE_CLOSURE",
+    "seq": 17
   }
 }
