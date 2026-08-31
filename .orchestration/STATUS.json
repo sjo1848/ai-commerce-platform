@@ -3,10 +3,10 @@
   "runtime_status": "IN_PROGRESS",
   "resume_authorized": true,
   "active_task": "ACP-2.6.9-R2-NATURAL-RECEPTIONIST",
-  "last_completed_task": "ACP-2.6.9-R2.1-RECEPTIONIST-PRODUCT-CONTRACT-AND-ACCEPTANCE-CORPUS",
-  "last_completed_head": "421a2e0d618fedb42a60ac370f2c91fffdd3133e",
-  "current_substage": "2.6.9-R2.2_NATURAL_RECEPTIONIST_DIALOGUE_LAYER",
-  "next_action": "IMPLEMENT_R2_2_GROUNDED_NATURAL_DIALOGUE_LAYER",
+  "last_completed_task": "ACP-2.6.9-R2.2-NATURAL-RECEPTIONIST-DIALOGUE-LAYER",
+  "last_completed_head": "5d65d9ff962cd0000fbf5ded1f0facc37efb9fe4",
+  "current_substage": "2.6.9-R2.3_DURABLE_SEMANTIC_MEMORY_V2",
+  "next_action": "DEFINE_AND_IMPLEMENT_R2_3_DURABLE_SEMANTIC_MEMORY_V2",
   "stop_reason": null,
   "product_decision": {
     "id": "DEC-002",
@@ -30,16 +30,33 @@
     "ci_run": 33346138654,
     "evidence": ".orchestration/evidence/ACP-2.6.9-R2.1-RECEPTIONIST-CORPUS.md",
     "scenario_count": 31,
-    "receptionist_naturalness_threshold": 0.9,
-    "strict_thresholds": {
-      "known_fact_retention": 1,
-      "no_needless_repeat": 1,
-      "correction_handling": 1,
-      "multi_room_reference": 1,
-      "grounding": 1,
-      "safety": 1,
-      "side_effect_governance": 1
+    "receptionist_naturalness_threshold": 0.9
+  },
+  "r2_2": {
+    "status": "TECHNICAL_PASS_CLOSED",
+    "artifact_head": "6fa16baa52f0d8417f2d86f2204832db8715ae58",
+    "artifact_ci_run": 33348863405,
+    "foundation_tests": "97/97_PASS",
+    "qa": "PASS",
+    "independent_critic": "PASS",
+    "open_p0_p1_p2": "0/0/0",
+    "integration_head": "5d65d9ff962cd0000fbf5ded1f0facc37efb9fe4",
+    "post_merge_ci_run": 33348976381,
+    "post_merge_result": "PASS",
+    "evidence": ".orchestration/evidence/ACP-2.6.9-R2.2-NATURAL-DIALOGUE.md",
+    "grounded_fact_envelope": true,
+    "natural_operational_response": true,
+    "greeting_social_help_intents": true,
+    "social_state_mutation_forbidden": true,
+    "critic_rework": {
+      "finding": "P2_TOTAL_VS_SHOWN_AVAILABILITY_COUNT",
+      "resolved": true
     }
+  },
+  "r2_3": {
+    "status": "ACTIVE_NOT_IMPLEMENTED",
+    "semantic_memory_v2": false,
+    "multi_room": false
   },
   "r2_sequence": [
     "2.6.9-R2.1_RECEPTIONIST_PRODUCT_CONTRACT_AND_ACCEPTANCE_CORPUS",
@@ -69,8 +86,8 @@
     "human_approval_required_for_mutations": true
   },
   "event": {
-    "id": "ACP-2.6.9-R2.1-CLOSED-R2.2-ACTIVE",
+    "id": "ACP-2.6.9-R2.2-CLOSED-R2.3-ACTIVE",
     "type": "SUBSTAGE_ADVANCE",
-    "seq": 13
+    "seq": 14
   }
 }
