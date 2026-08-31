@@ -223,7 +223,7 @@ test("conversation-backed state survives runtime replacement and internal snapsh
   };
   const runtime1 = new AgentCoreRuntime({ tenants: [tenant], tools: tools(executions), model: firstModel, sessionStore: sessions, conversationStore: conversation, conversationStateStore: stateStore1 });
   const firstContext = await runtime1.createContext({ tenantId: tenant.id, actor, channel: "webchat" });
-  await runtime1.orchestrator.chat("Quiero ir del 15 al 17", firstContext);
+  await runtime1.orchestrator.chat("Quiero ir del 15 al 17 de enero de 2027", firstContext);
 
   let observed;
   const runtime2 = new AgentCoreRuntime({
