@@ -15,6 +15,7 @@ const guestId = "12000000-0000-0000-0000-000000000001";
 const bookingId = "13000000-0000-0000-0000-000000000099";
 const now = () => new Date("2026-08-30T01:30:00.000Z");
 const reserveMessage = `reservar habitacion ${roomId} huesped ${guestId} del 2027-02-10 al 2027-02-12`;
+const invalidReserveMessage = `reservar habitacion ${roomId} huesped ${guestId}`;
 
 function tenant() {
   return {
@@ -145,7 +146,7 @@ test("approval executes the exact validated plan without rerouting the model", a
 
   const invalidModel = { async route() { return { kind: "tool", plan: { toolId: "hms.createReservation", input: { guestId, roomId } } }; } };
   const invalid = setup({ model: invalidModel });
-  const bad = await request(invalid.handler, "/api/chat", { message: reserveMessage }, { "idempotency-key": "invalid-plan" });
+  const bad = await request(invalid.handler, "/api/chat", { message: invalidReserveMessage }, { "idempotency-key": "invalid-plan" });
   const badBody = await bad.json();
   assert.equal(bad.status, 400);
   assert.equal(badBody.approvalToken, undefined);
