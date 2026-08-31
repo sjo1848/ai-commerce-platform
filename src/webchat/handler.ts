@@ -1,15 +1,50 @@
 import { ApprovalRequiredError, CoreError } from "../core/errors.js";
-import type { Actor, ToolExecutionMeta } from "../core/types.js";
+import type { Actor, ToolExecutionMeta, ToolPlan } from "../core/types.js";
 import type { AgentCoreRuntime } from "../core/runtime.js";
 import type { ApprovalChallengeInput, ApprovalStore } from "./approval.js";
 
 const HTML = `<!doctype html>
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>AI Commerce Webchat</title></head>
 <body><main><h1>Asistente</h1><form id="f"><input id="m" maxlength="2000" placeholder="Ej: somos dos y queremos quedarnos del 10 al 12 de febrero de 2034"><button>Enviar</button></form><pre id="o"></pre></main>
-<script>let sessionId;document.getElementById('f').addEventListener('submit',async(e)=>{e.preventDefault();const message=document.getElementById('m').value;const operationKey=crypto.randomUUID();const send=async(path,approvalToken)=>{const r=await fetch(path,{method:'POST',headers:{'content-type':'application/json','Idempotency-Key':operationKey},body:JSON.stringify({message,sessionId,...(approvalToken?{approvalToken}:{})})});const j=await r.json();sessionId=j.sessionId||sessionId;if(path==='/api/chat'&&r.status===409&&j?.error?.code==='APPROVAL_REQUIRED'&&j?.approvalToken&&confirm('Esta acción modificará una reserva en HMS. ¿Confirmar?'))return send('/api/approve',j.approvalToken);document.getElementById('o').textContent=JSON.stringify(j,null,2);};await send('/api/chat');});</script></body></html>`;
+<script>let sessionId;document.getElementById('f').addEventListener('submit',async(e)=>{e.preventDefault();const message=document.getElementById('m').value;const operationKey=crypto.randomUUID();const send=async(path,approvalToken)=>{const r=await fetch(path,{method:'POST',headers:{'content-type':'application/json','Idempotency-Key':operationKey},body:JSON.stringify({message,sessionId,...(approvalToken?{approvalToken}:{})})});const j=await r.json();sessionId=j.sessionId||sessionId;if(path==='/api/chat'&&r.status===409&&j?.error?.code==='APPROVAL_REQUIRED'&&j?.approvalToken&&confirm(j.approvalSummary||'Esta acción modificará una reserva en HMS. ¿Confirmar?'))return send('/api/approve',j.approvalToken);document.getElementById('o').textContent=JSON.stringify(j,null,2);};await send('/api/chat');});</script></body></html>`;
 
 function json(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).map((item) => item.trim()).slice(0, 10)
+    : [];
+}
+
+function approvalSummaryForPlan(plan: ToolPlan): string {
+  const input = record(plan.input);
+  if (plan.toolId === "hms.createMultiReservation") {
+    const roomIds = stringList(input.roomIds);
+    const checkIn = typeof input.checkIn === "string" ? input.checkIn : "?";
+    const checkOut = typeof input.checkOut === "string" ? input.checkOut : "?";
+    return `Confirmar reserva de ${roomIds.length} habitaciones (${roomIds.join(", ")}) del ${checkIn} al ${checkOut}.`;
+  }
+  if (plan.toolId === "hms.cancelMultiReservation") {
+    const bookingIds = stringList(input.bookingIds);
+    return `Confirmar cancelación de ${bookingIds.length} reservas (${bookingIds.join(", ")}).`;
+  }
+  if (plan.toolId === "hms.createReservation") {
+    const roomId = typeof input.roomId === "string" ? input.roomId : "?";
+    const checkIn = typeof input.checkIn === "string" ? input.checkIn : "?";
+    const checkOut = typeof input.checkOut === "string" ? input.checkOut : "?";
+    return `Confirmar reserva de la habitación ${roomId} del ${checkIn} al ${checkOut}.`;
+  }
+  if (plan.toolId === "hms.cancelReservation") {
+    const bookingId = typeof input.bookingId === "string" ? input.bookingId : "?";
+    return `Confirmar cancelación de la reserva ${bookingId}.`;
+  }
+  return "Esta acción modificará datos en HMS. ¿Confirmar?";
 }
 
 export type WebchatHandlerConfig = {
@@ -131,6 +166,7 @@ export function createWebchatHandler(runtime: AgentCoreRuntime, config: WebchatH
             sessionId: activeSessionId,
             approvalToken: challenge.token,
             approvalExpiresAt: challenge.expiresAt,
+            approvalSummary: approvalSummaryForPlan(error.plan),
           }, error.status);
         } catch (approvalError) {
           console.error(JSON.stringify({
