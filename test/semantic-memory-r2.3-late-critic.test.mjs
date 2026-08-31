@@ -56,9 +56,11 @@ test("conversation-backed scope mismatch fails closed instead of being swallowed
 });
 
 test("concurrent equal-revision intent conflict advances revision and stale replay cannot reverse it", () => {
-  const availability = applyUserSemanticTurn(emptyConversationState(), "¿Hay disponibilidad?", scope);
+  const availability = applyUserSemanticTurn(emptyConversationState(), "¿Tenés lugar?", scope);
   const quote = applyUserSemanticTurn(emptyConversationState(), "¿Cuánto sale?", scope);
   assert.equal(availability.semanticMemory.revision, quote.semanticMemory.revision);
+  assert.equal(availability.semanticMemory.activeIntent?.value, "availability");
+  assert.equal(quote.semanticMemory.activeIntent?.value, "quote");
 
   const merged = mergeConcurrentConversationState(availability, quote);
   assert.equal(merged.semanticMemory.activeIntent?.value, "quote");
