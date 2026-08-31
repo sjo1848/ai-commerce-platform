@@ -640,13 +640,21 @@ const CLEAR_CUE = /\b(?:olvida(?:te)?|olvides|borra|borres|limpia|limpies|quita|
 function positiveClearSegments(text: string): string[] {
   const matches = [...text.matchAll(new RegExp(CLEAR_CUE.source, "gi"))];
   const result: string[] = [];
+  let previousNegated = false;
+  let previousEnd = 0;
   for (let index = 0; index < matches.length; index += 1) {
     const match = matches[index];
     const start = match?.index ?? 0;
+    const matchEnd = start + (match?.[0]?.length ?? 0);
     const end = matches[index + 1]?.index ?? text.length;
-    const prefix = text.slice(Math.max(0, start - 16), start);
-    if (/\bno\s+(?:te\s+)?$/i.test(prefix)) continue;
-    result.push(text.slice(start, end));
+    const directPrefix = text.slice(Math.max(previousEnd, start - 20), start);
+    const directlyNegated = /\bno\s+(?:te\s+)?$/i.test(directPrefix);
+    const coordinatedPrefix = text.slice(previousEnd, start);
+    const coordinatedNegated = previousNegated && /^\s*(?:,\s*)?ni\s+$/i.test(coordinatedPrefix);
+    const negated = directlyNegated || coordinatedNegated;
+    if (!negated) result.push(text.slice(start, end));
+    previousNegated = negated;
+    previousEnd = matchEnd;
   }
   return result;
 }
@@ -679,10 +687,41 @@ function affirmedPartySegment(text: string): string {
     const latest = introductions.at(-1);
     if (latest?.index !== undefined) return text.slice(latest.index);
   }
-  const corrections = [...text.matchAll(/\b(?:mejor|en realidad|perdon|corrijo|correccion)\b/gi)];
-  const latestCorrection = corrections.at(-1);
-  if (latestCorrection?.index !== undefined) return text.slice(latestCorrection.index);
   return text;
+}
+
+type PartyCategory = "adult" | "child" | "infant";
+
+function partyCategoryCounts(text: string): Map<PartyCategory, number> {
+  const categories = new Map<PartyCategory, number>();
+  for (const match of text.matchAll(new RegExp(
+    `\\b(${NUMBER_TOKEN})\\s+(adultos?|adultas?|ninos?|ninas?|menores?|chicos?|chicas?|bebes?)\\b`,
+    "gi",
+  ))) {
+    const count = parseCountToken(match[1]);
+    if (count === undefined) continue;
+    const rawCategory = match[2] ?? "";
+    const category: PartyCategory = /adult/.test(rawCategory) ? "adult" : /bebe/.test(rawCategory) ? "infant" : "child";
+    categories.set(category, (categories.get(category) ?? 0) + count);
+  }
+  return categories;
+}
+
+function correctedPartyCategoryCounts(text: string): Map<PartyCategory, number> {
+  const correctionPattern = /(?:[;,]\s*)?\b(?:no|mejor|en realidad|perdon|corrijo|correccion)\b[:,]?\s*/gi;
+  const corrections = [...text.matchAll(correctionPattern)];
+  if (!corrections.length) return partyCategoryCounts(text);
+
+  const firstIndex = corrections[0]?.index ?? text.length;
+  const categories = partyCategoryCounts(text.slice(0, firstIndex));
+  for (let index = 0; index < corrections.length; index += 1) {
+    const match = corrections[index];
+    const start = (match?.index ?? 0) + (match?.[0]?.length ?? 0);
+    const end = corrections[index + 1]?.index ?? text.length;
+    const replacement = partyCategoryCounts(text.slice(start, end));
+    for (const [category, count] of replacement) categories.set(category, count);
+  }
+  return categories;
 }
 
 function extractGuests(
@@ -691,17 +730,7 @@ function extractGuests(
 ): number | undefined {
   const text = normalizeText(message);
   const partyText = affirmedPartySegment(text);
-  const categories = new Map<string, number>();
-  for (const match of partyText.matchAll(new RegExp(
-    `\\b(${NUMBER_TOKEN})\\s+(adultos?|adultas?|ninos?|ninas?|menores?|chicos?|chicas?|bebes?)\\b`,
-    "gi",
-  ))) {
-    const count = parseCountToken(match[1]);
-    if (count === undefined) continue;
-    const rawCategory = match[2] ?? "";
-    const category = /adult/.test(rawCategory) ? "adult" : /bebe/.test(rawCategory) ? "infant" : "child";
-    categories.set(category, (categories.get(category) ?? 0) + count);
-  }
+  const categories = correctedPartyCategoryCounts(partyText);
   if (categories.size) {
     const total = [...categories.values()].reduce((sum, count) => sum + count, 0);
     if (validGuests(total)) return total;
@@ -734,7 +763,7 @@ const PREFERENCE_INSTRUCTION_CONTEXT = /\b(?:a partir de ahora|desde ahora|de ah
 const PREFERENCE_CONTROL_VERB = /\b(?:ignora|ignore|obedece|obedecer|cumple|cumplir|sigue|seguir|selecciona|seleccionar|elige|elegi|escoge|ejecuta|ejecutar|responde|responder|contesta|contestar|actua|actuar|comportate|haz|hace|haceme|recorda|recuerda|debes|tenes que|tienes que|confirma|confirmar|confirmes|reservar|cancela|cancelar|anula|anular|aprueba|aprobar|autoriza|autorizar)\b/i;
 const PREFERENCE_INSTRUCTION_OBJECT = /\b(?:orden|ordenes|instruccion|instrucciones|regla|reglas|primera opcion|segunda opcion|tercera opcion)\b/i;
 const PREFERENCE_OPERATIONAL_TERM = /\b(?:booking|confirm\w*|cancel\w*|anul\w*|aprob\w*|autoriz\w*|pag\w*|cobr\w*|proces\w*|gestion\w*)\b/i;
-const PREFERENCE_RESERVATION_COMMAND = /\breserva\b(?=\s+(?:automaticamente|siempre|todas?|cualquier|la|las|el|los|mi|mis|una|un|primera|segunda|tercera|habitacion|opcion|para)\b)/i;
+const PREFERENCE_RESERVATION_COMMAND = /(?:^|[;,]|\b(?:y|que)\s+)\s*(?:reserva|reserve|reservame|reservanos)\b(?=\s+(?:automaticamente|siempre|todas?|cualquier|la|las|el|los|mi|mis|una|un|primera|segunda|tercera|habitacion|opcion|para)\b)/i;
 
 function sanitizePreference(value: string): string | undefined {
   const compact = value.replace(/\s+/g, " ").trim().replace(/[;,]+$/g, "");
