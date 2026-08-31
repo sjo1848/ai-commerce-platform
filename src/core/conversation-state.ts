@@ -650,8 +650,8 @@ function positiveClearSegments(text: string): string[] {
     const directPrefix = text.slice(Math.max(previousEnd, start - 20), start);
     const directlyNegated = /\bno\s+(?:te\s+)?$/i.test(directPrefix);
     const coordinatedPrefix = text.slice(previousEnd, start);
-    const coordinatedNegated = previousNegated && /^\s*(?:,\s*)?ni\s+$/i.test(coordinatedPrefix);
-    const negated = directlyNegated || coordinatedNegated;
+    const coordinatedNegated: boolean = previousNegated && /^\s*(?:,\s*)?ni\s+$/i.test(coordinatedPrefix);
+    const negated: boolean = directlyNegated || coordinatedNegated;
     if (!negated) result.push(text.slice(start, end));
     previousNegated = negated;
     previousEnd = matchEnd;
