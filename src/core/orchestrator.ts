@@ -3,10 +3,14 @@ import type { AuditSink } from "./audit.js";
 import { serializeToolResult, type ConversationStore } from "./conversation.js";
 import {
   applyConversationStatePatch,
+  applyUserSemanticTurn,
   CONVERSATION_STATE_TOOL_ID,
+  conversationIntentForTool,
   enrichPlanInputFromState,
   InMemoryConversationStateStore,
+  stripModelSemanticStatePatch,
   updateConversationStateFromTool,
+  type ConversationState,
   type ConversationStateStore,
 } from "./conversation-state.js";
 import type { AgentCoreExecutor } from "./executor.js";
@@ -31,6 +35,68 @@ export type ChatResult = {
 
 function modelVisibleConversation(turns: readonly ModelConversationTurn[]): ModelConversationTurn[] {
   return turns.filter((turn) => turn.toolId !== CONVERSATION_STATE_TOOL_ID).slice(-12);
+}
+
+function invalidateStaleRoomGrounding(before: ConversationState, after: ConversationState): ConversationState {
+  const stayChanged = before.stay.checkIn !== after.stay.checkIn
+    || before.stay.checkOut !== after.stay.checkOut
+    || before.stay.guests !== after.stay.guests;
+  if (!stayChanged || (after.availabilityRoomIds.length === 0 && !after.selectedRoomId)) return after;
+  const next = structuredClone(after);
+  next.availabilityRoomIds = [];
+  delete next.selectedRoomId;
+  return next;
+}
+
+/**
+ * Defense in depth for tool completions: explicit user values and explicit
+ * clears remain authoritative over a tool plan that was prepared against older
+ * conversational state. Operational results remain real/audited, but stale room
+ * grounding is discarded.
+ */
+function preserveUserSemanticAuthority(before: ConversationState, after: ConversationState): ConversationState {
+  const next = structuredClone(after);
+  const beforeMemory = (before as ConversationState & { semanticMemory?: ConversationState["semanticMemory"] }).semanticMemory;
+  const afterMemory = (next as ConversationState & { semanticMemory?: ConversationState["semanticMemory"] }).semanticMemory;
+  if (!beforeMemory || !afterMemory) return next;
+
+  let staleStayTool = false;
+  const preserveDate = (field: "checkIn" | "checkOut") => {
+    const provenance = beforeMemory.stay[field];
+    if (provenance?.source !== "user") return;
+    if (provenance.cleared) {
+      if (next.stay[field] !== undefined) staleStayTool = true;
+      delete next.stay[field];
+      afterMemory.stay[field] = structuredClone(provenance);
+      return;
+    }
+    const value = before.stay[field];
+    if (value === undefined) return;
+    if (next.stay[field] !== value) staleStayTool = true;
+    next.stay[field] = value;
+    afterMemory.stay[field] = structuredClone(provenance);
+  };
+  preserveDate("checkIn");
+  preserveDate("checkOut");
+
+  const guestProvenance = beforeMemory.stay.guests;
+  if (guestProvenance?.source === "user") {
+    if (guestProvenance.cleared) {
+      if (next.stay.guests !== undefined) staleStayTool = true;
+      delete next.stay.guests;
+      afterMemory.stay.guests = structuredClone(guestProvenance);
+    } else if (before.stay.guests !== undefined) {
+      if (next.stay.guests !== before.stay.guests) staleStayTool = true;
+      next.stay.guests = before.stay.guests;
+      afterMemory.stay.guests = structuredClone(guestProvenance);
+    }
+  }
+
+  if (staleStayTool) {
+    next.availabilityRoomIds = [];
+    delete next.selectedRoomId;
+  }
+  return next;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -100,7 +166,8 @@ export class ChatOrchestrator {
 
     const data = await this.executor.execute(plan.toolId, plan.input, context, trustedMeta);
     const before = await this.conversationState.get(context.session.id);
-    await this.conversationState.put(context.session.id, updateConversationStateFromTool(before, plan.toolId, plan.input, data));
+    const toolUpdated = updateConversationStateFromTool(before, plan.toolId, plan.input, data);
+    await this.conversationState.put(context.session.id, preserveUserSemanticAuthority(before, toolUpdated));
     await this.conversation.append(context.session.id, { role: "tool", toolId: plan.toolId, content: serializeToolResult(data) });
     const groundedContext = modelVisibleConversation(await this.conversation.list(context.session.id, 32));
     const message = await this.responder.compose({ toolId: plan.toolId, data, conversation: groundedContext, context });
@@ -119,15 +186,32 @@ export class ChatOrchestrator {
     if (normalized.length > this.maxMessageChars) throw new CoreError("LIMIT_EXCEEDED", "Message too long", 413);
 
     const priorConversation = modelVisibleConversation(await this.conversation.list(context.session.id, 32));
+    const rawPriorState = await this.conversationState.get(context.session.id);
+    // R2.3: extract and persist the current user facts before any provider call.
+    // If routing times out/fails, unambiguous dates/guests/preferences still survive.
+    const semanticPriorState = applyUserSemanticTurn(rawPriorState, normalized, {
+      tenantId: context.tenant.id,
+      actorId: context.actor.id,
+      sessionId: context.session.id,
+    });
+    const proposedPriorState = invalidateStaleRoomGrounding(rawPriorState, semanticPriorState);
+    await this.conversationState.put(context.session.id, proposedPriorState);
+    // State stores merge overlapping snapshots by semantic revision. Read back the
+    // durable merged view so concurrent facts are visible to this routing turn.
     const priorState = await this.conversationState.get(context.session.id);
+
     await this.conversation.append(context.session.id, { role: "user", content: normalized });
     await this.usage.record({ timestamp: context.now, tenantId: context.tenant.id, sessionId: context.session.id, kind: "message", units: 1, estimatedCostUsd: 0 });
 
     const tools = this.registry.descriptorsFor(context.tenant);
     await this.usage.record({ timestamp: context.now, tenantId: context.tenant.id, sessionId: context.session.id, kind: "model_route", units: 1, estimatedCostUsd: 0 });
     const route = await this.model.route(normalized, context, tools, priorConversation, priorState);
-    const nextState = applyConversationStatePatch(priorState, route.statePatch);
+    const routeIntent = route.kind === "tool" ? conversationIntentForTool(route.plan.toolId) : undefined;
+    const nextState = applyConversationStatePatch(priorState, stripModelSemanticStatePatch(route.statePatch), {
+      ...(routeIntent ? { activeIntent: routeIntent, activeIntentSource: "server" as const } : {}),
+    });
     await this.conversationState.put(context.session.id, nextState);
+    const durableNextState = await this.conversationState.get(context.session.id);
 
     if (route.kind === "message") {
       const conversationalContext = modelVisibleConversation(await this.conversation.list(context.session.id, 32));
@@ -144,7 +228,7 @@ export class ChatOrchestrator {
       return { message: reply, sessionId: context.session.id };
     }
 
-    const plan: ToolPlan = { toolId: route.plan.toolId, input: enrichPlanInputFromState(route.plan.toolId, route.plan.input, nextState) };
+    const plan: ToolPlan = { toolId: route.plan.toolId, input: enrichPlanInputFromState(route.plan.toolId, route.plan.input, durableNextState) };
     const visibleTool = tools.find((tool) => tool.id === plan.toolId);
     if (visibleTool) {
       const missing = missingRequiredBusinessFields(visibleTool, plan.input);
