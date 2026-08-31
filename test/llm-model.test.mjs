@@ -117,6 +117,20 @@ test("trusted execution fields from model output are rejected", async () => {
   assert.equal(fb.calls, 1);
 });
 
+test("model statePatch cannot mutate or clear server-owned active booking grounding", async () => {
+  for (const activeBookingId of [null, "forged-booking"]) {
+    const p = provider(toolRoute(
+      { checkIn: "2034-02-10", checkOut: "2034-02-12", guests: 2 },
+      "hms.checkAvailability",
+      { activeBookingId },
+    ));
+    const fb = fallback();
+    const router = new LLMModelRouter(p, fb);
+    assert.deepEqual(await router.route("consulta", context, tools), { kind: "message", message: "fallback" });
+    assert.equal(fb.calls, 1);
+  }
+});
+
 test("guestId and traceId are globally trusted even for a schema-less future tool", async () => {
   const schemaLess = [{ id: "future.tool", primitive: "CHECK", description: "future", risk: "read" }];
   for (const field of ["guestId", "traceId"]) {
