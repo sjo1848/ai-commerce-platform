@@ -341,8 +341,11 @@ export function mergeConcurrentConversationState(current: ConversationState, inc
     if (leftMemory.revision > rightMemory.revision) bookingSource = left;
     else if (rightMemory.revision > leftMemory.revision) bookingSource = right;
   }
+  // Any equal-revision divergence is a booking conflict. Promote the
+  // operational revision immediately so unrelated semantic-memory revisions
+  // cannot later make the stale booking win a replay.
   const mergedBookingRevision = Math.max(leftBookingRevision, rightBookingRevision)
-    + (bookingConflict && leftMemory.revision === rightMemory.revision ? 1 : 0);
+    + (bookingConflict ? 1 : 0);
   if (mergedBookingRevision >= 0) next.bookingStateRevision = mergedBookingRevision;
   if (bookingSource.activeBookingId) next.activeBookingId = bookingSource.activeBookingId;
   if (bookingSource.bookingStatus) next.bookingStatus = bookingSource.bookingStatus;
@@ -659,26 +662,27 @@ function positiveClearSegments(text: string): string[] {
   return result;
 }
 
+function clearOwnedClause(segment: string): string {
+  // A clear cue owns only its clause. A later follow-up such as
+  // `limpia mis preferencias y usa las fechas que ya te dije` must not turn
+  // that later date reference into another clear target.
+  return segment.split(
+    /[;.!?]|\by\s+(?:muestr\w*|mostr\w*|decim\w*|dime|consult\w*|list\w*|quiero|quisiera|prefiero|usa\w*|utiliza\w*)\b/i,
+    1,
+  )[0] ?? segment;
+}
+
 function asksToClearDates(text: string): boolean {
-  return positiveClearSegments(text).some((segment) => /\b(?:fecha|fechas|entrada|salida|checkin|checkout)\b/i.test(segment));
+  return positiveClearSegments(text).some((segment) => /\b(?:fecha|fechas|entrada|salida|checkin|checkout)\b/i.test(clearOwnedClause(segment)));
 }
 
 function asksToClearGuests(text: string): boolean {
-  return positiveClearSegments(text).some((segment) => /\b(?:personas|huespedes|cantidad|cuantos\s+somos)\b/i.test(segment));
+  return positiveClearSegments(text).some((segment) => /\b(?:personas|huespedes|cantidad|cuantos\s+somos)\b/i.test(clearOwnedClause(segment)));
 }
 
 function asksToClearPreferences(text: string): boolean {
   if (/\bsin preferencias\b/i.test(text)) return true;
-  return positiveClearSegments(text).some((segment) => {
-    // A clear cue only owns the preferences target inside its own clause.
-    // `borra las fechas y muéstrame mis preferencias` must not erase them,
-    // while `borra las fechas y también mis preferencias` still may.
-    const ownedClause = segment.split(
-      /[;.!?]|\by\s+(?:muestr\w*|mostr\w*|decim\w*|dime|consult\w*|list\w*|quiero|quisiera|prefiero)\b/i,
-      1,
-    )[0] ?? segment;
-    return /\bpreferencias?\b/i.test(ownedClause);
-  });
+  return positiveClearSegments(text).some((segment) => /\bpreferencias?\b/i.test(clearOwnedClause(segment)));
 }
 
 function affirmedPartySegment(text: string): string {
