@@ -48,6 +48,36 @@ function invalidateStaleRoomGrounding(before: ConversationState, after: Conversa
   return next;
 }
 
+/**
+ * A tool may fill semantic stay facts when Core does not already have a
+ * user-origin fact. It may never roll back an explicit current user correction,
+ * which matters most for an older approved plan executed after the user changed
+ * dates or party size. Keep both the value and its original provenance.
+ */
+function preserveUserSemanticAuthority(before: ConversationState, after: ConversationState): ConversationState {
+  const next = structuredClone(after);
+  const beforeMemory = (before as ConversationState & { semanticMemory?: ConversationState["semanticMemory"] }).semanticMemory;
+  const afterMemory = (next as ConversationState & { semanticMemory?: ConversationState["semanticMemory"] }).semanticMemory;
+  if (!beforeMemory || !afterMemory) return next;
+
+  const preserveDate = (field: "checkIn" | "checkOut") => {
+    const provenance = beforeMemory.stay[field];
+    const value = before.stay[field];
+    if (provenance?.source !== "user" || value === undefined) return;
+    next.stay[field] = value;
+    afterMemory.stay[field] = structuredClone(provenance);
+  };
+  preserveDate("checkIn");
+  preserveDate("checkOut");
+
+  const guestProvenance = beforeMemory.stay.guests;
+  if (guestProvenance?.source === "user" && before.stay.guests !== undefined) {
+    next.stay.guests = before.stay.guests;
+    afterMemory.stay.guests = structuredClone(guestProvenance);
+  }
+  return next;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -115,7 +145,8 @@ export class ChatOrchestrator {
 
     const data = await this.executor.execute(plan.toolId, plan.input, context, trustedMeta);
     const before = await this.conversationState.get(context.session.id);
-    await this.conversationState.put(context.session.id, updateConversationStateFromTool(before, plan.toolId, plan.input, data));
+    const toolUpdated = updateConversationStateFromTool(before, plan.toolId, plan.input, data);
+    await this.conversationState.put(context.session.id, preserveUserSemanticAuthority(before, toolUpdated));
     await this.conversation.append(context.session.id, { role: "tool", toolId: plan.toolId, content: serializeToolResult(data) });
     const groundedContext = modelVisibleConversation(await this.conversation.list(context.session.id, 32));
     const message = await this.responder.compose({ toolId: plan.toolId, data, conversation: groundedContext, context });
