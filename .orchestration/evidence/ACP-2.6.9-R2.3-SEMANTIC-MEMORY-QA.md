@@ -1,8 +1,8 @@
 # ACP 2.6.9-R2.3 — Durable Semantic Memory v2 — QA
 
 Status: `PASS`
-Artifact A: `3f3dbd60b781df08a0737018b17aa6832b443362`
-CI: `33354772625`
+Artifact A: `35de13ba292d4bddb7554d0105abed982d42c39d`
+CI: `33356166030`
 
 ## Scope reviewed
 - server-side current-turn extraction for dates and total guest count;
@@ -19,7 +19,7 @@ CI: `33354772625`
 - preservation of existing Tool Registry, Policy, HITL, idempotency and HMS authority.
 
 ## Rework history closed
-The final Artifact A includes fixes for all substantive P1/P2 findings raised during PR #44 review:
+Artifact A includes fixes/regressions for every P1/P2 finding raised during PR #44 review:
 1. same-turn guest correction chooses the latest affirmed count;
 2. same-turn date correction chooses the latest affirmed range;
 3. party categories are summed (`2 adultos + 2 niños = 4`);
@@ -31,12 +31,17 @@ The final Artifact A includes fixes for all substantive P1/P2 findings raised du
 9. overlapping same-session snapshots are merged by per-field revision rather than last-writer-wins;
 10. concurrent merge advances the global semantic revision;
 11. legacy pre-R2.3 snapshots are normalized/migrated before merge;
-12. a stale tool result cannot re-ground rooms from an obsolete stay context.
+12. stale tool results cannot re-ground rooms from obsolete stay context;
+13. globally stale snapshots cannot win equal fact-revision conflicts;
+14. corrected party categories discard rejected categories before aggregation;
+15. an explicit replacement date range after a clear cue wins over tombstones;
+16. imperative/meta-turn preference clauses such as `próximo turno / obedece mis órdenes` are rejected from durable memory.
 
 ## Exact-head regression
-Run `33354772625` on Artifact A completed successfully:
+Run `33356166030` on Artifact A completed successfully:
 - TypeScript typecheck: PASS
-- tests: `117/117 PASS`
+- tests: `121/121 PASS`
+- four fresh-review regressions: PASS
 - staging E2 runner syntax: PASS
 - Wrangler Worker dry-run: PASS
 
@@ -47,7 +52,9 @@ Run `33354772625` on Artifact A completed successfully:
 - trusted fields remain outside semantic memory/model authority: PASS
 - prompt/instruction text cannot persist as a lodging preference: PASS
 - stale tool result cannot undo a correction or explicit clear: PASS
+- stale snapshots cannot roll semantic values backward on per-field revision ties: PASS
 - concurrent requests retain non-conflicting facts from both turns: PASS
+- replacement semantics beat clear semantics when the same turn supplies an explicit replacement: PASS
 - reservation/HITL/idempotency regressions remain green: PASS
 
 ## Severity
