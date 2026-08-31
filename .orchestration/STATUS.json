@@ -3,9 +3,10 @@
   "runtime_status": "IN_PROGRESS",
   "resume_authorized": true,
   "active_task": "ACP-2.6.9-R2-NATURAL-RECEPTIONIST",
-  "last_completed_task": "ACP-2.6.9-HUMAN-PRODUCT-ACCEPTANCE-REWORK-R1",
-  "current_substage": "2.6.9-R2.1_RECEPTIONIST_PRODUCT_CONTRACT_AND_ACCEPTANCE_CORPUS",
-  "next_action": "FREEZE_R2_1_RECEPTIONIST_ACCEPTANCE_CORPUS",
+  "last_completed_task": "ACP-2.6.9-R2.1-RECEPTIONIST-PRODUCT-CONTRACT-AND-ACCEPTANCE-CORPUS",
+  "last_completed_head": "421a2e0d618fedb42a60ac370f2c91fffdd3133e",
+  "current_substage": "2.6.9-R2.2_NATURAL_RECEPTIONIST_DIALOGUE_LAYER",
+  "next_action": "IMPLEMENT_R2_2_GROUNDED_NATURAL_DIALOGUE_LAYER",
   "stop_reason": null,
   "product_decision": {
     "id": "DEC-002",
@@ -23,6 +24,23 @@
     ]
   },
   "r2_contract": ".orchestration/contracts/ACP-2.6.9-R2-NATURAL-RECEPTIONIST.md",
+  "r2_1": {
+    "status": "TECHNICAL_PASS_CLOSED",
+    "artifact_head": "421a2e0d618fedb42a60ac370f2c91fffdd3133e",
+    "ci_run": 33346138654,
+    "evidence": ".orchestration/evidence/ACP-2.6.9-R2.1-RECEPTIONIST-CORPUS.md",
+    "scenario_count": 31,
+    "receptionist_naturalness_threshold": 0.9,
+    "strict_thresholds": {
+      "known_fact_retention": 1,
+      "no_needless_repeat": 1,
+      "correction_handling": 1,
+      "multi_room_reference": 1,
+      "grounding": 1,
+      "safety": 1,
+      "side_effect_governance": 1
+    }
+  },
   "r2_sequence": [
     "2.6.9-R2.1_RECEPTIONIST_PRODUCT_CONTRACT_AND_ACCEPTANCE_CORPUS",
     "2.6.9-R2.2_NATURAL_RECEPTIONIST_DIALOGUE_LAYER",
@@ -51,8 +69,8 @@
     "human_approval_required_for_mutations": true
   },
   "event": {
-    "id": "ACP-2.6.9-R2-ROADMAP-AUTHORIZED",
-    "type": "REWORK_RESUME",
-    "seq": 12
+    "id": "ACP-2.6.9-R2.1-CLOSED-R2.2-ACTIVE",
+    "type": "SUBSTAGE_ADVANCE",
+    "seq": 13
   }
 }
