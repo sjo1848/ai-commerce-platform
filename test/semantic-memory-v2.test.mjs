@@ -148,12 +148,13 @@ test("stay correction invalidates room availability and selection before the mod
   assert.equal(observed.selectedRoomId, undefined);
 });
 
-test("explicit clear removes only the requested semantic fact", () => {
+test("explicit clear removes the value but keeps a user tombstone", () => {
   const scope = { tenantId: "hotel", actorId: "actor", sessionId: "session" };
   const initial = applyUserSemanticTurn(emptyConversationState(), "Somos cuatro del 15 al 17 de enero de 2027", scope);
   const cleared = applyUserSemanticTurn(initial, "Olvidá la cantidad de personas", scope);
   assert.equal(cleared.stay.guests, undefined);
-  assert.equal(cleared.semanticMemory.stay.guests, undefined);
+  assert.equal(cleared.semanticMemory.stay.guests?.source, "user");
+  assert.equal(cleared.semanticMemory.stay.guests?.cleared, true);
   assert.equal(cleared.stay.checkIn, "2027-01-15");
   assert.equal(cleared.stay.checkOut, "2027-01-17");
 });
