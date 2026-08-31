@@ -52,7 +52,9 @@ function invalidateStaleRoomGrounding(before: ConversationState, after: Conversa
  * A tool may fill semantic stay facts when Core does not already have a
  * user-origin fact. It may never roll back an explicit current user correction,
  * which matters most for an older approved plan executed after the user changed
- * dates or party size. Keep both the value and its original provenance.
+ * dates or party size. If such a stale plan executed, its operation result stays
+ * real/audited, but its room availability/selection cannot become grounding for
+ * the user's newer stay context.
  */
 function preserveUserSemanticAuthority(before: ConversationState, after: ConversationState): ConversationState {
   const next = structuredClone(after);
@@ -60,10 +62,12 @@ function preserveUserSemanticAuthority(before: ConversationState, after: Convers
   const afterMemory = (next as ConversationState & { semanticMemory?: ConversationState["semanticMemory"] }).semanticMemory;
   if (!beforeMemory || !afterMemory) return next;
 
+  let staleStayTool = false;
   const preserveDate = (field: "checkIn" | "checkOut") => {
     const provenance = beforeMemory.stay[field];
     const value = before.stay[field];
     if (provenance?.source !== "user" || value === undefined) return;
+    if (next.stay[field] !== value) staleStayTool = true;
     next.stay[field] = value;
     afterMemory.stay[field] = structuredClone(provenance);
   };
@@ -72,8 +76,14 @@ function preserveUserSemanticAuthority(before: ConversationState, after: Convers
 
   const guestProvenance = beforeMemory.stay.guests;
   if (guestProvenance?.source === "user" && before.stay.guests !== undefined) {
+    if (next.stay.guests !== before.stay.guests) staleStayTool = true;
     next.stay.guests = before.stay.guests;
     afterMemory.stay.guests = structuredClone(guestProvenance);
+  }
+
+  if (staleStayTool) {
+    next.availabilityRoomIds = [];
+    delete next.selectedRoomId;
   }
   return next;
 }
