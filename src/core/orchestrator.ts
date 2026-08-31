@@ -10,6 +10,7 @@ import {
   InMemoryConversationStateStore,
   stripModelSemanticStatePatch,
   updateConversationStateFromTool,
+  type ConversationState,
   type ConversationStateStore,
 } from "./conversation-state.js";
 import type { AgentCoreExecutor } from "./executor.js";
@@ -34,6 +35,17 @@ export type ChatResult = {
 
 function modelVisibleConversation(turns: readonly ModelConversationTurn[]): ModelConversationTurn[] {
   return turns.filter((turn) => turn.toolId !== CONVERSATION_STATE_TOOL_ID).slice(-12);
+}
+
+function invalidateStaleRoomGrounding(before: ConversationState, after: ConversationState): ConversationState {
+  const stayChanged = before.stay.checkIn !== after.stay.checkIn
+    || before.stay.checkOut !== after.stay.checkOut
+    || before.stay.guests !== after.stay.guests;
+  if (!stayChanged || (after.availabilityRoomIds.length === 0 && !after.selectedRoomId)) return after;
+  const next = structuredClone(after);
+  next.availabilityRoomIds = [];
+  delete next.selectedRoomId;
+  return next;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -126,11 +138,15 @@ export class ChatOrchestrator {
     // R2.3: semantic stay facts are extracted and scope-bound by Core from the
     // current user turn before the LLM sees state. The model cannot create
     // durable dates/guest memory by replaying prose history.
-    const priorState = applyUserSemanticTurn(rawPriorState, normalized, {
+    const semanticPriorState = applyUserSemanticTurn(rawPriorState, normalized, {
       tenantId: context.tenant.id,
       actorId: context.actor.id,
       sessionId: context.session.id,
     });
+    // A corrected/cleared stay makes prior availability and selection stale.
+    // Invalidate them before routing so a room from old dates/party size cannot
+    // be carried into quote/reservation as if still grounded.
+    const priorState = invalidateStaleRoomGrounding(rawPriorState, semanticPriorState);
     await this.conversation.append(context.session.id, { role: "user", content: normalized });
     await this.usage.record({ timestamp: context.now, tenantId: context.tenant.id, sessionId: context.session.id, kind: "message", units: 1, estimatedCostUsd: 0 });
 
