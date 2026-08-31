@@ -106,6 +106,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function stringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).map((item) => item.trim()).slice(0, 10)
+    : [];
+}
+
+function sameStringList(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
 function isMissingRequiredValue(value: unknown): boolean {
   return value === undefined || value === null || (typeof value === "string" && value.trim() === "");
 }
@@ -178,8 +188,8 @@ function multiToolIntent(toolId: string) {
 }
 
 function bookingIdsFromData(data: unknown): string[] {
-  if (!isRecord(data) || !Array.isArray(data.bookingIds)) return [];
-  return [...new Set(data.bookingIds.filter((value): value is string => typeof value === "string" && Boolean(value.trim())).map((value) => value.trim()))].slice(0, 10);
+  if (!isRecord(data)) return [];
+  return stringList(data.bookingIds);
 }
 
 function bookingIdFromData(data: unknown): string | undefined {
@@ -241,6 +251,42 @@ export class ChatOrchestrator {
     });
   }
 
+  private async assertApprovedPlanStillGrounded(plan: ToolPlan, context: ExecutionContext): Promise<void> {
+    const input = isRecord(plan.input) ? plan.input : {};
+    if (plan.toolId === "hms.createMultiReservation") {
+      const state = await this.conversationState.get(context.session.id);
+      const approvedRoomIds = stringList(input.roomIds);
+      const currentRoomIds = canonicalSelectedRoomIds(state);
+      const approvedCheckIn = typeof input.checkIn === "string" ? input.checkIn : undefined;
+      const approvedCheckOut = typeof input.checkOut === "string" ? input.checkOut : undefined;
+      if (
+        multiRoomConversationIssue(state)
+        || approvedRoomIds.length < 2
+        || !sameStringList(approvedRoomIds, currentRoomIds)
+        || approvedCheckIn !== state.stay.checkIn
+        || approvedCheckOut !== state.stay.checkOut
+      ) {
+        throw new CoreError("CONFLICT", "Approved multi-room plan is stale and must be confirmed again", 409);
+      }
+    }
+
+    if (plan.toolId === "hms.cancelMultiReservation") {
+      const group = await this.reservationGroupState.get(context.session.id);
+      const approvedBookingIds = stringList(input.bookingIds);
+      if (approvedBookingIds.length < 2 || !sameStringList(approvedBookingIds, group.activeBookingIds)) {
+        throw new CoreError("CONFLICT", "Approved group cancellation is stale and must be confirmed again", 409);
+      }
+    }
+
+    if (plan.toolId === "hms.cancelReservation") {
+      const bookingId = typeof input.bookingId === "string" ? input.bookingId.trim() : "";
+      const group = await this.reservationGroupState.get(context.session.id);
+      if (group.activeBookingIds.length > 0 && !group.activeBookingIds.includes(bookingId)) {
+        throw new CoreError("CONFLICT", "Approved reservation cancellation is stale and must be confirmed again", 409);
+      }
+    }
+  }
+
   private async clarification(message: string, normalized: string, context: ExecutionContext, missing?: ModelClarificationField[]): Promise<ChatResult> {
     const conversationalContext = modelVisibleConversation(await this.conversation.list(context.session.id, 32));
     const reply = await this.responder.compose({
@@ -279,6 +325,7 @@ export class ChatOrchestrator {
 
   async executeApprovedPlan(plan: ToolPlan, context: ExecutionContext, trustedMeta: ToolExecutionMeta): Promise<ChatResult> {
     if (!trustedMeta.humanApproved || !trustedMeta.approvedOperationFingerprint) throw new CoreError("FORBIDDEN", "Approved plan execution requires trusted approval metadata", 403);
+    await this.assertApprovedPlanStillGrounded(plan, context);
     return this.executePlan(plan, context, trustedMeta);
   }
 
