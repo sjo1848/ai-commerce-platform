@@ -110,6 +110,9 @@ async function setup() {
     async route(message) {
       routeCount += 1;
       if (/cancel|anul/i.test(message)) {
+        if (/primera|101/i.test(message)) {
+          return { kind: "tool", plan: { toolId: "hms.cancelReservation", input: { bookingId: bookingA } } };
+        }
         return { kind: "tool", plan: { toolId: "hms.cancelReservation", input: { bookingId: "attacker-booking" } } };
       }
       return {
@@ -259,6 +262,32 @@ test("R2.5 ambiguous cancellation scope asks one-vs-all instead of letting the m
   assert.match(body.message, /una reserva específica o todas/i);
   assert.equal(body.approvalToken, undefined);
   assert.equal(env.mock.calls.filter((call) => call.method === "cancelReservation").length, cancelsBefore);
+});
+
+test("R2.5 a grounded single cancellation removes only that booking from the active group", async () => {
+  const env = await setup();
+  await createGroup(env, "multi-single-cancel-seed");
+  const cancelMessage = "cancelá la primera reserva";
+  const cancel = await request(env.handler, "/api/chat", { message: cancelMessage, sessionId: env.sessionId }, "single-from-group-1");
+  const pending = await cancel.json();
+  assert.equal(cancel.status, 409);
+  assert.match(pending.approvalSummary, new RegExp(bookingA));
+  assert.doesNotMatch(pending.approvalSummary, new RegExp(bookingB));
+
+  const approved = await request(env.handler, "/api/approve", {
+    message: cancelMessage,
+    sessionId: env.sessionId,
+    approvalToken: pending.approvalToken,
+  }, "single-from-group-1");
+  const body = await approved.json();
+  assert.equal(approved.status, 200);
+  assert.equal(body.data.bookingId, bookingA);
+
+  const followup = await request(env.handler, "/api/chat", { message: "cancelá todas las reservas", sessionId: env.sessionId }, "remaining-group-1");
+  const followupBody = await followup.json();
+  assert.equal(followup.status, 409);
+  assert.match(followupBody.approvalSummary, new RegExp(bookingB));
+  assert.doesNotMatch(followupBody.approvalSummary, new RegExp(bookingA));
 });
 
 test("R2.5 group cancellation is server-grounded, exact-approved, and never uses a forged model booking id", async () => {
