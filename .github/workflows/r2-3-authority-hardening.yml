@@ -1,0 +1,75 @@
+name: r2-3-authority-hardening
+
+on:
+  push:
+    branches:
+      - fix/acp-2.6.9-r2.3-late-critic-rework
+    paths:
+      - .github/workflows/r2-3-authority-hardening.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/acp-2.6.9-r2.3-late-critic-rework
+          fetch-depth: 0
+      - name: Apply booking authority and preference hardening
+        shell: python
+        run: |
+          from pathlib import Path
+
+          cs = Path('src/core/conversation-state.ts')
+          text = cs.read_text()
+          old = '''export function stripModelSemanticStatePatch(patch: ConversationStatePatch | undefined): ConversationStatePatch | undefined {
+            if (!patch) return undefined;
+            const safe: ConversationStatePatch = {};
+            if (patch.selectedRoomId !== undefined) safe.selectedRoomId = patch.selectedRoomId;
+            if (patch.selectedRoomIndex !== undefined) safe.selectedRoomIndex = patch.selectedRoomIndex;
+            if (patch.activeBookingId !== undefined) safe.activeBookingId = patch.activeBookingId;
+            return Object.keys(safe).length ? safe : undefined;
+          }'''.replace('          ', '')
+          new = '''export function stripModelSemanticStatePatch(patch: ConversationStatePatch | undefined): ConversationStatePatch | undefined {
+            if (!patch) return undefined;
+            const safe: ConversationStatePatch = {};
+            if (patch.selectedRoomId !== undefined) safe.selectedRoomId = patch.selectedRoomId;
+            if (patch.selectedRoomIndex !== undefined) safe.selectedRoomIndex = patch.selectedRoomIndex;
+            // Booking grounding is exclusively server/tool-owned. The model may use
+            // the current active booking for planning, but cannot mutate or clear it.
+            return Object.keys(safe).length ? safe : undefined;
+          }'''.replace('          ', '')
+          if old not in text:
+              raise SystemExit('stripModelSemanticStatePatch target not found')
+          text = text.replace(old, new)
+
+          old = 'const PREFERENCE_INSTRUCTION_OBJECT = /\\b(?:orden|ordenes|instruccion|instrucciones|regla|reglas|primera opcion|segunda opcion|tercera opcion)\\b/i;'
+          new = old + '\nconst PREFERENCE_OPERATIONAL_TERM = /\\b(?:reserv\\w*|booking|confirm\\w*|cancel\\w*|anul\\w*|aprob\\w*|autoriz\\w*|pag\\w*|cobr\\w*|proces\\w*|gestion\\w*)\\b/i;'
+          if old not in text:
+              raise SystemExit('preference pattern target not found')
+          text = text.replace(old, new)
+          old = '  if (PREFERENCE_INSTRUCTION_OBJECT.test(normalized)) return undefined;'
+          new = old + '\n  if (PREFERENCE_OPERATIONAL_TERM.test(normalized)) return undefined;'
+          if old not in text:
+              raise SystemExit('preference sanitizer target not found')
+          text = text.replace(old, new)
+          cs.write_text(text)
+
+          lm = Path('src/core/llm-model.ts')
+          text = lm.read_text()
+          text = text.replace('    activeBookingId: { type: ["string", "null"] },\n', '')
+          text = text.replace('  const allowed = new Set(["checkIn", "checkOut", "guests", "selectedRoomId", "selectedRoomIndex", "activeBookingId"]);', '  const allowed = new Set(["checkIn", "checkOut", "guests", "selectedRoomId", "selectedRoomIndex"]);')
+          text = text.replace('  if (value.activeBookingId === null || typeof value.activeBookingId === "string") patch.activeBookingId = value.activeBookingId;\n', '')
+          text = text.replace('      "selectedRoomId may only copy an exact roomId already present in CURRENT_CONVERSATION_STATE.availabilityRoomIds. Prefer selectedRoomIndex for ordinal references. activeBookingId may only refer to the current active booking already present in state; never invent IDs.",', '      "selectedRoomId may only copy an exact roomId already present in CURRENT_CONVERSATION_STATE.availabilityRoomIds. Prefer selectedRoomIndex for ordinal references. Booking grounding is server-owned: use the current active booking from state for cancellation planning, never invent or mutate booking IDs in statePatch.",')
+          lm.write_text(text)
+      - name: Commit patch and remove temporary workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/r2-3-authority-hardening.yml
+          git add src/core/conversation-state.ts src/core/llm-model.ts
+          git commit -m "fix(r2.3): make booking grounding strictly server-owned"
+          git push origin HEAD:fix/acp-2.6.9-r2.3-late-critic-rework
