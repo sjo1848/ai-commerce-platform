@@ -1,0 +1,77 @@
+name: r2-3-final-critic-fixes
+
+on:
+  push:
+    branches:
+      - fix/acp-2.6.9-r2.3-late-critic-rework
+    paths:
+      - .github/workflows/r2-3-final-critic-fixes.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/acp-2.6.9-r2.3-late-critic-rework
+          fetch-depth: 0
+      - name: Apply final critic fixes
+        shell: python
+        run: |
+          from pathlib import Path
+
+          p = Path('src/core/conversation-state.ts')
+          text = p.read_text()
+
+          old = '''function asksToClearPreferences(text: string): boolean {
+            if (/\\bsin preferencias\\b/i.test(text)) return true;
+            return positiveClearSegments(text).some((segment) => /\\bpreferencias?\\b/i.test(segment));
+          }'''.replace('          ', '')
+          new = '''function asksToClearPreferences(text: string): boolean {
+            if (/\\bsin preferencias\\b/i.test(text)) return true;
+            return positiveClearSegments(text).some((segment) => {
+              // A clear cue only owns the preferences target inside its own clause.
+              // `borra las fechas y muéstrame mis preferencias` must not erase them,
+              // while `borra las fechas y también mis preferencias` still may.
+              const ownedClause = segment.split(
+                /[;.!?]|\\by\\s+(?:muestr\\w*|mostr\\w*|decim\\w*|dime|consult\\w*|list\\w*|quiero|quisiera|prefiero)\\b/i,
+                1,
+              )[0] ?? segment;
+              return /\\bpreferencias?\\b/i.test(ownedClause);
+            });
+          }'''.replace('          ', '')
+          if old not in text:
+              raise SystemExit('clear-preferences target not found')
+          text = text.replace(old, new)
+
+          old = '''const PREFERENCE_CONTROL_VERB = /\\b(?:ignora|ignore|obedece|obedecer|cumple|cumplir|sigue|seguir|selecciona|seleccionar|elige|elegi|escoge|ejecuta|ejecutar|responde|responder|contesta|contestar|actua|actuar|comportate|haz|hace|haceme|recorda|recuerda|debes|tenes que|tienes que|confirma|confirmar|confirmes|reserva|reservar|cancela|cancelar|anula|anular|aprueba|aprobar|autoriza|autorizar)\\b/i;
+          const PREFERENCE_INSTRUCTION_OBJECT = /\\b(?:orden|ordenes|instruccion|instrucciones|regla|reglas|primera opcion|segunda opcion|tercera opcion)\\b/i;
+          const PREFERENCE_OPERATIONAL_TERM = /\\b(?:reserv\\w*|booking|confirm\\w*|cancel\\w*|anul\\w*|aprob\\w*|autoriz\\w*|pag\\w*|cobr\\w*|proces\\w*|gestion\\w*)\\b/i;'''.replace('          ', '')
+          new = '''const PREFERENCE_CONTROL_VERB = /\\b(?:ignora|ignore|obedece|obedecer|cumple|cumplir|sigue|seguir|selecciona|seleccionar|elige|elegi|escoge|ejecuta|ejecutar|responde|responder|contesta|contestar|actua|actuar|comportate|haz|hace|haceme|recorda|recuerda|debes|tenes que|tienes que|confirma|confirmar|confirmes|reservar|cancela|cancelar|anula|anular|aprueba|aprobar|autoriza|autorizar)\\b/i;
+          const PREFERENCE_INSTRUCTION_OBJECT = /\\b(?:orden|ordenes|instruccion|instrucciones|regla|reglas|primera opcion|segunda opcion|tercera opcion)\\b/i;
+          const PREFERENCE_OPERATIONAL_TERM = /\\b(?:booking|confirm\\w*|cancel\\w*|anul\\w*|aprob\\w*|autoriz\\w*|pag\\w*|cobr\\w*|proces\\w*|gestion\\w*)\\b/i;
+          const PREFERENCE_RESERVATION_COMMAND = /\\breserva\\b(?=\\s+(?:automaticamente|siempre|todas?|cualquier|la|las|el|los|mi|mis|una|un|primera|segunda|tercera|habitacion|opcion|para)\\b)/i;'''.replace('          ', '')
+          if old not in text:
+              raise SystemExit('preference patterns target not found')
+          text = text.replace(old, new)
+
+          old = '''  if (PREFERENCE_INSTRUCTION_OBJECT.test(normalized)) return undefined;
+            if (PREFERENCE_OPERATIONAL_TERM.test(normalized)) return undefined;'''.replace('          ', '')
+          new = '''  if (PREFERENCE_INSTRUCTION_OBJECT.test(normalized)) return undefined;
+            if (PREFERENCE_OPERATIONAL_TERM.test(normalized)) return undefined;
+            if (PREFERENCE_RESERVATION_COMMAND.test(normalized)) return undefined;'''.replace('          ', '')
+          if old not in text:
+              raise SystemExit('preference sanitizer insertion target not found')
+          text = text.replace(old, new)
+          p.write_text(text)
+      - name: Commit patch and remove temporary workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/r2-3-final-critic-fixes.yml
+          git add src/core/conversation-state.ts
+          git commit -m "fix(r2.3): scope preference clears and reservation commands"
+          git push origin HEAD:fix/acp-2.6.9-r2.3-late-critic-rework
