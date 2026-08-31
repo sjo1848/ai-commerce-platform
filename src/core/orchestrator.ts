@@ -134,6 +134,7 @@ function hasMultiRoomStatePatch(patch: import("./conversation-state.js").Convers
     patch.selectedRoomIds !== undefined
     || patch.selectedRoomIndexes !== undefined
     || patch.selectedRoomNumbers !== undefined
+    || patch.selectedRoomRelation !== undefined
     || patch.requestedRoomCount !== undefined
     || patch.roomOccupancy !== undefined
   ));

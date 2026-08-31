@@ -266,3 +266,36 @@ test("P1 invalid room correction cannot execute a tool using prior grounded room
   assert.deepEqual(canonicalSelectedRoomIds(after), [room101]);
   assert.equal(multiRoomConversationIssue(after), "which_rooms");
 });
+
+
+test("critic P2 ambiguous relational message cannot be acknowledged as accepted", async () => {
+  const stateStore = new InMemoryConversationStateStore();
+  const tenant = { id: "hotel-r24-rel-amb", slug: "hotel-r24-rel-amb", status: "active", allowedToolIds: [], toolPolicies: {} };
+  const actor = { id: "visitor-r24-rel-amb", type: "customer", roles: ["customer"], permissions: [] };
+  const runtime = new AgentCoreRuntime({
+    tenants: [tenant],
+    tools: [],
+    conversationStateStore: stateStore,
+    responder: new DeterministicGroundedResponder(),
+    model: {
+      async route() {
+        return {
+          kind: "message",
+          purpose: "acknowledgement",
+          message: "Perfecto, lo tengo.",
+          statePatch: { selectedRoomRelation: "both" },
+        };
+      },
+    },
+  });
+  const context = await runtime.createContext({ tenantId: tenant.id, actor, channel: "webchat" });
+  await stateStore.put(
+    context.session.id,
+    groundedAvailability(4, { tenantId: tenant.id, actorId: actor.id, sessionId: context.session.id }),
+  );
+
+  const result = await runtime.orchestrator.chat("Me quedo con las dos", context);
+  assert.match(result.message, /qué habitaciones|qué habitaci[oó]n|opci[oó]n/i);
+  assert.doesNotMatch(result.message, /perfecto, lo tengo/i);
+  assert.equal(multiRoomConversationIssue(await stateStore.get(context.session.id)), "which_rooms");
+});
