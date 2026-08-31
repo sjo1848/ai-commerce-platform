@@ -3,10 +3,10 @@
   "runtime_status": "IN_PROGRESS",
   "resume_authorized": true,
   "active_task": "ACP-2.6.9-R2-NATURAL-RECEPTIONIST",
-  "last_completed_task": "ACP-2.6.9-R2.3-DURABLE-SEMANTIC-MEMORY-V2",
-  "last_completed_head": "d6bb6577241156820bbf0596b1be505e40971133",
-  "current_substage": "2.6.9-R2.4_MULTI_ROOM_CONVERSATION_MODEL_ACTIVE",
-  "next_action": "QA_CRITIC_R2_4_MULTI_ROOM_CONVERSATION_MODEL",
+  "last_completed_task": "ACP-2.6.9-R2.4-MULTI-ROOM-CONVERSATION-MODEL",
+  "last_completed_head": "bb4b0ec42058fb7292091d3b8ec09e4b3650f6eb",
+  "current_substage": "2.6.9-R2.5_MULTI_ROOM_RESERVATION_ORCHESTRATION_ACTIVE",
+  "next_action": "DEFINE_AND_IMPLEMENT_R2_5_MULTI_ROOM_RESERVATION_ORCHESTRATION",
   "stop_reason": null,
   "product_decision": {
     "id": "DEC-002",
@@ -32,7 +32,6 @@
   "r2_2": {
     "status": "TECHNICAL_PASS_CLOSED",
     "artifact_head": "6fa16baa52f0d8417f2d86f2204832db8715ae58",
-    "artifact_ci_run": 33348863405,
     "integration_head": "5d65d9ff962cd0000fbf5ded1f0facc37efb9fe4",
     "post_merge_ci_run": 33348976381
   },
@@ -46,22 +45,31 @@
     "open_p0_p1_p2": "0/0/0"
   },
   "r2_4": {
-    "status": "IN_PROGRESS_BUILD_QA",
+    "status": "TECHNICAL_PASS_CLOSED",
     "contract": ".orchestration/contracts/ACP-2.6.9-R2.4-MULTI-ROOM-CONVERSATION.md",
-    "branch": "feat/acp-2.6.9-r2.4-multi-room-conversation",
-    "implementation_candidate": "262d8814c29fd677fdbf643e4b9845654a32e6a1",
-    "implementation_workflow_run": 33411873709,
-    "implementation_tests": "158/158_PASS",
+    "final_artifact_head": "c78cc2d1480f0baeb6525f5bfdb51d1bd7ea6229",
+    "final_tests": "165/165_PASS",
+    "critic_rework_run": 33419842184,
+    "qa": "PASS",
+    "pre_critic": "PASS",
+    "independent_critic": "PASS",
+    "independent_critic_comment": 5482058912,
+    "final_pr_ci_run": 33420205641,
+    "integration_pr": 46,
+    "integration_head": "bb4b0ec42058fb7292091d3b8ec09e4b3650f6eb",
+    "post_merge_ci_run": 33420280296,
     "multi_room_conversation_model": true,
     "multi_room_execution": false,
-    "qa": "ACTIVE",
-    "pre_critic": null,
-    "independent_critic": null,
-    "open_p0_p1_p2": "UNKNOWN_UNTIL_FRESH_QA"
+    "open_p0_p1_p2": "0/0/0",
+    "evidence": ".orchestration/evidence/ACP-2.6.9-R2.4-MULTI-ROOM-CONVERSATION.md"
   },
   "r2_5": {
-    "status": "BLOCKED_BY_R2_4",
-    "multi_room_execution": false
+    "status": "IN_PROGRESS_ACTIVE",
+    "multi_room_execution": false,
+    "qa": null,
+    "pre_critic": null,
+    "independent_critic": null,
+    "open_p0_p1_p2": "UNKNOWN_UNTIL_IMPLEMENTATION_QA"
   },
   "r2_sequence": [
     "2.6.9-R2.1_RECEPTIONIST_PRODUCT_CONTRACT_AND_ACCEPTANCE_CORPUS",
@@ -88,12 +96,11 @@
     "paid_expansion": false,
     "second_vertical": false,
     "whatsapp_required": false,
-    "multi_room_side_effects": false,
     "human_approval_required_for_mutations": true
   },
   "event": {
-    "id": "ACP-2.6.9-R2.4-BUILD-QA",
-    "type": "SUBSTAGE_ACTIVE",
-    "seq": 18
+    "id": "ACP-2.6.9-R2.4-TECHNICAL-PASS-CLOSED-R2.5-ACTIVE",
+    "type": "SUBSTAGE_TRANSITION",
+    "seq": 19
   }
 }
