@@ -25,6 +25,8 @@ export type ConversationState = {
   selectedRoomId?: string;
   activeBookingId?: string;
   bookingStatus?: string;
+  /** Server-owned revision for operational booking grounding; never model-authored. */
+  bookingStateRevision?: number;
 };
 export type ConversationStatePatch = {
   checkIn?: string | null;
@@ -125,6 +127,8 @@ function parseStoredState(value: unknown): ConversationState | undefined {
   if (activeBookingId) state.activeBookingId = activeBookingId;
   const bookingStatus = stringField(value.bookingStatus);
   if (bookingStatus) state.bookingStatus = bookingStatus;
+  if (validRevision(value.bookingStateRevision)) state.bookingStateRevision = value.bookingStateRevision;
+  else if (activeBookingId || bookingStatus) state.bookingStateRevision = 0;
 
   const rawMemory = isRecord(value.semanticMemory) ? value.semanticMemory : {};
   const memory = state.semanticMemory;
@@ -276,9 +280,18 @@ export function mergeConcurrentConversationState(current: ConversationState, inc
     }
   }
 
+  const leftIntent = leftMemory.activeIntent;
+  const rightIntent = rightMemory.activeIntent;
+  const intentConflict = Boolean(
+    leftIntent
+    && rightIntent
+    && leftIntent.revision === rightIntent.revision
+    && leftIntent.value !== rightIntent.value
+    && leftMemory.revision === rightMemory.revision
+  );
   const concurrentRevision = leftMemory.revision === rightMemory.revision && !sameStay(left, right);
   next.semanticMemory.revision = Math.max(leftMemory.revision, rightMemory.revision)
-    + (concurrentRevision || trueConcurrentConflict ? 1 : 0);
+    + (concurrentRevision || trueConcurrentConflict || intentConflict ? 1 : 0);
 
   const clearAt = Math.max(
     leftMemory.preferencesClearedAtRevision ?? -1,
@@ -298,8 +311,6 @@ export function mergeConcurrentConversationState(current: ConversationState, inc
   for (const item of rightMemory.preferences) addPreference(item, rightMemory.revision, true);
   next.semanticMemory.preferences = [...preferences.values()].sort((a, b) => a.revision - b.revision).slice(-8);
 
-  const leftIntent = leftMemory.activeIntent;
-  const rightIntent = rightMemory.activeIntent;
   if (leftIntent && rightIntent) {
     if (leftIntent.revision > rightIntent.revision) next.semanticMemory.activeIntent = structuredClone(leftIntent);
     else if (rightIntent.revision > leftIntent.revision) next.semanticMemory.activeIntent = structuredClone(rightIntent);
@@ -319,10 +330,22 @@ export function mergeConcurrentConversationState(current: ConversationState, inc
     }
   }
 
-  const bookingId = right.activeBookingId ?? left.activeBookingId;
-  if (bookingId) next.activeBookingId = bookingId;
-  if (right.activeBookingId && right.bookingStatus) next.bookingStatus = right.bookingStatus;
-  else if (left.bookingStatus) next.bookingStatus = left.bookingStatus;
+  const leftBookingRevision = left.bookingStateRevision ?? (left.activeBookingId || left.bookingStatus ? 0 : -1);
+  const rightBookingRevision = right.bookingStateRevision ?? (right.activeBookingId || right.bookingStatus ? 0 : -1);
+  const bookingConflict = leftBookingRevision >= 0
+    && leftBookingRevision === rightBookingRevision
+    && (left.activeBookingId !== right.activeBookingId || left.bookingStatus !== right.bookingStatus);
+  let bookingSource = right;
+  if (leftBookingRevision > rightBookingRevision) bookingSource = left;
+  else if (rightBookingRevision === leftBookingRevision) {
+    if (leftMemory.revision > rightMemory.revision) bookingSource = left;
+    else if (rightMemory.revision > leftMemory.revision) bookingSource = right;
+  }
+  const mergedBookingRevision = Math.max(leftBookingRevision, rightBookingRevision)
+    + (bookingConflict && leftMemory.revision === rightMemory.revision ? 1 : 0);
+  if (mergedBookingRevision >= 0) next.bookingStateRevision = mergedBookingRevision;
+  if (bookingSource.activeBookingId) next.activeBookingId = bookingSource.activeBookingId;
+  if (bookingSource.bookingStatus) next.bookingStatus = bookingSource.bookingStatus;
   return next;
 }
 
@@ -349,10 +372,13 @@ export class ConversationBackedStateStore implements ConversationStateStore {
     let state: ConversationState | undefined;
     for (const turn of turns) {
       if (turn.role !== "tool" || turn.toolId !== CONVERSATION_STATE_TOOL_ID) continue;
+      let parsed: ConversationState | undefined;
       try {
-        const parsed = parseStoredState(JSON.parse(turn.content));
-        if (parsed) state = state ? mergeConcurrentConversationState(state, parsed) : parsed;
-      } catch {}
+        parsed = parseStoredState(JSON.parse(turn.content));
+      } catch {
+        continue;
+      }
+      if (parsed) state = state ? mergeConcurrentConversationState(state, parsed) : parsed;
     }
     return state ?? emptyConversationState();
   }
@@ -610,23 +636,32 @@ function extractDateRange(message: string, current: Readonly<ConversationState>)
 }
 
 const CLEAR_CUE = /\b(?:olvida(?:te)?|olvides|borra|borres|limpia|limpies|quita|quites|saca|saques|dejemos\s+sin\s+definir|deja\s+sin\s+definir|resetea|resetees)\b/i;
-const NEGATED_CLEAR = /\bno\s+(?:te\s+)?(?:olvides|borres|limpies|quites|saques|resetees)\b/i;
 
-function positiveClear(text: string): boolean {
-  return CLEAR_CUE.test(text) && !NEGATED_CLEAR.test(text);
+function positiveClearSegments(text: string): string[] {
+  const matches = [...text.matchAll(new RegExp(CLEAR_CUE.source, "gi"))];
+  const result: string[] = [];
+  for (let index = 0; index < matches.length; index += 1) {
+    const match = matches[index];
+    const start = match?.index ?? 0;
+    const end = matches[index + 1]?.index ?? text.length;
+    const prefix = text.slice(Math.max(0, start - 16), start);
+    if (/\bno\s+(?:te\s+)?$/i.test(prefix)) continue;
+    result.push(text.slice(start, end));
+  }
+  return result;
 }
 
 function asksToClearDates(text: string): boolean {
-  return positiveClear(text) && /\b(?:fecha|fechas|entrada|salida|checkin|checkout)\b/i.test(text);
+  return positiveClearSegments(text).some((segment) => /\b(?:fecha|fechas|entrada|salida|checkin|checkout)\b/i.test(segment));
 }
 
 function asksToClearGuests(text: string): boolean {
-  return positiveClear(text) && /\b(?:personas|huespedes|cantidad|cuantos\s+somos)\b/i.test(text);
+  return positiveClearSegments(text).some((segment) => /\b(?:personas|huespedes|cantidad|cuantos\s+somos)\b/i.test(segment));
 }
 
 function asksToClearPreferences(text: string): boolean {
-  return !NEGATED_CLEAR.test(text)
-    && /\b(?:sin preferencias|olvida(?:te)?\s+(?:de\s+)?mis\s+preferencias|borra\s+(?:mis\s+)?preferencias|limpia\s+(?:mis\s+)?preferencias)\b/i.test(text);
+  if (/\bsin preferencias\b/i.test(text)) return true;
+  return positiveClearSegments(text).some((segment) => /\bpreferencias?\b/i.test(segment));
 }
 
 function affirmedPartySegment(text: string): string {
@@ -655,7 +690,8 @@ function extractGuests(
     const count = parseCountToken(match[1]);
     if (count === undefined) continue;
     const rawCategory = match[2] ?? "";
-    categories.set(/adult/.test(rawCategory) ? "adult" : /bebe/.test(rawCategory) ? "infant" : "child", count);
+    const category = /adult/.test(rawCategory) ? "adult" : /bebe/.test(rawCategory) ? "infant" : "child";
+    categories.set(category, (categories.get(category) ?? 0) + count);
   }
   if (categories.size) {
     const total = [...categories.values()].reduce((sum, count) => sum + count, 0);
@@ -686,7 +722,7 @@ function extractGuests(
 
 const PREFERENCE_TRUSTED_OR_META = /\b(?:admin|administrador|permiso|permission|role|rol|tool|herramienta|system|sistema|prompt|aprobad|approved|operationtoken|idempotency|tenantid|hotelid|actorid|guestid)\b/i;
 const PREFERENCE_INSTRUCTION_CONTEXT = /\b(?:a partir de ahora|desde ahora|de ahora en adelante|en adelante|proximo turno|siguiente turno|cada turno|futuros? turnos?)\b/i;
-const PREFERENCE_CONTROL_VERB = /\b(?:ignora|ignore|obedece|obedecer|cumple|cumplir|sigue|seguir|selecciona|seleccionar|elige|elegi|escoge|ejecuta|ejecutar|responde|responder|contesta|contestar|actua|actuar|comportate|haz|hace|haceme|recorda|recuerda|debes|tenes que|tienes que)\b/i;
+const PREFERENCE_CONTROL_VERB = /\b(?:ignora|ignore|obedece|obedecer|cumple|cumplir|sigue|seguir|selecciona|seleccionar|elige|elegi|escoge|ejecuta|ejecutar|responde|responder|contesta|contestar|actua|actuar|comportate|haz|hace|haceme|recorda|recuerda|debes|tenes que|tienes que|confirma|confirmar|confirmes|reserva|reservar|cancela|cancelar|anula|anular|aprueba|aprobar|autoriza|autorizar)\b/i;
 const PREFERENCE_INSTRUCTION_OBJECT = /\b(?:orden|ordenes|instruccion|instrucciones|regla|reglas|primera opcion|segunda opcion|tercera opcion)\b/i;
 
 function sanitizePreference(value: string): string | undefined {
@@ -877,8 +913,18 @@ export function updateConversationStateFromTool(
   }
 
   const bookingId = stringField(rawData.bookingId);
-  if (toolId === "hms.createReservation" && bookingId) next.activeBookingId = bookingId;
   const status = stringField(rawData.status);
-  if ((toolId === "hms.createReservation" || toolId === "hms.cancelReservation") && status) next.bookingStatus = status;
+  if (toolId === "hms.createReservation" || toolId === "hms.cancelReservation") {
+    const resultingBookingId = toolId === "hms.createReservation" && bookingId
+      ? bookingId
+      : normalized.activeBookingId;
+    const resultingStatus = status ?? normalized.bookingStatus;
+    const bookingChanged = resultingBookingId !== normalized.activeBookingId
+      || resultingStatus !== normalized.bookingStatus;
+    if (bookingChanged) next.bookingStateRevision = (normalized.bookingStateRevision ?? 0) + 1;
+    else if (normalized.bookingStateRevision !== undefined) next.bookingStateRevision = normalized.bookingStateRevision;
+    if (toolId === "hms.createReservation" && bookingId) next.activeBookingId = bookingId;
+    if (status) next.bookingStatus = status;
+  }
   return next;
 }
