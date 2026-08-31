@@ -34,7 +34,6 @@ const STATE_PATCH_SCHEMA: JsonSchema = {
     guests: { type: ["integer", "null"], minimum: 1, maximum: 20 },
     selectedRoomId: { type: ["string", "null"] },
     selectedRoomIndex: { type: ["integer", "null"], minimum: 1, maximum: 25 },
-    activeBookingId: { type: ["string", "null"] },
   },
 };
 
@@ -126,7 +125,7 @@ function clarificationDecision(value: Record<string, unknown>): { reason: Clarif
 
 function parseStatePatch(value: unknown): ConversationStatePatch | undefined {
   if (!isRecord(value)) return undefined;
-  const allowed = new Set(["checkIn", "checkOut", "guests", "selectedRoomId", "selectedRoomIndex", "activeBookingId"]);
+  const allowed = new Set(["checkIn", "checkOut", "guests", "selectedRoomId", "selectedRoomIndex"]);
   if (Object.keys(value).some((key) => !allowed.has(key))) return undefined;
   const patch: ConversationStatePatch = {};
   if (value.checkIn === null || typeof value.checkIn === "string") patch.checkIn = value.checkIn;
@@ -134,7 +133,6 @@ function parseStatePatch(value: unknown): ConversationStatePatch | undefined {
   if (value.guests === null || Number.isInteger(value.guests)) patch.guests = value.guests as number | null;
   if (value.selectedRoomId === null || typeof value.selectedRoomId === "string") patch.selectedRoomId = value.selectedRoomId;
   if (value.selectedRoomIndex === null || Number.isInteger(value.selectedRoomIndex)) patch.selectedRoomIndex = value.selectedRoomIndex as number | null;
-  if (value.activeBookingId === null || typeof value.activeBookingId === "string") patch.activeBookingId = value.activeBookingId;
   return patch;
 }
 
@@ -254,7 +252,7 @@ export class LLMModelRouter implements ModelRouter {
       "statePatch records only facts learned or explicitly changed in the CURRENT user message. For dates/guest count it is only a routing hint: Core independently owns durable semantic persistence and ignores ungrounded model memory patches.",
       "For dates and guest count, combine the current message with CURRENT_CONVERSATION_STATE. Never ask again for a value already present there unless the user explicitly changed it ambiguously.",
       "For a reference to a displayed option by list position (first/primera, second/segunda, third/tercera, last/última, etc.), put the ONE-BASED list position in statePatch.selectedRoomIndex. The Core resolves that index to an authoritative roomId. Do not ask which room when the ordinal is unambiguous.",
-      "selectedRoomId may only copy an exact roomId already present in CURRENT_CONVERSATION_STATE.availabilityRoomIds. Prefer selectedRoomIndex for ordinal references. activeBookingId may only refer to the current active booking already present in state; never invent IDs.",
+      "selectedRoomId may only copy an exact roomId already present in CURRENT_CONVERSATION_STATE.availabilityRoomIds. Prefer selectedRoomIndex for ordinal references. Booking grounding is server-owned: use the current active booking from state for cancellation planning, never invent or mutate booking IDs in statePatch.",
       "FIRST identify current intent. THEN apply only requirements for that capability.",
       "Pure greeting with no operational request => kind=message, clarificationReason=greeting, missing=[], toolId='', input={}, statePatch={}.",
       "Pure thanks/social acknowledgement with no operational request => kind=message, clarificationReason=social, missing=[], toolId='', input={}, statePatch={}.",
