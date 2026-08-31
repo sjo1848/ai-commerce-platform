@@ -15,6 +15,8 @@ export type ConversationMemoryScope = {
 export type SemanticFactProvenance = {
   source: SemanticMemorySource;
   revision: number;
+  /** Explicit absence is durable so stale tool results cannot resurrect a cleared fact. */
+  cleared?: true;
 };
 
 export type StoredPreference = {
@@ -32,6 +34,7 @@ export type SemanticMemory = {
     guests?: SemanticFactProvenance;
   };
   preferences: StoredPreference[];
+  preferencesClearedAtRevision?: number;
   activeIntent?: {
     value: ConversationIntent;
     source: "user" | "server" | "legacy";
@@ -86,12 +89,6 @@ export function emptyConversationState(): ConversationState {
   return { stay: {}, semanticMemory: emptySemanticMemory(), availabilityRoomIds: [] };
 }
 
-export class InMemoryConversationStateStore implements ConversationStateStore {
-  private readonly items = new Map<string, ConversationState>();
-  async get(sessionId: string): Promise<ConversationState> { return structuredClone(this.items.get(sessionId) ?? emptyConversationState()); }
-  async put(sessionId: string, state: ConversationState): Promise<void> { this.items.set(sessionId, structuredClone(state)); }
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -122,7 +119,15 @@ function ensureSemanticMemory(state: ConversationState): SemanticMemory {
 
 function parseProvenance(value: unknown): SemanticFactProvenance | undefined {
   if (!isRecord(value) || !validMemorySource(value.source) || !validRevision(value.revision)) return undefined;
-  return { source: value.source, revision: value.revision };
+  return {
+    source: value.source,
+    revision: value.revision,
+    ...(value.cleared === true ? { cleared: true as const } : {}),
+  };
+}
+
+function normalizeText(value: string): string {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
 }
 
 function parseStoredState(value: unknown): ConversationState | undefined {
@@ -144,6 +149,7 @@ function parseStoredState(value: unknown): ConversationState | undefined {
   const rawMemory = isRecord(raw.semanticMemory) ? raw.semanticMemory : {};
   const memory = emptySemanticMemory();
   if (validRevision(rawMemory.revision)) memory.revision = rawMemory.revision;
+  if (validRevision(rawMemory.preferencesClearedAtRevision)) memory.preferencesClearedAtRevision = rawMemory.preferencesClearedAtRevision;
   if (isRecord(rawMemory.scope)) {
     const tenantId = stringField(rawMemory.scope.tenantId);
     const actorId = stringField(rawMemory.scope.actorId);
@@ -154,9 +160,9 @@ function parseStoredState(value: unknown): ConversationState | undefined {
   const checkInMeta = parseProvenance(rawMemoryStay.checkIn);
   const checkOutMeta = parseProvenance(rawMemoryStay.checkOut);
   const guestsMeta = parseProvenance(rawMemoryStay.guests);
-  if (checkInMeta && state.stay.checkIn) memory.stay.checkIn = checkInMeta;
-  if (checkOutMeta && state.stay.checkOut) memory.stay.checkOut = checkOutMeta;
-  if (guestsMeta && state.stay.guests !== undefined) memory.stay.guests = guestsMeta;
+  if (checkInMeta && (state.stay.checkIn || checkInMeta.cleared)) memory.stay.checkIn = checkInMeta;
+  if (checkOutMeta && (state.stay.checkOut || checkOutMeta.cleared)) memory.stay.checkOut = checkOutMeta;
+  if (guestsMeta && (state.stay.guests !== undefined || guestsMeta.cleared)) memory.stay.guests = guestsMeta;
 
   if (Array.isArray(rawMemory.preferences)) {
     const seen = new Set<string>();
@@ -166,6 +172,7 @@ function parseStoredState(value: unknown): ConversationState | undefined {
       const source = item.source === "user" || item.source === "legacy" ? item.source : undefined;
       const revision = validRevision(item.revision) ? item.revision : undefined;
       if (!preference || !source || revision === undefined) continue;
+      if (memory.preferencesClearedAtRevision !== undefined && revision <= memory.preferencesClearedAtRevision) continue;
       const key = normalizeText(preference);
       if (seen.has(key)) continue;
       seen.add(key);
@@ -188,19 +195,120 @@ function parseStoredState(value: unknown): ConversationState | undefined {
   return state;
 }
 
+function sameScope(a: ConversationMemoryScope | undefined, b: ConversationMemoryScope | undefined): boolean {
+  if (!a || !b) return true;
+  return a.tenantId === b.tenantId && a.actorId === b.actorId && a.sessionId === b.sessionId;
+}
+
+function sameStay(a: ConversationState, b: ConversationState): boolean {
+  return a.stay.checkIn === b.stay.checkIn && a.stay.checkOut === b.stay.checkOut && a.stay.guests === b.stay.guests;
+}
+
+function factValue(state: ConversationState, field: keyof StayState): string | number | undefined {
+  return state.stay[field];
+}
+
+function applyChosenFact(
+  target: ConversationState,
+  source: ConversationState,
+  field: keyof StayState,
+  meta: SemanticFactProvenance | undefined,
+): void {
+  if (!meta) return;
+  target.semanticMemory.stay[field] = structuredClone(meta);
+  if (meta.cleared) {
+    delete target.stay[field];
+    return;
+  }
+  const value = factValue(source, field);
+  if (value === undefined) return;
+  if (field === "guests") target.stay.guests = Number(value);
+  else target.stay[field] = String(value);
+}
+
+/**
+ * Merge full state snapshots by semantic field revision instead of last-writer-wins.
+ * This makes overlapping requests additive when they learned different facts, while
+ * equal-revision conflicts follow durable append order (the incoming snapshot wins).
+ */
+export function mergeConcurrentConversationState(current: ConversationState, incoming: ConversationState): ConversationState {
+  const left = structuredClone(current);
+  const right = structuredClone(incoming);
+  const leftMemory = ensureSemanticMemory(left);
+  const rightMemory = ensureSemanticMemory(right);
+  if (!sameScope(leftMemory.scope, rightMemory.scope)) throw new CoreError("FORBIDDEN", "Conversation semantic memory scope mismatch", 403);
+
+  const next = emptyConversationState();
+  next.semanticMemory.scope = rightMemory.scope ? structuredClone(rightMemory.scope) : leftMemory.scope ? structuredClone(leftMemory.scope) : undefined;
+  const equalRevisionSemanticConflict = leftMemory.revision === rightMemory.revision && !sameStay(left, right);
+  next.semanticMemory.revision = Math.max(leftMemory.revision, rightMemory.revision) + (equalRevisionSemanticConflict ? 1 : 0);
+
+  for (const field of ["checkIn", "checkOut", "guests"] as const) {
+    const leftMeta = leftMemory.stay[field];
+    const rightMeta = rightMemory.stay[field];
+    if (!leftMeta && !rightMeta) continue;
+    if (!rightMeta || (leftMeta && leftMeta.revision > rightMeta.revision)) applyChosenFact(next, left, field, leftMeta);
+    else applyChosenFact(next, right, field, rightMeta);
+  }
+
+  const clearAt = Math.max(leftMemory.preferencesClearedAtRevision ?? -1, rightMemory.preferencesClearedAtRevision ?? -1);
+  if (clearAt >= 0) next.semanticMemory.preferencesClearedAtRevision = clearAt;
+  const preferences = new Map<string, StoredPreference>();
+  for (const item of [...leftMemory.preferences, ...rightMemory.preferences]) {
+    if (item.revision <= clearAt) continue;
+    const key = normalizeText(item.value);
+    const existing = preferences.get(key);
+    if (!existing || item.revision >= existing.revision) preferences.set(key, structuredClone(item));
+  }
+  next.semanticMemory.preferences = [...preferences.values()].sort((a, b) => a.revision - b.revision).slice(-8);
+
+  const leftIntent = leftMemory.activeIntent;
+  const rightIntent = rightMemory.activeIntent;
+  if (rightIntent && (!leftIntent || rightIntent.revision >= leftIntent.revision)) next.semanticMemory.activeIntent = structuredClone(rightIntent);
+  else if (leftIntent) next.semanticMemory.activeIntent = structuredClone(leftIntent);
+
+  const rightIsStale = rightMemory.revision < leftMemory.revision;
+  const mergedStayDiffersFromLeft = !sameStay(next, left);
+  const mergedStayDiffersFromRight = !sameStay(next, right);
+  if (!rightIsStale && !equalRevisionSemanticConflict && !mergedStayDiffersFromRight) {
+    next.availabilityRoomIds = [...right.availabilityRoomIds];
+    if (right.selectedRoomId && next.availabilityRoomIds.includes(right.selectedRoomId)) next.selectedRoomId = right.selectedRoomId;
+  } else if (!mergedStayDiffersFromLeft) {
+    next.availabilityRoomIds = [...left.availabilityRoomIds];
+    if (left.selectedRoomId && next.availabilityRoomIds.includes(left.selectedRoomId)) next.selectedRoomId = left.selectedRoomId;
+  }
+
+  // Booking ownership is operational truth; a stale semantic snapshot must not erase it.
+  next.activeBookingId = right.activeBookingId ?? left.activeBookingId;
+  if (right.activeBookingId && left.activeBookingId && right.activeBookingId !== left.activeBookingId) next.activeBookingId = left.activeBookingId;
+  if (next.activeBookingId === right.activeBookingId && right.bookingStatus) next.bookingStatus = right.bookingStatus;
+  else if (left.bookingStatus) next.bookingStatus = left.bookingStatus;
+
+  return next;
+}
+
+export class InMemoryConversationStateStore implements ConversationStateStore {
+  private readonly items = new Map<string, ConversationState>();
+  async get(sessionId: string): Promise<ConversationState> { return structuredClone(this.items.get(sessionId) ?? emptyConversationState()); }
+  async put(sessionId: string, state: ConversationState): Promise<void> {
+    const current = this.items.get(sessionId);
+    this.items.set(sessionId, structuredClone(current ? mergeConcurrentConversationState(current, state) : state));
+  }
+}
+
 export class ConversationBackedStateStore implements ConversationStateStore {
   constructor(private readonly conversation: ConversationStore) {}
   async get(sessionId: string): Promise<ConversationState> {
     const turns = await this.conversation.list(sessionId, 32);
-    for (let index = turns.length - 1; index >= 0; index -= 1) {
-      const turn = turns[index];
-      if (turn?.role !== "tool" || turn.toolId !== CONVERSATION_STATE_TOOL_ID) continue;
+    let merged: ConversationState | undefined;
+    for (const turn of turns) {
+      if (turn.role !== "tool" || turn.toolId !== CONVERSATION_STATE_TOOL_ID) continue;
       try {
         const parsed = parseStoredState(JSON.parse(turn.content));
-        if (parsed) return parsed;
+        if (parsed) merged = merged ? mergeConcurrentConversationState(merged, parsed) : parsed;
       } catch {}
     }
-    return emptyConversationState();
+    return merged ?? emptyConversationState();
   }
   async put(sessionId: string, state: ConversationState): Promise<void> {
     await this.conversation.append(sessionId, { role: "tool", toolId: CONVERSATION_STATE_TOOL_ID, content: JSON.stringify(state) });
@@ -216,12 +324,6 @@ export function bindConversationStateScope(current: ConversationState, scope: Co
   }
   memory.scope = { ...scope };
   return next;
-}
-
-function semanticSourceForStay(existing: SemanticFactProvenance | undefined, incoming: SemanticMemorySource): SemanticMemorySource {
-  if (incoming === "tool" && existing?.source === "user") return "user";
-  if (incoming === "legacy" && existing) return existing.source;
-  return incoming;
 }
 
 export type ApplyConversationStateOptions = {
@@ -245,34 +347,38 @@ export function applyConversationStatePatch(
 
   const setDate = (field: "checkIn" | "checkOut", value: string | null | undefined) => {
     if (value === undefined) return;
+    const existingMeta = memory.stay[field];
+    if (source === "tool" && existingMeta?.source === "user") return;
     if (value === null) {
-      if (next.stay[field] !== undefined || memory.stay[field] !== undefined) {
+      const alreadyCleared = existingMeta?.cleared === true && existingMeta.source === source;
+      if (!alreadyCleared || next.stay[field] !== undefined) {
         delete next.stay[field];
         clearedStay.add(field);
       }
       return;
     }
     if (!validIsoDate(value)) return;
-    const existingMeta = memory.stay[field];
     const provenanceUpgrade = source === "user" && existingMeta?.source !== "user";
-    if (next.stay[field] !== value || provenanceUpgrade || !existingMeta) {
+    if (next.stay[field] !== value || provenanceUpgrade || !existingMeta || existingMeta.cleared) {
       next.stay[field] = value;
       changedStay.add(field);
     }
   };
   const setGuests = (value: number | null | undefined) => {
     if (value === undefined) return;
+    const existingMeta = memory.stay.guests;
+    if (source === "tool" && existingMeta?.source === "user") return;
     if (value === null) {
-      if (next.stay.guests !== undefined || memory.stay.guests !== undefined) {
+      const alreadyCleared = existingMeta?.cleared === true && existingMeta.source === source;
+      if (!alreadyCleared || next.stay.guests !== undefined) {
         delete next.stay.guests;
         clearedStay.add("guests");
       }
       return;
     }
     if (!validGuests(value)) return;
-    const existingMeta = memory.stay.guests;
     const provenanceUpgrade = source === "user" && existingMeta?.source !== "user";
-    if (next.stay.guests !== value || provenanceUpgrade || !existingMeta) {
+    if (next.stay.guests !== value || provenanceUpgrade || !existingMeta || existingMeta.cleared) {
       next.stay.guests = value;
       changedStay.add("guests");
     }
@@ -302,7 +408,7 @@ export function applyConversationStatePatch(
   const cleanPreferences = (options.preferences ?? []).map(sanitizePreference).filter((value): value is string => Boolean(value));
   const existingPreferenceKeys = new Set(memory.preferences.map((item) => normalizeText(item.value)));
   const addedPreferences = cleanPreferences.filter((value) => !existingPreferenceKeys.has(normalizeText(value)));
-  const preferencesWillClear = Boolean(options.clearPreferences && memory.preferences.length > 0);
+  const preferencesWillClear = Boolean(options.clearPreferences && (memory.preferences.length > 0 || memory.preferencesClearedAtRevision === undefined));
   const activeIntentWillClear = options.activeIntent === null && memory.activeIntent !== undefined;
   const activeIntentSource = options.activeIntentSource ?? (source === "server" ? "server" : source === "legacy" ? "legacy" : "user");
   const activeIntentWillChange = options.activeIntent !== undefined && options.activeIntent !== null && (
@@ -313,15 +419,13 @@ export function applyConversationStatePatch(
   if (semanticChanged) {
     const revision = memory.revision + 1;
     memory.revision = revision;
-    for (const field of clearedStay) delete memory.stay[field];
-    for (const field of changedStay) {
-      const existing = memory.stay[field];
-      memory.stay[field] = { source: semanticSourceForStay(existing, source), revision };
+    for (const field of clearedStay) memory.stay[field] = { source, revision, cleared: true };
+    for (const field of changedStay) memory.stay[field] = { source, revision };
+    if (preferencesWillClear) {
+      memory.preferences = [];
+      memory.preferencesClearedAtRevision = revision;
     }
-    if (preferencesWillClear) memory.preferences = [];
-    for (const preference of addedPreferences) {
-      memory.preferences.push({ value: preference, source: "user", revision });
-    }
+    for (const preference of addedPreferences) memory.preferences.push({ value: preference, source: "user", revision });
     if (memory.preferences.length > 8) memory.preferences = memory.preferences.slice(-8);
     if (activeIntentWillClear) delete memory.activeIntent;
     if (options.activeIntent !== undefined && options.activeIntent !== null && activeIntentWillChange) {
@@ -329,10 +433,6 @@ export function applyConversationStatePatch(
     }
   }
   return next;
-}
-
-function normalizeText(value: string): string {
-  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
 }
 
 const MONTHS: Readonly<Record<string, number>> = {
@@ -371,18 +471,20 @@ function addUtcDays(iso: string, days: number): string | undefined {
 function extractDateRange(message: string, current: Readonly<ConversationState>): { checkIn: string; checkOut: string } | undefined {
   const text = normalizeText(message);
   const iso = message.match(/\b\d{4}-\d{2}-\d{2}\b/g)?.filter(validIsoDate) ?? [];
-  if (iso.length >= 2) return { checkIn: iso[0]!, checkOut: iso[1]! };
+  if (iso.length >= 2) return { checkIn: iso[iso.length - 2]!, checkOut: iso[iso.length - 1]! };
 
   const slashMatches = [...text.matchAll(/\b(\d{1,2})\/(\d{1,2})\/(\d{4})\b/g)];
   if (slashMatches.length >= 2) {
-    const first = slashMatches[0]!; const second = slashMatches[1]!;
+    const first = slashMatches[slashMatches.length - 2]!;
+    const second = slashMatches[slashMatches.length - 1]!;
     const checkIn = formatIsoDate(Number(first[3]), Number(first[2]), Number(first[1]));
     const checkOut = formatIsoDate(Number(second[3]), Number(second[2]), Number(second[1]));
     if (checkIn && checkOut && checkOut > checkIn) return { checkIn, checkOut };
   }
 
   const monthNames = Object.keys(MONTHS).join("|");
-  const fullRange = text.match(new RegExp(`\\b(?:del|de)?\\s*(\\d{1,2})\\s+(?:al|a)\\s+(\\d{1,2})\\s+de\\s+(${monthNames})\\s+(?:de\\s+)?(\\d{4})\\b`, "i"));
+  const fullRanges = [...text.matchAll(new RegExp(`\\b(?:del|de)?\\s*(\\d{1,2})\\s+(?:al|a)\\s+(\\d{1,2})\\s+de\\s+(${monthNames})\\s+(?:de\\s+)?(\\d{4})\\b`, "gi"))];
+  const fullRange = fullRanges.at(-1);
   if (fullRange) {
     const month = MONTHS[fullRange[3]!];
     const checkIn = month ? formatIsoDate(Number(fullRange[4]), month, Number(fullRange[1])) : undefined;
@@ -390,8 +492,10 @@ function extractDateRange(message: string, current: Readonly<ConversationState>)
     if (checkIn && checkOut && checkOut > checkIn) return { checkIn, checkOut };
   }
 
-  const start = text.match(new RegExp(`\\b(?:a partir del|desde el|desde)\\s+(\\d{1,2})\\s+de\\s+(${monthNames})\\s+(?:de\\s+)?(\\d{4})\\b`, "i"));
-  const nights = text.match(new RegExp(`\\b(${NUMBER_TOKEN})\\s+noches?\\b`, "i"));
+  const starts = [...text.matchAll(new RegExp(`\\b(?:a partir del|desde el|desde)\\s+(\\d{1,2})\\s+de\\s+(${monthNames})\\s+(?:de\\s+)?(\\d{4})\\b`, "gi"))];
+  const nightsMatches = [...text.matchAll(new RegExp(`\\b(${NUMBER_TOKEN})\\s+noches?\\b`, "gi"))];
+  const start = starts.at(-1);
+  const nights = nightsMatches.at(-1);
   if (start && nights) {
     const month = MONTHS[start[2]!];
     const count = parseCountToken(nights[1]);
@@ -400,7 +504,8 @@ function extractDateRange(message: string, current: Readonly<ConversationState>)
     if (checkIn && checkOut) return { checkIn, checkOut };
   }
 
-  const partialRange = text.match(/\b(?:del|de)?\s*(\d{1,2})\s+(?:al|a)\s+(\d{1,2})\b/i);
+  const partialRanges = [...text.matchAll(/\b(?:del|de)?\s*(\d{1,2})\s+(?:al|a)\s+(\d{1,2})\b/gi)];
+  const partialRange = partialRanges.at(-1);
   if (partialRange && current.stay.checkIn && current.stay.checkOut && current.stay.checkIn.slice(0, 7) === current.stay.checkOut.slice(0, 7)) {
     const year = Number(current.stay.checkIn.slice(0, 4));
     const month = Number(current.stay.checkIn.slice(5, 7));
@@ -411,26 +516,49 @@ function extractDateRange(message: string, current: Readonly<ConversationState>)
   return undefined;
 }
 
-const CLEAR_CUE = /\b(?:olvida|olvidate|borra|limpia|quita|saca|dejemos\s+sin\s+definir|deja\s+sin\s+definir|resetea)\b/i;
-function asksToClearDates(text: string): boolean { return CLEAR_CUE.test(text) && /\b(?:fecha|fechas|entrada|salida|checkin|checkout)\b/i.test(text); }
-function asksToClearGuests(text: string): boolean { return CLEAR_CUE.test(text) && /\b(?:personas|huespedes|cantidad|cuantos\s+somos)\b/i.test(text); }
-function asksToClearPreferences(text: string): boolean { return /\b(?:sin preferencias|olvida(?:te)?\s+(?:de\s+)?mis\s+preferencias|borra\s+(?:mis\s+)?preferencias|limpia\s+(?:mis\s+)?preferencias)\b/i.test(text); }
+const CLEAR_CUE = /\b(?:olvida(?:te)?|olvides|borra|borres|limpia|limpies|quita|quites|saca|saques|dejemos\s+sin\s+definir|deja\s+sin\s+definir|resetea|resetees)\b/i;
+const NEGATED_CLEAR_CUE = /\bno\s+(?:te\s+)?(?:olvides|olvides|borres|limpies|quites|saques|resetees)\b/i;
+function hasPositiveClearCue(text: string): boolean { return CLEAR_CUE.test(text) && !NEGATED_CLEAR_CUE.test(text); }
+function asksToClearDates(text: string): boolean { return hasPositiveClearCue(text) && /\b(?:fecha|fechas|entrada|salida|checkin|checkout)\b/i.test(text); }
+function asksToClearGuests(text: string): boolean { return hasPositiveClearCue(text) && /\b(?:personas|huespedes|cantidad|cuantos\s+somos)\b/i.test(text); }
+function asksToClearPreferences(text: string): boolean { return !NEGATED_CLEAR_CUE.test(text) && /\b(?:sin preferencias|olvida(?:te)?\s+(?:de\s+)?mis\s+preferencias|borra\s+(?:mis\s+)?preferencias|limpia\s+(?:mis\s+)?preferencias)\b/i.test(text); }
 
 function extractGuests(message: string, dateRange: { checkIn: string; checkOut: string } | undefined): number | undefined {
   const text = normalizeText(message);
+
+  const categoryPattern = new RegExp(`\\b(${NUMBER_TOKEN})\\s+(adultos?|adultas?|ninos?|ninas?|menores?|chicos?|chicas?|bebes?)\\b`, "gi");
+  const categoryLatest = new Map<string, { count: number; index: number }>();
+  for (const match of text.matchAll(categoryPattern)) {
+    const count = parseCountToken(match[1]);
+    if (count === undefined) continue;
+    const rawCategory = match[2] ?? "";
+    const category = /adult/.test(rawCategory) ? "adult" : /bebe/.test(rawCategory) ? "infant" : "child";
+    categoryLatest.set(category, { count, index: match.index ?? 0 });
+  }
+  if (categoryLatest.size > 0) {
+    const total = [...categoryLatest.values()].reduce((sum, item) => sum + item.count, 0);
+    if (validGuests(total)) return total;
+  }
+
+  const candidates: Array<{ count: number; index: number }> = [];
   const patterns = [
-    new RegExp(`\\b(?:somos|seremos|seriamos|vamos\\s+a\\s+ser|viajamos)\\s+(${NUMBER_TOKEN})\\b`, "i"),
-    new RegExp(`\\b(${NUMBER_TOKEN})\\s+(?:personas?|huespedes?|pax|adultos?)\\b`, "i"),
+    new RegExp(`\\b(?:somos|seremos|seriamos|vamos\\s+a\\s+ser|viajamos)\\s+(${NUMBER_TOKEN})\\b`, "gi"),
+    new RegExp(`\\b(${NUMBER_TOKEN})\\s+(?:personas?|huespedes?|pax)\\b`, "gi"),
   ];
   for (const pattern of patterns) {
-    const match = text.match(pattern);
-    const count = parseCountToken(match?.[1]);
-    if (count !== undefined) return count;
+    for (const match of text.matchAll(pattern)) {
+      const count = parseCountToken(match[1]);
+      if (count !== undefined) candidates.push({ count, index: match.index ?? 0 });
+    }
   }
+  candidates.sort((a, b) => a.index - b.index);
+  const latest = candidates.at(-1);
+  if (latest) return latest.count;
+
   const hasRoomAllocationCue = /\b(?:habitacion|room)\s*(?:nro\.?\s*)?\d+/i.test(text) || /\b(?:la|el)\s+\d{2,4}\s+para\b/i.test(text);
   if (!hasRoomAllocationCue && (dateRange || /\b(?:estadia|alojarnos|quedarnos|hospedarnos)\b/i.test(text))) {
-    const match = text.match(new RegExp(`\\bpara\\s+(${NUMBER_TOKEN})\\b`, "i"));
-    const count = parseCountToken(match?.[1]);
+    const matches = [...text.matchAll(new RegExp(`\\bpara\\s+(${NUMBER_TOKEN})\\b`, "gi"))];
+    const count = parseCountToken(matches.at(-1)?.[1]);
     if (count !== undefined) return count;
   }
   return undefined;
@@ -441,16 +569,17 @@ function sanitizePreference(value: string): string | undefined {
   if (!compact || compact.length > 120 || /[{}<>]/.test(compact)) return undefined;
   const normalized = normalizeText(compact);
   if (/\b(?:ignora|ignore|admin|administrador|permiso|permission|role|rol|tool|herramienta|system|sistema|prompt|aprobad|approved|operationtoken|idempotency|tenantid|hotelid|actorid|guestid)\b/i.test(normalized)) return undefined;
+  if (/\b(?:a partir de ahora|desde ahora|siempre|automaticamente|selecciona|seleccionar|elige|elegi|escoge|ejecuta|ejecutar|responde|responder|recorda|recuerda|debes|tenes que|tienes que|primera opcion|segunda opcion|tercera opcion)\b/i.test(normalized)) return undefined;
   if (!/\b(?:cama|matrimonial|individual|silenc|tranquil|planta\s+baja|piso\s+alto|vista|acces|mascota|fumador|no\s+fumador|cerca|lejos|ascensor)\b/i.test(normalized)) return undefined;
   return compact;
 }
 
 function extractPreferences(message: string): string[] {
-  const matches = [...message.matchAll(/\b(?:prefiero|preferimos|quisiera|quisieramos|me gustaria|nos gustaria|quiero|queremos)\s+([^.!?]{1,160})/gi)];
+  const matches = [...message.matchAll(/\b(?:prefiero|preferimos|quisiera|quisi[eé]ramos|me gustar[ií]a|nos gustar[ií]a|quiero|queremos)\s+([^.!?]{1,160})/giu)];
   const result: string[] = [];
   for (const match of matches) {
     let candidate = match[1]?.trim() ?? "";
-    candidate = candidate.split(/\s+y\s+(?:reservar|cotizar|saber|ver|consultar)\b/i)[0]?.trim() ?? candidate;
+    candidate = candidate.split(/\s+y\s+(?:reservar|cotizar|saber|ver|consultar)\b/iu)[0]?.trim() ?? candidate;
     const clean = sanitizePreference(candidate);
     if (clean) result.push(clean);
     if (result.length >= 3) break;
@@ -463,7 +592,9 @@ export function inferConversationIntent(message: string, dateRange?: { checkIn: 
   if (/\b(?:cancelar|cancela|anular|anula)\b/i.test(text) && /\b(?:reserva|booking)\b/i.test(text)) return "cancellation";
   if (/\b(?:reservar|reserva|confirmar\s+(?:la\s+)?reserva|hacer\s+(?:una\s+)?reserva)\b/i.test(text)) return "reservation";
   if (/\b(?:cotiz|precio|tarifa|cuanto\s+sale|cuanto\s+cuesta)\b/i.test(text)) return "quote";
-  if (/\b(?:dispon|hay\s+lugar|tenes\s+lugar|que\s+tenes|que\s+hay|aloj|qued|hosped|estadia|somos|seremos|seriamos)\b/i.test(text)) return "availability";
+  const explicitParty = new RegExp(`\\b(?:somos|seremos|seriamos|vamos\\s+a\\s+ser|viajamos)\\s+${NUMBER_TOKEN}\\b`, "i").test(text)
+    || new RegExp(`\\b${NUMBER_TOKEN}\\s+(?:personas?|huespedes?|pax|adultos?|ninos?|menores?)\\b`, "i").test(text);
+  if (/\b(?:dispon|hay\s+lugar|tenes\s+lugar|que\s+tenes|que\s+hay|aloj|qued|hosped|estadia)\b/i.test(text) || explicitParty) return "availability";
   if (dateRange && /\b(?:quiero|queremos|necesito|necesitamos|vamos|ir|viajar)\b/i.test(text)) return "availability";
   return undefined;
 }
@@ -561,15 +692,27 @@ export function enrichPlanInputFromState(toolId: string, input: unknown, state: 
   return raw;
 }
 
+function userOwnedConflict(current: ConversationState, field: keyof StayState, candidate: string | number | undefined): boolean {
+  const meta = current.semanticMemory.stay[field];
+  if (meta?.source !== "user" || candidate === undefined) return false;
+  if (meta.cleared) return true;
+  return factValue(current, field) !== candidate;
+}
+
 export function updateConversationStateFromTool(current: ConversationState, toolId: string, input: unknown, data: unknown): ConversationState {
   const rawInput = input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : {};
   const rawData = data && typeof data === "object" && !Array.isArray(data) ? data as Record<string, unknown> : {};
   const checkIn = stringField(rawInput.checkIn) ?? stringField(rawData.start);
   const checkOut = stringField(rawInput.checkOut) ?? stringField(rawData.end);
+  const guests = validGuests(rawInput.guests) ? Number(rawInput.guests) : undefined;
+  const staleStayTool = userOwnedConflict(current, "checkIn", checkIn)
+    || userOwnedConflict(current, "checkOut", checkOut)
+    || userOwnedConflict(current, "guests", guests);
+
   const stayPatch: ConversationStatePatch = {};
   if (validIsoDate(checkIn)) stayPatch.checkIn = checkIn;
   if (validIsoDate(checkOut)) stayPatch.checkOut = checkOut;
-  if (validGuests(rawInput.guests)) stayPatch.guests = Number(rawInput.guests);
+  if (guests !== undefined) stayPatch.guests = guests;
   const toolIntent = conversationIntentForTool(toolId);
   const semanticOptions: ApplyConversationStateOptions = { semanticSource: "tool" };
   if (toolIntent) {
@@ -579,12 +722,17 @@ export function updateConversationStateFromTool(current: ConversationState, tool
   const next = applyConversationStatePatch(current, stayPatch, semanticOptions);
 
   if (toolId === "hms.checkAvailability") {
-    const rooms = Array.isArray(rawData.rooms) ? rawData.rooms : [];
-    next.availabilityRoomIds = rooms.map((room) => room && typeof room === "object" ? stringField((room as Record<string, unknown>).id) : undefined).filter((v): v is string => Boolean(v)).slice(0, 25);
-    if (next.selectedRoomId && !next.availabilityRoomIds.includes(next.selectedRoomId)) delete next.selectedRoomId;
+    if (staleStayTool) {
+      next.availabilityRoomIds = [];
+      delete next.selectedRoomId;
+    } else {
+      const rooms = Array.isArray(rawData.rooms) ? rawData.rooms : [];
+      next.availabilityRoomIds = rooms.map((room) => room && typeof room === "object" ? stringField((room as Record<string, unknown>).id) : undefined).filter((v): v is string => Boolean(v)).slice(0, 25);
+      if (next.selectedRoomId && !next.availabilityRoomIds.includes(next.selectedRoomId)) delete next.selectedRoomId;
+    }
   }
   const roomId = stringField(rawInput.roomId) ?? stringField(rawData.roomId);
-  if ((toolId === "hms.getQuote" || toolId === "hms.createReservation") && roomId && (next.availabilityRoomIds.length === 0 || next.availabilityRoomIds.includes(roomId))) next.selectedRoomId = roomId;
+  if (!staleStayTool && (toolId === "hms.getQuote" || toolId === "hms.createReservation") && roomId && (next.availabilityRoomIds.length === 0 || next.availabilityRoomIds.includes(roomId))) next.selectedRoomId = roomId;
   const bookingId = stringField(rawData.bookingId);
   if (toolId === "hms.createReservation" && bookingId) next.activeBookingId = bookingId;
   const bookingStatus = stringField(rawData.status);
