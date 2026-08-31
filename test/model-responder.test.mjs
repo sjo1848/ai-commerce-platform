@@ -28,6 +28,21 @@ function availabilityInput() {
   };
 }
 
+function manyRoomsInput() {
+  return {
+    toolId: "hms.checkAvailability",
+    data: {
+      rooms: Array.from({ length: 7 }, (_, index) => ({
+        roomNumber: String(101 + index),
+        roomType: "DOBLE",
+        priceCents: 25000 + index * 1000,
+      })),
+    },
+    conversation: [],
+    context,
+  };
+}
+
 test("deterministic responder renders availability using only tool result", async () => {
   const responder = new DeterministicGroundedResponder();
   const message = await responder.compose(availabilityInput());
@@ -41,6 +56,29 @@ test("R2.2 envelope exposes server-owned fact placeholders", () => {
   assert.deepEqual(envelope.requiredKeys, ["room_count", "room_1_number", "room_1_price_per_night"]);
   assert.equal(envelope.facts.find((fact) => fact.key === "room_1_number")?.value, "101");
   assert.equal(envelope.facts.find((fact) => fact.key === "room_1_type")?.value, "DOBLE");
+});
+
+test("availability envelope preserves total count when only five room details are exposed", () => {
+  const envelope = buildGroundedFactEnvelope("hms.checkAvailability", manyRoomsInput().data);
+  assert.equal(envelope.facts.find((fact) => fact.key === "room_count")?.value, "7");
+  assert.equal(envelope.facts.find((fact) => fact.key === "shown_room_count")?.value, "5");
+  assert.equal(envelope.facts.some((fact) => fact.key === "room_6_number"), false);
+  assert.ok(envelope.requiredKeys.includes("shown_room_count"));
+});
+
+test("truncated natural availability must disclose that only a subset is shown", async () => {
+  const good = new LLMGroundedResponder(provider({
+    text: "Hay {{room_count}} opciones disponibles. Te muestro las primeras {{shown_room_count}}: {{room_1_number}} a {{room_1_price_per_night}}, {{room_2_number}} a {{room_2_price_per_night}}, {{room_3_number}} a {{room_3_price_per_night}}, {{room_4_number}} a {{room_4_price_per_night}} y {{room_5_number}} a {{room_5_price_per_night}}.",
+  }));
+  const bad = new LLMGroundedResponder(provider({
+    text: "Hay {{room_count}} opciones disponibles: {{shown_room_count}}, {{room_1_number}} a {{room_1_price_per_night}}, {{room_2_number}} a {{room_2_price_per_night}}, {{room_3_number}} a {{room_3_price_per_night}}, {{room_4_number}} a {{room_4_price_per_night}} y {{room_5_number}} a {{room_5_price_per_night}}.",
+  }));
+  const goodMessage = await good.compose(manyRoomsInput());
+  assert.match(goodMessage, /Hay 7 opciones/i);
+  assert.match(goodMessage, /muestro las primeras 5/i);
+  const badMessage = await bad.compose(manyRoomsInput());
+  assert.match(badMessage, /Encontré 7 opciones disponibles/i);
+  assert.match(badMessage, /primeras 5/i);
 });
 
 test("LLM responder writes natural prose while Core hydrates authoritative placeholders", async () => {
