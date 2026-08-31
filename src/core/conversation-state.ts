@@ -15,7 +15,6 @@ export type ConversationMemoryScope = {
 export type SemanticFactProvenance = {
   source: SemanticMemorySource;
   revision: number;
-  /** Explicit absence is durable so stale tool results cannot resurrect a cleared fact. */
   cleared?: true;
 };
 
@@ -62,7 +61,6 @@ export type ConversationStatePatch = {
   checkOut?: string | null;
   guests?: number | null;
   selectedRoomId?: string | null;
-  /** One-based ordinal selected by the LLM; Core resolves it against authoritative HMS candidates. */
   selectedRoomIndex?: number | null;
   activeBookingId?: string | null;
 };
@@ -93,28 +91,41 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function stringField(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function validRevision(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) >= 0;
+}
+
+function validGuests(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) >= 1 && Number(value) <= 20;
+}
+
+function validSelectionIndex(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) >= 1 && Number(value) <= 25;
+}
+
 function validIsoDate(value: unknown): value is string {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const year = Number(value.slice(0, 4));
   const month = Number(value.slice(5, 7));
   const day = Number(value.slice(8, 10));
-  const timestamp = Date.UTC(year, month - 1, day);
-  const date = new Date(timestamp);
+  const date = new Date(Date.UTC(year, month - 1, day));
   return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
 }
-function validGuests(value: unknown): value is number { return Number.isInteger(value) && Number(value) >= 1 && Number(value) <= 20; }
-function validSelectionIndex(value: unknown): value is number { return Number.isInteger(value) && Number(value) >= 1 && Number(value) <= 25; }
-function stringField(value: unknown): string | undefined { return typeof value === "string" && value.trim() ? value.trim() : undefined; }
-function validRevision(value: unknown): value is number { return Number.isInteger(value) && Number(value) >= 0; }
-function validMemorySource(value: unknown): value is SemanticMemorySource { return value === "user" || value === "tool" || value === "server" || value === "legacy"; }
-function validIntent(value: unknown): value is ConversationIntent { return value === "availability" || value === "quote" || value === "reservation" || value === "cancellation"; }
 
-function ensureSemanticMemory(state: ConversationState): SemanticMemory {
-  const candidate = (state as ConversationState & { semanticMemory?: SemanticMemory }).semanticMemory;
-  if (candidate && isRecord(candidate) && validRevision(candidate.revision) && isRecord(candidate.stay) && Array.isArray(candidate.preferences)) return candidate;
-  const memory = emptySemanticMemory();
-  (state as ConversationState & { semanticMemory: SemanticMemory }).semanticMemory = memory;
-  return memory;
+function validMemorySource(value: unknown): value is SemanticMemorySource {
+  return value === "user" || value === "tool" || value === "server" || value === "legacy";
+}
+
+function validIntent(value: unknown): value is ConversationIntent {
+  return value === "availability" || value === "quote" || value === "reservation" || value === "cancellation";
+}
+
+function normalizeText(value: string): string {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
 }
 
 function parseProvenance(value: unknown): SemanticFactProvenance | undefined {
@@ -126,28 +137,26 @@ function parseProvenance(value: unknown): SemanticFactProvenance | undefined {
   };
 }
 
-function normalizeText(value: string): string {
-  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
-}
-
 function parseStoredState(value: unknown): ConversationState | undefined {
   if (!isRecord(value)) return undefined;
-  const raw = value;
-  const rawStay = isRecord(raw.stay) ? raw.stay : {};
   const state = emptyConversationState();
+  const rawStay = isRecord(value.stay) ? value.stay : {};
   if (validIsoDate(rawStay.checkIn)) state.stay.checkIn = rawStay.checkIn;
   if (validIsoDate(rawStay.checkOut)) state.stay.checkOut = rawStay.checkOut;
   if (validGuests(rawStay.guests)) state.stay.guests = Number(rawStay.guests);
-  if (Array.isArray(raw.availabilityRoomIds)) state.availabilityRoomIds = raw.availabilityRoomIds.map(stringField).filter((v): v is string => Boolean(v)).slice(0, 25);
-  const selectedRoomId = stringField(raw.selectedRoomId);
+
+  if (Array.isArray(value.availabilityRoomIds)) {
+    state.availabilityRoomIds = value.availabilityRoomIds.map(stringField).filter((item): item is string => Boolean(item)).slice(0, 25);
+  }
+  const selectedRoomId = stringField(value.selectedRoomId);
   if (selectedRoomId && state.availabilityRoomIds.includes(selectedRoomId)) state.selectedRoomId = selectedRoomId;
-  const activeBookingId = stringField(raw.activeBookingId);
+  const activeBookingId = stringField(value.activeBookingId);
   if (activeBookingId) state.activeBookingId = activeBookingId;
-  const bookingStatus = stringField(raw.bookingStatus);
+  const bookingStatus = stringField(value.bookingStatus);
   if (bookingStatus) state.bookingStatus = bookingStatus;
 
-  const rawMemory = isRecord(raw.semanticMemory) ? raw.semanticMemory : {};
-  const memory = emptySemanticMemory();
+  const rawMemory = isRecord(value.semanticMemory) ? value.semanticMemory : {};
+  const memory = state.semanticMemory;
   if (validRevision(rawMemory.revision)) memory.revision = rawMemory.revision;
   if (validRevision(rawMemory.preferencesClearedAtRevision)) memory.preferencesClearedAtRevision = rawMemory.preferencesClearedAtRevision;
   if (isRecord(rawMemory.scope)) {
@@ -156,30 +165,31 @@ function parseStoredState(value: unknown): ConversationState | undefined {
     const sessionId = stringField(rawMemory.scope.sessionId);
     if (tenantId && actorId && sessionId) memory.scope = { tenantId, actorId, sessionId };
   }
+
   const rawMemoryStay = isRecord(rawMemory.stay) ? rawMemory.stay : {};
-  const checkInMeta = parseProvenance(rawMemoryStay.checkIn);
-  const checkOutMeta = parseProvenance(rawMemoryStay.checkOut);
-  const guestsMeta = parseProvenance(rawMemoryStay.guests);
-  if (checkInMeta && (state.stay.checkIn || checkInMeta.cleared)) memory.stay.checkIn = checkInMeta;
-  if (checkOutMeta && (state.stay.checkOut || checkOutMeta.cleared)) memory.stay.checkOut = checkOutMeta;
-  if (guestsMeta && (state.stay.guests !== undefined || guestsMeta.cleared)) memory.stay.guests = guestsMeta;
+  for (const field of ["checkIn", "checkOut", "guests"] as const) {
+    const meta = parseProvenance(rawMemoryStay[field]);
+    const hasValue = field === "guests" ? state.stay.guests !== undefined : state.stay[field] !== undefined;
+    if (meta && (hasValue || meta.cleared)) memory.stay[field] = meta;
+  }
 
   if (Array.isArray(rawMemory.preferences)) {
     const seen = new Set<string>();
-    for (const item of rawMemory.preferences) {
-      if (!isRecord(item)) continue;
-      const preference = stringField(item.value);
-      const source = item.source === "user" || item.source === "legacy" ? item.source : undefined;
-      const revision = validRevision(item.revision) ? item.revision : undefined;
-      if (!preference || !source || revision === undefined) continue;
+    for (const candidate of rawMemory.preferences) {
+      if (!isRecord(candidate)) continue;
+      const pref = stringField(candidate.value);
+      const source = candidate.source === "user" || candidate.source === "legacy" ? candidate.source : undefined;
+      const revision = validRevision(candidate.revision) ? candidate.revision : undefined;
+      if (!pref || !source || revision === undefined) continue;
       if (memory.preferencesClearedAtRevision !== undefined && revision <= memory.preferencesClearedAtRevision) continue;
-      const key = normalizeText(preference);
+      const key = normalizeText(pref);
       if (seen.has(key)) continue;
       seen.add(key);
-      memory.preferences.push({ value: preference.slice(0, 120), source, revision });
+      memory.preferences.push({ value: pref.slice(0, 120), source, revision });
       if (memory.preferences.length >= 8) break;
     }
   }
+
   if (isRecord(rawMemory.activeIntent) && validIntent(rawMemory.activeIntent.value) && validRevision(rawMemory.activeIntent.revision)) {
     const source = rawMemory.activeIntent.source;
     if (source === "user" || source === "server" || source === "legacy") {
@@ -190,8 +200,11 @@ function parseStoredState(value: unknown): ConversationState | undefined {
   if (state.stay.checkIn && !memory.stay.checkIn) memory.stay.checkIn = { source: "legacy", revision: memory.revision };
   if (state.stay.checkOut && !memory.stay.checkOut) memory.stay.checkOut = { source: "legacy", revision: memory.revision };
   if (state.stay.guests !== undefined && !memory.stay.guests) memory.stay.guests = { source: "legacy", revision: memory.revision };
-  state.semanticMemory = memory;
   return state;
+}
+
+function normalizeConversationState(value: ConversationState): ConversationState {
+  return parseStoredState(value) ?? emptyConversationState();
 }
 
 function sameScope(a: ConversationMemoryScope | undefined, b: ConversationMemoryScope | undefined): boolean {
@@ -207,8 +220,7 @@ function factValue(state: ConversationState, field: keyof StayState): string | n
   return state.stay[field];
 }
 
-function applyChosenFact(target: ConversationState, source: ConversationState, field: keyof StayState, meta: SemanticFactProvenance | undefined): void {
-  if (!meta) return;
+function putChosenFact(target: ConversationState, source: ConversationState, field: keyof StayState, meta: SemanticFactProvenance): void {
   target.semanticMemory.stay[field] = structuredClone(meta);
   if (meta.cleared) {
     delete target.stay[field];
@@ -221,25 +233,33 @@ function applyChosenFact(target: ConversationState, source: ConversationState, f
 }
 
 export function mergeConcurrentConversationState(current: ConversationState, incoming: ConversationState): ConversationState {
-  const left = structuredClone(current);
-  const right = structuredClone(incoming);
-  const leftMemory = ensureSemanticMemory(left);
-  const rightMemory = ensureSemanticMemory(right);
+  const left = normalizeConversationState(current);
+  const right = normalizeConversationState(incoming);
+  const leftMemory = left.semanticMemory;
+  const rightMemory = right.semanticMemory;
   if (!sameScope(leftMemory.scope, rightMemory.scope)) throw new CoreError("FORBIDDEN", "Conversation semantic memory scope mismatch", 403);
 
   const next = emptyConversationState();
   const mergedScope = rightMemory.scope ?? leftMemory.scope;
   if (mergedScope) next.semanticMemory.scope = structuredClone(mergedScope);
-  const equalRevisionSemanticConflict = leftMemory.revision === rightMemory.revision && !sameStay(left, right);
-  next.semanticMemory.revision = Math.max(leftMemory.revision, rightMemory.revision) + (equalRevisionSemanticConflict ? 1 : 0);
 
+  let sameRevisionConflict = false;
   for (const field of ["checkIn", "checkOut", "guests"] as const) {
     const leftMeta = leftMemory.stay[field];
     const rightMeta = rightMemory.stay[field];
     if (!leftMeta && !rightMeta) continue;
-    if (!rightMeta || (leftMeta && leftMeta.revision > rightMeta.revision)) applyChosenFact(next, left, field, leftMeta);
-    else applyChosenFact(next, right, field, rightMeta);
+    if (!rightMeta || (leftMeta && leftMeta.revision > rightMeta.revision)) {
+      putChosenFact(next, left, field, leftMeta!);
+      continue;
+    }
+    if (leftMeta && leftMeta.revision === rightMeta.revision) {
+      const leftValue = leftMeta.cleared ? "__cleared__" : factValue(left, field);
+      const rightValue = rightMeta.cleared ? "__cleared__" : factValue(right, field);
+      if (leftValue !== rightValue) sameRevisionConflict = true;
+    }
+    putChosenFact(next, right, field, rightMeta);
   }
+  next.semanticMemory.revision = Math.max(leftMemory.revision, rightMemory.revision) + (sameRevisionConflict ? 1 : 0);
 
   const clearAt = Math.max(leftMemory.preferencesClearedAtRevision ?? -1, rightMemory.preferencesClearedAtRevision ?? -1);
   if (clearAt >= 0) next.semanticMemory.preferencesClearedAtRevision = clearAt;
@@ -247,8 +267,8 @@ export function mergeConcurrentConversationState(current: ConversationState, inc
   for (const item of [...leftMemory.preferences, ...rightMemory.preferences]) {
     if (item.revision <= clearAt) continue;
     const key = normalizeText(item.value);
-    const existing = preferences.get(key);
-    if (!existing || item.revision >= existing.revision) preferences.set(key, structuredClone(item));
+    const previous = preferences.get(key);
+    if (!previous || item.revision >= previous.revision) preferences.set(key, structuredClone(item));
   }
   next.semanticMemory.preferences = [...preferences.values()].sort((a, b) => a.revision - b.revision).slice(-8);
 
@@ -257,32 +277,33 @@ export function mergeConcurrentConversationState(current: ConversationState, inc
   if (rightIntent && (!leftIntent || rightIntent.revision >= leftIntent.revision)) next.semanticMemory.activeIntent = structuredClone(rightIntent);
   else if (leftIntent) next.semanticMemory.activeIntent = structuredClone(leftIntent);
 
-  const rightIsStale = rightMemory.revision < leftMemory.revision;
-  const mergedStayDiffersFromLeft = !sameStay(next, left);
-  const mergedStayDiffersFromRight = !sameStay(next, right);
-  if (!rightIsStale && !equalRevisionSemanticConflict && !mergedStayDiffersFromRight) {
+  const mergedEqualsRight = sameStay(next, right);
+  const mergedEqualsLeft = sameStay(next, left);
+  if (mergedEqualsRight && !sameRevisionConflict) {
     next.availabilityRoomIds = [...right.availabilityRoomIds];
     if (right.selectedRoomId && next.availabilityRoomIds.includes(right.selectedRoomId)) next.selectedRoomId = right.selectedRoomId;
-  } else if (!mergedStayDiffersFromLeft) {
+  } else if (mergedEqualsLeft) {
     next.availabilityRoomIds = [...left.availabilityRoomIds];
     if (left.selectedRoomId && next.availabilityRoomIds.includes(left.selectedRoomId)) next.selectedRoomId = left.selectedRoomId;
   }
 
-  const mergedBookingId = right.activeBookingId ?? left.activeBookingId;
-  if (mergedBookingId) next.activeBookingId = mergedBookingId;
-  if (right.activeBookingId && left.activeBookingId && right.activeBookingId !== left.activeBookingId) next.activeBookingId = left.activeBookingId;
-  if (next.activeBookingId === right.activeBookingId && right.bookingStatus) next.bookingStatus = right.bookingStatus;
+  const bookingId = right.activeBookingId ?? left.activeBookingId;
+  if (bookingId) next.activeBookingId = bookingId;
+  if (right.activeBookingId && right.bookingStatus) next.bookingStatus = right.bookingStatus;
   else if (left.bookingStatus) next.bookingStatus = left.bookingStatus;
-
   return next;
 }
 
 export class InMemoryConversationStateStore implements ConversationStateStore {
   private readonly items = new Map<string, ConversationState>();
-  async get(sessionId: string): Promise<ConversationState> { return structuredClone(this.items.get(sessionId) ?? emptyConversationState()); }
+  async get(sessionId: string): Promise<ConversationState> {
+    const existing = this.items.get(sessionId);
+    return existing ? normalizeConversationState(existing) : emptyConversationState();
+  }
   async put(sessionId: string, state: ConversationState): Promise<void> {
+    const incoming = normalizeConversationState(state);
     const current = this.items.get(sessionId);
-    this.items.set(sessionId, structuredClone(current ? mergeConcurrentConversationState(current, state) : state));
+    this.items.set(sessionId, structuredClone(current ? mergeConcurrentConversationState(current, incoming) : incoming));
   }
 }
 
@@ -290,29 +311,29 @@ export class ConversationBackedStateStore implements ConversationStateStore {
   constructor(private readonly conversation: ConversationStore) {}
   async get(sessionId: string): Promise<ConversationState> {
     const turns = await this.conversation.list(sessionId, 32);
-    let merged: ConversationState | undefined;
+    let state: ConversationState | undefined;
     for (const turn of turns) {
       if (turn.role !== "tool" || turn.toolId !== CONVERSATION_STATE_TOOL_ID) continue;
       try {
         const parsed = parseStoredState(JSON.parse(turn.content));
-        if (parsed) merged = merged ? mergeConcurrentConversationState(merged, parsed) : parsed;
+        if (parsed) state = state ? mergeConcurrentConversationState(state, parsed) : parsed;
       } catch {}
     }
-    return merged ?? emptyConversationState();
+    return state ?? emptyConversationState();
   }
   async put(sessionId: string, state: ConversationState): Promise<void> {
-    await this.conversation.append(sessionId, { role: "tool", toolId: CONVERSATION_STATE_TOOL_ID, content: JSON.stringify(state) });
+    const normalized = normalizeConversationState(state);
+    await this.conversation.append(sessionId, { role: "tool", toolId: CONVERSATION_STATE_TOOL_ID, content: JSON.stringify(normalized) });
   }
 }
 
 export function bindConversationStateScope(current: ConversationState, scope: ConversationMemoryScope): ConversationState {
-  const next = structuredClone(current);
-  const memory = ensureSemanticMemory(next);
-  const existing = memory.scope;
+  const next = normalizeConversationState(current);
+  const existing = next.semanticMemory.scope;
   if (existing && (existing.tenantId !== scope.tenantId || existing.actorId !== scope.actorId || existing.sessionId !== scope.sessionId)) {
     throw new CoreError("FORBIDDEN", "Conversation semantic memory scope mismatch", 403);
   }
-  memory.scope = { ...scope };
+  next.semanticMemory.scope = { ...scope };
   return next;
 }
 
@@ -325,48 +346,45 @@ export type ApplyConversationStateOptions = {
 };
 
 export function applyConversationStatePatch(current: ConversationState, patch: ConversationStatePatch | undefined, options: ApplyConversationStateOptions = {}): ConversationState {
-  const next = structuredClone(current);
-  const memory = ensureSemanticMemory(next);
+  const next = normalizeConversationState(current);
+  const memory = next.semanticMemory;
   const source = options.semanticSource ?? "legacy";
-  const changedStay = new Set<keyof StayState>();
-  const clearedStay = new Set<keyof StayState>();
+  const changed = new Set<keyof StayState>();
+  const cleared = new Set<keyof StayState>();
 
   const setDate = (field: "checkIn" | "checkOut", value: string | null | undefined) => {
     if (value === undefined) return;
-    const existingMeta = memory.stay[field];
-    if (source === "tool" && existingMeta?.source === "user") return;
+    const previous = memory.stay[field];
+    if (source === "tool" && previous?.source === "user") return;
     if (value === null) {
-      const alreadyCleared = existingMeta?.cleared === true && existingMeta.source === source;
-      if (!alreadyCleared || next.stay[field] !== undefined) {
+      if (next.stay[field] !== undefined || !previous?.cleared || previous.source !== source) {
         delete next.stay[field];
-        clearedStay.add(field);
+        cleared.add(field);
       }
       return;
     }
     if (!validIsoDate(value)) return;
-    const provenanceUpgrade = source === "user" && existingMeta?.source !== "user";
-    if (next.stay[field] !== value || provenanceUpgrade || !existingMeta || existingMeta.cleared) {
+    if (next.stay[field] !== value || previous?.cleared || !previous || (source === "user" && previous.source !== "user")) {
       next.stay[field] = value;
-      changedStay.add(field);
+      changed.add(field);
     }
   };
+
   const setGuests = (value: number | null | undefined) => {
     if (value === undefined) return;
-    const existingMeta = memory.stay.guests;
-    if (source === "tool" && existingMeta?.source === "user") return;
+    const previous = memory.stay.guests;
+    if (source === "tool" && previous?.source === "user") return;
     if (value === null) {
-      const alreadyCleared = existingMeta?.cleared === true && existingMeta.source === source;
-      if (!alreadyCleared || next.stay.guests !== undefined) {
+      if (next.stay.guests !== undefined || !previous?.cleared || previous.source !== source) {
         delete next.stay.guests;
-        clearedStay.add("guests");
+        cleared.add("guests");
       }
       return;
     }
     if (!validGuests(value)) return;
-    const provenanceUpgrade = source === "user" && existingMeta?.source !== "user";
-    if (next.stay.guests !== value || provenanceUpgrade || !existingMeta || existingMeta.cleared) {
+    if (next.stay.guests !== value || previous?.cleared || !previous || (source === "user" && previous.source !== "user")) {
       next.stay.guests = value;
-      changedStay.add("guests");
+      changed.add("guests");
     }
   };
 
@@ -375,44 +393,43 @@ export function applyConversationStatePatch(current: ConversationState, patch: C
   setGuests(patch?.guests);
 
   if (patch?.selectedRoomId === null || patch?.selectedRoomIndex === null) delete next.selectedRoomId;
-  const selectionIndex = patch?.selectedRoomIndex;
-  if (validSelectionIndex(selectionIndex)) {
-    const candidate = next.availabilityRoomIds[selectionIndex - 1];
-    if (candidate) next.selectedRoomId = candidate;
+  if (validSelectionIndex(patch?.selectedRoomIndex)) {
+    const room = next.availabilityRoomIds[patch!.selectedRoomIndex! - 1];
+    if (room) next.selectedRoomId = room;
     else delete next.selectedRoomId;
   } else {
-    const selected = stringField(patch?.selectedRoomId);
-    if (selected && next.availabilityRoomIds.includes(selected)) next.selectedRoomId = selected;
+    const room = stringField(patch?.selectedRoomId);
+    if (room && next.availabilityRoomIds.includes(room)) next.selectedRoomId = room;
   }
 
   if (patch?.activeBookingId === null) delete next.activeBookingId;
   else {
-    const booking = stringField(patch?.activeBookingId);
-    if (booking && booking === current.activeBookingId) next.activeBookingId = booking;
+    const bookingId = stringField(patch?.activeBookingId);
+    if (bookingId && bookingId === current.activeBookingId) next.activeBookingId = bookingId;
   }
 
-  const cleanPreferences = (options.preferences ?? []).map(sanitizePreference).filter((value): value is string => Boolean(value));
+  const cleanPreferences = (options.preferences ?? []).map(sanitizePreference).filter((item): item is string => Boolean(item));
   const existingPreferenceKeys = new Set(memory.preferences.map((item) => normalizeText(item.value)));
-  const addedPreferences = cleanPreferences.filter((value) => !existingPreferenceKeys.has(normalizeText(value)));
-  const preferencesWillClear = Boolean(options.clearPreferences && (memory.preferences.length > 0 || memory.preferencesClearedAtRevision === undefined));
-  const activeIntentWillClear = options.activeIntent === null && memory.activeIntent !== undefined;
+  const addedPreferences = cleanPreferences.filter((item) => !existingPreferenceKeys.has(normalizeText(item)));
+  const clearPreferences = Boolean(options.clearPreferences && (memory.preferences.length > 0 || memory.preferencesClearedAtRevision === undefined));
   const activeIntentSource = options.activeIntentSource ?? (source === "server" ? "server" : source === "legacy" ? "legacy" : "user");
-  const activeIntentWillChange = options.activeIntent !== undefined && options.activeIntent !== null && (memory.activeIntent?.value !== options.activeIntent || memory.activeIntent.source !== activeIntentSource);
+  const clearIntent = options.activeIntent === null && memory.activeIntent !== undefined;
+  const changeIntent = options.activeIntent !== undefined && options.activeIntent !== null && (memory.activeIntent?.value !== options.activeIntent || memory.activeIntent.source !== activeIntentSource);
+  const semanticChanged = changed.size > 0 || cleared.size > 0 || clearPreferences || addedPreferences.length > 0 || clearIntent || changeIntent;
 
-  const semanticChanged = changedStay.size > 0 || clearedStay.size > 0 || preferencesWillClear || addedPreferences.length > 0 || activeIntentWillClear || activeIntentWillChange;
   if (semanticChanged) {
     const revision = memory.revision + 1;
     memory.revision = revision;
-    for (const field of clearedStay) memory.stay[field] = { source, revision, cleared: true };
-    for (const field of changedStay) memory.stay[field] = { source, revision };
-    if (preferencesWillClear) {
+    for (const field of cleared) memory.stay[field] = { source, revision, cleared: true };
+    for (const field of changed) memory.stay[field] = { source, revision };
+    if (clearPreferences) {
       memory.preferences = [];
       memory.preferencesClearedAtRevision = revision;
     }
     for (const preference of addedPreferences) memory.preferences.push({ value: preference, source: "user", revision });
     if (memory.preferences.length > 8) memory.preferences = memory.preferences.slice(-8);
-    if (activeIntentWillClear) delete memory.activeIntent;
-    if (options.activeIntent !== undefined && options.activeIntent !== null && activeIntentWillChange) memory.activeIntent = { value: options.activeIntent, source: activeIntentSource, revision };
+    if (clearIntent) delete memory.activeIntent;
+    if (options.activeIntent !== undefined && options.activeIntent !== null && changeIntent) memory.activeIntent = { value: options.activeIntent, source: activeIntentSource, revision };
   }
   return next;
 }
@@ -431,8 +448,8 @@ const NUMBER_TOKEN = "(?:\\d{1,2}|un|uno|una|dos|tres|cuatro|cinco|seis|siete|oc
 function parseCountToken(value: string | undefined): number | undefined {
   if (!value) return undefined;
   const normalized = normalizeText(value);
-  const numeric = /^\d{1,2}$/.test(normalized) ? Number(normalized) : NUMBER_WORDS[normalized];
-  return validGuests(numeric) ? numeric : undefined;
+  const count = /^\d{1,2}$/.test(normalized) ? Number(normalized) : NUMBER_WORDS[normalized];
+  return validGuests(count) ? count : undefined;
 }
 
 function formatIsoDate(year: number, month: number, day: number): string | undefined {
@@ -442,96 +459,96 @@ function formatIsoDate(year: number, month: number, day: number): string | undef
 
 function addUtcDays(iso: string, days: number): string | undefined {
   if (!validIsoDate(iso) || !Number.isInteger(days) || days < 1 || days > 30) return undefined;
-  const year = Number(iso.slice(0, 4));
-  const month = Number(iso.slice(5, 7));
-  const day = Number(iso.slice(8, 10));
-  const date = new Date(Date.UTC(year, month - 1, day + days));
+  const date = new Date(Date.UTC(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1, Number(iso.slice(8, 10)) + days));
   return formatIsoDate(date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate());
 }
 
 function extractDateRange(message: string, current: Readonly<ConversationState>): { checkIn: string; checkOut: string } | undefined {
   const text = normalizeText(message);
-  const iso = message.match(/\b\d{4}-\d{2}-\d{2}\b/g)?.filter(validIsoDate) ?? [];
-  if (iso.length >= 2) return { checkIn: iso[iso.length - 2]!, checkOut: iso[iso.length - 1]! };
-  const slashMatches = [...text.matchAll(/\b(\d{1,2})\/(\d{1,2})\/(\d{4})\b/g)];
-  if (slashMatches.length >= 2) {
-    const first = slashMatches[slashMatches.length - 2]!;
-    const second = slashMatches[slashMatches.length - 1]!;
+  const isoDates = message.match(/\b\d{4}-\d{2}-\d{2}\b/g)?.filter(validIsoDate) ?? [];
+  if (isoDates.length >= 2) return { checkIn: isoDates.at(-2)!, checkOut: isoDates.at(-1)! };
+
+  const slash = [...text.matchAll(/\b(\d{1,2})\/(\d{1,2})\/(\d{4})\b/g)];
+  if (slash.length >= 2) {
+    const first = slash.at(-2)!;
+    const second = slash.at(-1)!;
     const checkIn = formatIsoDate(Number(first[3]), Number(first[2]), Number(first[1]));
     const checkOut = formatIsoDate(Number(second[3]), Number(second[2]), Number(second[1]));
     if (checkIn && checkOut && checkOut > checkIn) return { checkIn, checkOut };
   }
+
   const monthNames = Object.keys(MONTHS).join("|");
-  const fullRanges = [...text.matchAll(new RegExp(`\\b(?:del|de)?\\s*(\\d{1,2})\\s+(?:al|a)\\s+(\\d{1,2})\\s+de\\s+(${monthNames})\\s+(?:de\\s+)?(\\d{4})\\b`, "gi"))];
-  const fullRange = fullRanges.at(-1);
-  if (fullRange) {
-    const month = MONTHS[fullRange[3]!];
-    const checkIn = month ? formatIsoDate(Number(fullRange[4]), month, Number(fullRange[1])) : undefined;
-    const checkOut = month ? formatIsoDate(Number(fullRange[4]), month, Number(fullRange[2])) : undefined;
+  const ranges = [...text.matchAll(new RegExp(`\\b(?:del|de)?\\s*(\\d{1,2})\\s+(?:al|a)\\s+(\\d{1,2})\\s+de\\s+(${monthNames})\\s+(?:de\\s+)?(\\d{4})\\b`, "gi"))];
+  const range = ranges.at(-1);
+  if (range) {
+    const month = MONTHS[range[3]!];
+    const checkIn = month ? formatIsoDate(Number(range[4]), month, Number(range[1])) : undefined;
+    const checkOut = month ? formatIsoDate(Number(range[4]), month, Number(range[2])) : undefined;
     if (checkIn && checkOut && checkOut > checkIn) return { checkIn, checkOut };
   }
+
   const starts = [...text.matchAll(new RegExp(`\\b(?:a partir del|desde el|desde)\\s+(\\d{1,2})\\s+de\\s+(${monthNames})\\s+(?:de\\s+)?(\\d{4})\\b`, "gi"))];
-  const nightsMatches = [...text.matchAll(new RegExp(`\\b(${NUMBER_TOKEN})\\s+noches?\\b`, "gi"))];
+  const nights = [...text.matchAll(new RegExp(`\\b(${NUMBER_TOKEN})\\s+noches?\\b`, "gi"))];
   const start = starts.at(-1);
-  const nights = nightsMatches.at(-1);
-  if (start && nights) {
+  const nightCount = parseCountToken(nights.at(-1)?.[1]);
+  if (start && nightCount) {
     const month = MONTHS[start[2]!];
-    const count = parseCountToken(nights[1]);
     const checkIn = month ? formatIsoDate(Number(start[3]), month, Number(start[1])) : undefined;
-    const checkOut = checkIn && count ? addUtcDays(checkIn, count) : undefined;
+    const checkOut = checkIn ? addUtcDays(checkIn, nightCount) : undefined;
     if (checkIn && checkOut) return { checkIn, checkOut };
   }
-  const partialRanges = [...text.matchAll(/\b(?:del|de)?\s*(\d{1,2})\s+(?:al|a)\s+(\d{1,2})\b/gi)];
-  const partialRange = partialRanges.at(-1);
-  if (partialRange && current.stay.checkIn && current.stay.checkOut && current.stay.checkIn.slice(0, 7) === current.stay.checkOut.slice(0, 7)) {
+
+  const partials = [...text.matchAll(/\b(?:del|de)?\s*(\d{1,2})\s+(?:al|a)\s+(\d{1,2})\b/gi)];
+  const partial = partials.at(-1);
+  if (partial && current.stay.checkIn && current.stay.checkOut && current.stay.checkIn.slice(0, 7) === current.stay.checkOut.slice(0, 7)) {
     const year = Number(current.stay.checkIn.slice(0, 4));
     const month = Number(current.stay.checkIn.slice(5, 7));
-    const checkIn = formatIsoDate(year, month, Number(partialRange[1]));
-    const checkOut = formatIsoDate(year, month, Number(partialRange[2]));
+    const checkIn = formatIsoDate(year, month, Number(partial[1]));
+    const checkOut = formatIsoDate(year, month, Number(partial[2]));
     if (checkIn && checkOut && checkOut > checkIn) return { checkIn, checkOut };
   }
   return undefined;
 }
 
 const CLEAR_CUE = /\b(?:olvida(?:te)?|olvides|borra|borres|limpia|limpies|quita|quites|saca|saques|dejemos\s+sin\s+definir|deja\s+sin\s+definir|resetea|resetees)\b/i;
-const NEGATED_CLEAR_CUE = /\bno\s+(?:te\s+)?(?:olvides|olvides|borres|limpies|quites|saques|resetees)\b/i;
-function hasPositiveClearCue(text: string): boolean { return CLEAR_CUE.test(text) && !NEGATED_CLEAR_CUE.test(text); }
-function asksToClearDates(text: string): boolean { return hasPositiveClearCue(text) && /\b(?:fecha|fechas|entrada|salida|checkin|checkout)\b/i.test(text); }
-function asksToClearGuests(text: string): boolean { return hasPositiveClearCue(text) && /\b(?:personas|huespedes|cantidad|cuantos\s+somos)\b/i.test(text); }
-function asksToClearPreferences(text: string): boolean { return !NEGATED_CLEAR_CUE.test(text) && /\b(?:sin preferencias|olvida(?:te)?\s+(?:de\s+)?mis\s+preferencias|borra\s+(?:mis\s+)?preferencias|limpia\s+(?:mis\s+)?preferencias)\b/i.test(text); }
+const NEGATED_CLEAR = /\bno\s+(?:te\s+)?(?:olvides|borres|limpies|quites|saques|resetees)\b/i;
+function positiveClear(text: string): boolean { return CLEAR_CUE.test(text) && !NEGATED_CLEAR.test(text); }
+function asksToClearDates(text: string): boolean { return positiveClear(text) && /\b(?:fecha|fechas|entrada|salida|checkin|checkout)\b/i.test(text); }
+function asksToClearGuests(text: string): boolean { return positiveClear(text) && /\b(?:personas|huespedes|cantidad|cuantos\s+somos)\b/i.test(text); }
+function asksToClearPreferences(text: string): boolean { return !NEGATED_CLEAR.test(text) && /\b(?:sin preferencias|olvida(?:te)?\s+(?:de\s+)?mis\s+preferencias|borra\s+(?:mis\s+)?preferencias|limpia\s+(?:mis\s+)?preferencias)\b/i.test(text); }
 
 function extractGuests(message: string, dateRange: { checkIn: string; checkOut: string } | undefined): number | undefined {
   const text = normalizeText(message);
-  const categoryPattern = new RegExp(`\\b(${NUMBER_TOKEN})\\s+(adultos?|adultas?|ninos?|ninas?|menores?|chicos?|chicas?|bebes?)\\b`, "gi");
-  const categoryLatest = new Map<string, { count: number; index: number }>();
-  for (const match of text.matchAll(categoryPattern)) {
+  const categories = new Map<string, number>();
+  for (const match of text.matchAll(new RegExp(`\\b(${NUMBER_TOKEN})\\s+(adultos?|adultas?|ninos?|ninas?|menores?|chicos?|chicas?|bebes?)\\b`, "gi"))) {
     const count = parseCountToken(match[1]);
     if (count === undefined) continue;
-    const rawCategory = match[2] ?? "";
-    const category = /adult/.test(rawCategory) ? "adult" : /bebe/.test(rawCategory) ? "infant" : "child";
-    categoryLatest.set(category, { count, index: match.index ?? 0 });
+    const raw = match[2] ?? "";
+    const category = /adult/.test(raw) ? "adult" : /bebe/.test(raw) ? "infant" : "child";
+    categories.set(category, count);
   }
-  if (categoryLatest.size > 0) {
-    const total = [...categoryLatest.values()].reduce((sum, item) => sum + item.count, 0);
+  if (categories.size > 0) {
+    const total = [...categories.values()].reduce((sum, count) => sum + count, 0);
     if (validGuests(total)) return total;
   }
+
   const candidates: Array<{ count: number; index: number }> = [];
-  const patterns = [
+  for (const pattern of [
     new RegExp(`\\b(?:somos|seremos|seriamos|vamos\\s+a\\s+ser|viajamos)\\s+(${NUMBER_TOKEN})\\b`, "gi"),
     new RegExp(`\\b(${NUMBER_TOKEN})\\s+(?:personas?|huespedes?|pax)\\b`, "gi"),
-  ];
-  for (const pattern of patterns) for (const match of text.matchAll(pattern)) {
-    const count = parseCountToken(match[1]);
-    if (count !== undefined) candidates.push({ count, index: match.index ?? 0 });
+  ]) {
+    for (const match of text.matchAll(pattern)) {
+      const count = parseCountToken(match[1]);
+      if (count !== undefined) candidates.push({ count, index: match.index ?? 0 });
+    }
   }
   candidates.sort((a, b) => a.index - b.index);
-  const latest = candidates.at(-1);
-  if (latest) return latest.count;
-  const hasRoomAllocationCue = /\b(?:habitacion|room)\s*(?:nro\.?\s*)?\d+/i.test(text) || /\b(?:la|el)\s+\d{2,4}\s+para\b/i.test(text);
-  if (!hasRoomAllocationCue && (dateRange || /\b(?:estadia|alojarnos|quedarnos|hospedarnos)\b/i.test(text))) {
+  if (candidates.length) return candidates.at(-1)!.count;
+
+  const roomAllocation = /\b(?:habitacion|room)\s*(?:nro\.?\s*)?\d+/i.test(text) || /\b(?:la|el)\s+\d{2,4}\s+para\b/i.test(text);
+  if (!roomAllocation && (dateRange || /\b(?:estadia|alojarnos|quedarnos|hospedarnos)\b/i.test(text))) {
     const matches = [...text.matchAll(new RegExp(`\\bpara\\s+(${NUMBER_TOKEN})\\b`, "gi"))];
-    const count = parseCountToken(matches.at(-1)?.[1]);
-    if (count !== undefined) return count;
+    return parseCountToken(matches.at(-1)?.[1]);
   }
   return undefined;
 }
@@ -542,16 +559,16 @@ function sanitizePreference(value: string): string | undefined {
   const normalized = normalizeText(compact);
   if (/\b(?:ignora|ignore|admin|administrador|permiso|permission|role|rol|tool|herramienta|system|sistema|prompt|aprobad|approved|operationtoken|idempotency|tenantid|hotelid|actorid|guestid)\b/i.test(normalized)) return undefined;
   if (/\b(?:a partir de ahora|desde ahora|siempre|automaticamente|selecciona|seleccionar|elige|elegi|escoge|ejecuta|ejecutar|responde|responder|recorda|recuerda|debes|tenes que|tienes que|primera opcion|segunda opcion|tercera opcion)\b/i.test(normalized)) return undefined;
-  if (!/\b(?:cama|matrimonial|individual|silenc|tranquil|planta\s+baja|piso\s+alto|vista|acces|mascota|fumador|no\s+fumador|cerca|lejos|ascensor)\b/i.test(normalized)) return undefined;
+  if (!/\b(?:habitacion|cama|matrimonial|individual|silenc|tranquil|planta\s+baja|piso\s+alto|vista|acces|mascota|fumador|no\s+fumador|cerca|lejos|ascensor)\b/i.test(normalized)) return undefined;
   return compact;
 }
 
 function extractPreferences(message: string): string[] {
-  const matches = [...message.matchAll(/\b(?:prefiero|preferimos|quisiera|quisi[eé]ramos|me gustar[ií]a|nos gustar[ií]a|quiero|queremos)\s+([^.!?]{1,160})/giu)];
+  const normalizedMessage = normalizeText(message);
   const result: string[] = [];
-  for (const match of matches) {
+  for (const match of normalizedMessage.matchAll(/\b(?:prefiero|preferimos|quisiera|quisieramos|me gustaria|nos gustaria|quiero|queremos)\s+([^.!?]{1,160})/gi)) {
     let candidate = match[1]?.trim() ?? "";
-    candidate = candidate.split(/\s+y\s+(?:reservar|cotizar|saber|ver|consultar)\b/iu)[0]?.trim() ?? candidate;
+    candidate = candidate.split(/\s+y\s+(?:reservar|cotizar|saber|ver|consultar)\b/i)[0]?.trim() ?? candidate;
     const clean = sanitizePreference(candidate);
     if (clean) result.push(clean);
     if (result.length >= 3) break;
@@ -564,9 +581,9 @@ export function inferConversationIntent(message: string, dateRange?: { checkIn: 
   if (/\b(?:cancelar|cancela|anular|anula)\b/i.test(text) && /\b(?:reserva|booking)\b/i.test(text)) return "cancellation";
   if (/\b(?:reservar|reserva|confirmar\s+(?:la\s+)?reserva|hacer\s+(?:una\s+)?reserva)\b/i.test(text)) return "reservation";
   if (/\b(?:cotiz|precio|tarifa|cuanto\s+sale|cuanto\s+cuesta)\b/i.test(text)) return "quote";
-  const explicitParty = new RegExp(`\\b(?:somos|seremos|seriamos|vamos\\s+a\\s+ser|viajamos)\\s+${NUMBER_TOKEN}\\b`, "i").test(text)
+  const party = new RegExp(`\\b(?:somos|seremos|seriamos|vamos\\s+a\\s+ser|viajamos)\\s+${NUMBER_TOKEN}\\b`, "i").test(text)
     || new RegExp(`\\b${NUMBER_TOKEN}\\s+(?:personas?|huespedes?|pax|adultos?|ninos?|menores?)\\b`, "i").test(text);
-  if (/\b(?:dispon|hay\s+lugar|tenes\s+lugar|que\s+tenes|que\s+hay|aloj|qued|hosped|estadia)\b/i.test(text) || explicitParty) return "availability";
+  if (/\b(?:dispon|hay\s+lugar|tenes\s+lugar|que\s+tenes|que\s+hay|aloj|qued|hosped|estadia)\b/i.test(text) || party) return "availability";
   if (dateRange && /\b(?:quiero|queremos|necesito|necesitamos|vamos|ir|viajar)\b/i.test(text)) return "availability";
   return undefined;
 }
@@ -576,12 +593,12 @@ export function extractUserSemanticMemoryUpdate(message: string, current: Readon
   const update: UserSemanticMemoryUpdate = {};
   const clearDates = asksToClearDates(text);
   const clearGuests = asksToClearGuests(text);
-  const dateRange = clearDates ? undefined : extractDateRange(message, current);
+  const dates = clearDates ? undefined : extractDateRange(message, current);
   if (clearDates) { update.checkIn = null; update.checkOut = null; }
-  else if (dateRange) { update.checkIn = dateRange.checkIn; update.checkOut = dateRange.checkOut; }
+  else if (dates) { update.checkIn = dates.checkIn; update.checkOut = dates.checkOut; }
   if (clearGuests) update.guests = null;
   else {
-    const guests = extractGuests(message, dateRange);
+    const guests = extractGuests(message, dates);
     if (guests !== undefined) update.guests = guests;
   }
   if (asksToClearPreferences(text)) update.clearPreferences = true;
@@ -589,26 +606,23 @@ export function extractUserSemanticMemoryUpdate(message: string, current: Readon
     const preferences = extractPreferences(message);
     if (preferences.length) update.preferences = preferences;
   }
-  const activeIntent = inferConversationIntent(message, dateRange);
-  if (activeIntent) update.activeIntent = activeIntent;
+  const intent = inferConversationIntent(message, dates);
+  if (intent) update.activeIntent = intent;
   return update;
 }
 
-function semanticUpdatePatch(update: UserSemanticMemoryUpdate): ConversationStatePatch {
+function semanticPatch(update: UserSemanticMemoryUpdate): ConversationStatePatch {
   const patch: ConversationStatePatch = {};
-  const checkIn = update.checkIn;
-  const checkOut = update.checkOut;
-  const guests = update.guests;
-  if (checkIn === null || typeof checkIn === "string") patch.checkIn = checkIn;
-  if (checkOut === null || typeof checkOut === "string") patch.checkOut = checkOut;
-  if (guests === null || typeof guests === "number") patch.guests = guests;
+  if (update.checkIn === null || typeof update.checkIn === "string") patch.checkIn = update.checkIn;
+  if (update.checkOut === null || typeof update.checkOut === "string") patch.checkOut = update.checkOut;
+  if (update.guests === null || typeof update.guests === "number") patch.guests = update.guests;
   return patch;
 }
 
 export function applyUserSemanticTurn(current: ConversationState, message: string, scope: ConversationMemoryScope): ConversationState {
   const scoped = bindConversationStateScope(current, scope);
   const update = extractUserSemanticMemoryUpdate(message, scoped);
-  return applyConversationStatePatch(scoped, semanticUpdatePatch(update), {
+  return applyConversationStatePatch(scoped, semanticPatch(update), {
     semanticSource: "user",
     ...(update.preferences ? { preferences: update.preferences } : {}),
     ...(update.clearPreferences ? { clearPreferences: true } : {}),
@@ -634,7 +648,7 @@ export function conversationIntentForTool(toolId: string): ConversationIntent | 
 }
 
 export function enrichPlanInputFromState(toolId: string, input: unknown, state: ConversationState): unknown {
-  const raw = input && typeof input === "object" && !Array.isArray(input) ? { ...(input as Record<string, unknown>) } : {};
+  const raw = isRecord(input) ? { ...input } : {};
   if (toolId === "hms.checkAvailability") {
     if (state.stay.checkIn) raw.checkIn = state.stay.checkIn;
     if (state.stay.checkOut) raw.checkOut = state.stay.checkOut;
@@ -649,42 +663,49 @@ export function enrichPlanInputFromState(toolId: string, input: unknown, state: 
   return raw;
 }
 
-function userOwnedConflict(current: ConversationState, field: keyof StayState, candidate: string | number | undefined): boolean {
+function userConflict(current: ConversationState, field: keyof StayState, candidate: string | number | undefined): boolean {
   const meta = current.semanticMemory.stay[field];
-  if (meta?.source !== "user" || candidate === undefined) return false;
-  if (meta.cleared) return true;
+  if (meta?.source !== "user") return false;
+  if (meta.cleared) return candidate !== undefined;
+  if (candidate === undefined) return false;
   return factValue(current, field) !== candidate;
 }
 
 export function updateConversationStateFromTool(current: ConversationState, toolId: string, input: unknown, data: unknown): ConversationState {
-  const rawInput = input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : {};
-  const rawData = data && typeof data === "object" && !Array.isArray(data) ? data as Record<string, unknown> : {};
+  const normalized = normalizeConversationState(current);
+  const rawInput = isRecord(input) ? input : {};
+  const rawData = isRecord(data) ? data : {};
   const checkIn = stringField(rawInput.checkIn) ?? stringField(rawData.start);
   const checkOut = stringField(rawInput.checkOut) ?? stringField(rawData.end);
   const guests = validGuests(rawInput.guests) ? Number(rawInput.guests) : undefined;
-  const staleStayTool = userOwnedConflict(current, "checkIn", checkIn) || userOwnedConflict(current, "checkOut", checkOut) || userOwnedConflict(current, "guests", guests);
-  const stayPatch: ConversationStatePatch = {};
-  if (validIsoDate(checkIn)) stayPatch.checkIn = checkIn;
-  if (validIsoDate(checkOut)) stayPatch.checkOut = checkOut;
-  if (guests !== undefined) stayPatch.guests = guests;
-  const toolIntent = conversationIntentForTool(toolId);
-  const semanticOptions: ApplyConversationStateOptions = { semanticSource: "tool" };
-  if (toolIntent) { semanticOptions.activeIntent = toolIntent; semanticOptions.activeIntentSource = "server"; }
-  const next = applyConversationStatePatch(current, stayPatch, semanticOptions);
+  const staleStay = userConflict(normalized, "checkIn", checkIn) || userConflict(normalized, "checkOut", checkOut) || userConflict(normalized, "guests", guests);
+
+  const patch: ConversationStatePatch = {};
+  if (validIsoDate(checkIn)) patch.checkIn = checkIn;
+  if (validIsoDate(checkOut)) patch.checkOut = checkOut;
+  if (guests !== undefined) patch.guests = guests;
+  const intent = conversationIntentForTool(toolId);
+  const next = applyConversationStatePatch(normalized, patch, {
+    semanticSource: "tool",
+    ...(intent ? { activeIntent: intent, activeIntentSource: "server" as const } : {}),
+  });
 
   if (toolId === "hms.checkAvailability") {
-    if (staleStayTool) { next.availabilityRoomIds = []; delete next.selectedRoomId; }
-    else {
+    if (staleStay) {
+      next.availabilityRoomIds = [];
+      delete next.selectedRoomId;
+    } else {
       const rooms = Array.isArray(rawData.rooms) ? rawData.rooms : [];
-      next.availabilityRoomIds = rooms.map((room) => room && typeof room === "object" ? stringField((room as Record<string, unknown>).id) : undefined).filter((v): v is string => Boolean(v)).slice(0, 25);
+      next.availabilityRoomIds = rooms.map((room) => isRecord(room) ? stringField(room.id) : undefined).filter((item): item is string => Boolean(item)).slice(0, 25);
       if (next.selectedRoomId && !next.availabilityRoomIds.includes(next.selectedRoomId)) delete next.selectedRoomId;
     }
   }
+
   const roomId = stringField(rawInput.roomId) ?? stringField(rawData.roomId);
-  if (!staleStayTool && (toolId === "hms.getQuote" || toolId === "hms.createReservation") && roomId && (next.availabilityRoomIds.length === 0 || next.availabilityRoomIds.includes(roomId))) next.selectedRoomId = roomId;
+  if (!staleStay && (toolId === "hms.getQuote" || toolId === "hms.createReservation") && roomId && (next.availabilityRoomIds.length === 0 || next.availabilityRoomIds.includes(roomId))) next.selectedRoomId = roomId;
   const bookingId = stringField(rawData.bookingId);
   if (toolId === "hms.createReservation" && bookingId) next.activeBookingId = bookingId;
-  const bookingStatus = stringField(rawData.status);
-  if ((toolId === "hms.createReservation" || toolId === "hms.cancelReservation") && bookingStatus) next.bookingStatus = bookingStatus;
+  const status = stringField(rawData.status);
+  if ((toolId === "hms.createReservation" || toolId === "hms.cancelReservation") && status) next.bookingStatus = status;
   return next;
 }
