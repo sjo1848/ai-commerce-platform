@@ -49,12 +49,10 @@ function invalidateStaleRoomGrounding(before: ConversationState, after: Conversa
 }
 
 /**
- * A tool may fill semantic stay facts when Core does not already have a
- * user-origin fact. It may never roll back an explicit current user correction,
- * which matters most for an older approved plan executed after the user changed
- * dates or party size. If such a stale plan executed, its operation result stays
- * real/audited, but its room availability/selection cannot become grounding for
- * the user's newer stay context.
+ * Defense in depth for tool completions: explicit user values and explicit
+ * clears remain authoritative over a tool plan that was prepared against older
+ * conversational state. Operational results remain real/audited, but stale room
+ * grounding is discarded.
  */
 function preserveUserSemanticAuthority(before: ConversationState, after: ConversationState): ConversationState {
   const next = structuredClone(after);
@@ -65,8 +63,15 @@ function preserveUserSemanticAuthority(before: ConversationState, after: Convers
   let staleStayTool = false;
   const preserveDate = (field: "checkIn" | "checkOut") => {
     const provenance = beforeMemory.stay[field];
+    if (provenance?.source !== "user") return;
+    if (provenance.cleared) {
+      if (next.stay[field] !== undefined) staleStayTool = true;
+      delete next.stay[field];
+      afterMemory.stay[field] = structuredClone(provenance);
+      return;
+    }
     const value = before.stay[field];
-    if (provenance?.source !== "user" || value === undefined) return;
+    if (value === undefined) return;
     if (next.stay[field] !== value) staleStayTool = true;
     next.stay[field] = value;
     afterMemory.stay[field] = structuredClone(provenance);
@@ -75,10 +80,16 @@ function preserveUserSemanticAuthority(before: ConversationState, after: Convers
   preserveDate("checkOut");
 
   const guestProvenance = beforeMemory.stay.guests;
-  if (guestProvenance?.source === "user" && before.stay.guests !== undefined) {
-    if (next.stay.guests !== before.stay.guests) staleStayTool = true;
-    next.stay.guests = before.stay.guests;
-    afterMemory.stay.guests = structuredClone(guestProvenance);
+  if (guestProvenance?.source === "user") {
+    if (guestProvenance.cleared) {
+      if (next.stay.guests !== undefined) staleStayTool = true;
+      delete next.stay.guests;
+      afterMemory.stay.guests = structuredClone(guestProvenance);
+    } else if (before.stay.guests !== undefined) {
+      if (next.stay.guests !== before.stay.guests) staleStayTool = true;
+      next.stay.guests = before.stay.guests;
+      afterMemory.stay.guests = structuredClone(guestProvenance);
+    }
   }
 
   if (staleStayTool) {
@@ -176,18 +187,19 @@ export class ChatOrchestrator {
 
     const priorConversation = modelVisibleConversation(await this.conversation.list(context.session.id, 32));
     const rawPriorState = await this.conversationState.get(context.session.id);
-    // R2.3: semantic stay facts are extracted and scope-bound by Core from the
-    // current user turn before the LLM sees state. The model cannot create
-    // durable dates/guest memory by replaying prose history.
+    // R2.3: extract and persist the current user facts before any provider call.
+    // If routing times out/fails, unambiguous dates/guests/preferences still survive.
     const semanticPriorState = applyUserSemanticTurn(rawPriorState, normalized, {
       tenantId: context.tenant.id,
       actorId: context.actor.id,
       sessionId: context.session.id,
     });
-    // A corrected/cleared stay makes prior availability and selection stale.
-    // Invalidate them before routing so a room from old dates/party size cannot
-    // be carried into quote/reservation as if still grounded.
-    const priorState = invalidateStaleRoomGrounding(rawPriorState, semanticPriorState);
+    const proposedPriorState = invalidateStaleRoomGrounding(rawPriorState, semanticPriorState);
+    await this.conversationState.put(context.session.id, proposedPriorState);
+    // State stores merge overlapping snapshots by semantic revision. Read back the
+    // durable merged view so concurrent facts are visible to this routing turn.
+    const priorState = await this.conversationState.get(context.session.id);
+
     await this.conversation.append(context.session.id, { role: "user", content: normalized });
     await this.usage.record({ timestamp: context.now, tenantId: context.tenant.id, sessionId: context.session.id, kind: "message", units: 1, estimatedCostUsd: 0 });
 
@@ -199,6 +211,7 @@ export class ChatOrchestrator {
       ...(routeIntent ? { activeIntent: routeIntent, activeIntentSource: "server" as const } : {}),
     });
     await this.conversationState.put(context.session.id, nextState);
+    const durableNextState = await this.conversationState.get(context.session.id);
 
     if (route.kind === "message") {
       const conversationalContext = modelVisibleConversation(await this.conversation.list(context.session.id, 32));
@@ -215,7 +228,7 @@ export class ChatOrchestrator {
       return { message: reply, sessionId: context.session.id };
     }
 
-    const plan: ToolPlan = { toolId: route.plan.toolId, input: enrichPlanInputFromState(route.plan.toolId, route.plan.input, nextState) };
+    const plan: ToolPlan = { toolId: route.plan.toolId, input: enrichPlanInputFromState(route.plan.toolId, route.plan.input, durableNextState) };
     const visibleTool = tools.find((tool) => tool.id === plan.toolId);
     if (visibleTool) {
       const missing = missingRequiredBusinessFields(visibleTool, plan.input);
