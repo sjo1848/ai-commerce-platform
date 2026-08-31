@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { InMemoryConversationStore } from "../dist/core/conversation.js";
-import { applyConversationStatePatch, ConversationBackedStateStore, InMemoryConversationStateStore } from "../dist/core/conversation-state.js";
+import { applyConversationStatePatch, ConversationBackedStateStore, InMemoryConversationStateStore, multiRoomConversationIssue } from "../dist/core/conversation-state.js";
 import { AgentCoreRuntime } from "../dist/core/runtime.js";
 import { InMemorySessionStore } from "../dist/core/session.js";
 
@@ -206,7 +206,8 @@ test("model cannot persist a selected room or ordinal outside authoritative avai
   const outOfRange = applyConversationStatePatch(current, { selectedRoomIndex: 3 });
   assert.equal(outOfRange.selectedRoomId, undefined);
   const staleSelection = applyConversationStatePatch({ ...current, selectedRoomId: roomId }, { selectedRoomIndex: 3 });
-  assert.equal(staleSelection.selectedRoomId, undefined);
+  assert.equal(staleSelection.selectedRoomId, roomId);
+  assert.equal(multiRoomConversationIssue(staleSelection), "which_rooms");
   const validSecond = applyConversationStatePatch(current, { selectedRoomIndex: 2 });
   assert.equal(validSecond.selectedRoomId, secondRoomId);
 });

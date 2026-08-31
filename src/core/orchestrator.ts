@@ -4,9 +4,12 @@ import { serializeToolResult, type ConversationStore } from "./conversation.js";
 import {
   applyConversationStatePatch,
   applyUserSemanticTurn,
+  canonicalSelectedRoomIds,
+  clearStaleRoomGrounding,
   CONVERSATION_STATE_TOOL_ID,
   conversationIntentForTool,
   enrichPlanInputFromState,
+  multiRoomConversationIssue,
   InMemoryConversationStateStore,
   stripModelSemanticStatePatch,
   updateConversationStateFromTool,
@@ -41,11 +44,8 @@ function invalidateStaleRoomGrounding(before: ConversationState, after: Conversa
   const stayChanged = before.stay.checkIn !== after.stay.checkIn
     || before.stay.checkOut !== after.stay.checkOut
     || before.stay.guests !== after.stay.guests;
-  if (!stayChanged || (after.availabilityRoomIds.length === 0 && !after.selectedRoomId)) return after;
-  const next = structuredClone(after);
-  next.availabilityRoomIds = [];
-  delete next.selectedRoomId;
-  return next;
+  if (!stayChanged || (after.availabilityRoomIds.length === 0 && canonicalSelectedRoomIds(after).length === 0)) return after;
+  return clearStaleRoomGrounding(after);
 }
 
 /**
@@ -92,10 +92,7 @@ function preserveUserSemanticAuthority(before: ConversationState, after: Convers
     }
   }
 
-  if (staleStayTool) {
-    next.availabilityRoomIds = [];
-    delete next.selectedRoomId;
-  }
+  if (staleStayTool) return clearStaleRoomGrounding(next);
   return next;
 }
 
@@ -130,6 +127,24 @@ function missingRequiredClarification(fields: readonly string[]): string {
   if (roomMissing) return "¿Qué habitación u opción querés elegir?";
   if (bookingMissing) return "¿Qué reserva querés usar? Necesito identificarla de forma inequívoca.";
   return "Me falta información necesaria para continuar con seguridad.";
+}
+
+function hasMultiRoomStatePatch(patch: import("./conversation-state.js").ConversationStatePatch | undefined): boolean {
+  return Boolean(patch && (
+    patch.selectedRoomIds !== undefined
+    || patch.selectedRoomIndexes !== undefined
+    || patch.selectedRoomNumbers !== undefined
+    || patch.selectedRoomRelation !== undefined
+    || patch.requestedRoomCount !== undefined
+    || patch.roomOccupancy !== undefined
+  ));
+}
+
+function multiRoomClarification(issue: "which_rooms" | "occupancy_distribution"): { message: string; missing: ModelClarificationField[] } {
+  if (issue === "occupancy_distribution") {
+    return { message: "¿Cómo querés repartir la ocupación entre ellas?", missing: ["occupancy"] };
+  }
+  return { message: "¿Qué habitaciones querés elegir?", missing: ["selection"] };
 }
 
 function missingRequiredClarificationFields(fields: readonly string[]): ModelClarificationField[] {
@@ -214,13 +229,56 @@ export class ChatOrchestrator {
     const durableNextState = await this.conversationState.get(context.session.id);
 
     if (route.kind === "message") {
+      const issue = hasMultiRoomStatePatch(route.statePatch) ? multiRoomConversationIssue(durableNextState) : undefined;
+      const bounded = issue ? multiRoomClarification(issue) : undefined;
       const conversationalContext = modelVisibleConversation(await this.conversation.list(context.session.id, 32));
       const reply = await this.responder.compose({
         kind: "message",
-        purpose: route.purpose ?? "clarification",
-        baseMessage: route.message,
+        purpose: bounded ? "clarification" : route.purpose ?? "clarification",
+        baseMessage: bounded?.message ?? route.message,
         userMessage: normalized,
-        ...(route.missing?.length ? { missing: route.missing } : {}),
+        ...(bounded ? { missing: bounded.missing } : route.missing?.length ? { missing: route.missing } : {}),
+        conversation: conversationalContext,
+        context,
+      });
+      await this.conversation.append(context.session.id, { role: "assistant", content: reply });
+      return { message: reply, sessionId: context.session.id };
+    }
+
+    const routeIssue = multiRoomConversationIssue(durableNextState);
+    if (routeIssue) {
+      const bounded = multiRoomClarification(routeIssue);
+      const conversationalContext = modelVisibleConversation(await this.conversation.list(context.session.id, 32));
+      const reply = await this.responder.compose({
+        kind: "message",
+        purpose: "clarification",
+        baseMessage: bounded.message,
+        userMessage: normalized,
+        missing: bounded.missing,
+        conversation: conversationalContext,
+        context,
+      });
+      await this.conversation.append(context.session.id, { role: "assistant", content: reply });
+      return { message: reply, sessionId: context.session.id };
+    }
+
+    const selectedRoomIds = canonicalSelectedRoomIds(durableNextState);
+    if (route.plan.toolId === "hms.createReservation" && (selectedRoomIds.length > 1 || (durableNextState.requestedRoomCount ?? 0) > 1)) {
+      const issue = multiRoomConversationIssue(durableNextState);
+      const conversationalContext = modelVisibleConversation(await this.conversation.list(context.session.id, 32));
+      if (issue) {
+        const bounded = multiRoomClarification(issue);
+        const reply = await this.responder.compose({
+          kind: "message", purpose: "clarification", baseMessage: bounded.message, userMessage: normalized, missing: bounded.missing, conversation: conversationalContext, context,
+        });
+        await this.conversation.append(context.session.id, { role: "assistant", content: reply });
+        return { message: reply, sessionId: context.session.id };
+      }
+      const reply = await this.responder.compose({
+        kind: "message",
+        purpose: "unsupported",
+        baseMessage: "Tengo registrada la selección de varias habitaciones. La reserva conjunta todavía no se ejecuta en esta etapa.",
+        userMessage: normalized,
         conversation: conversationalContext,
         context,
       });

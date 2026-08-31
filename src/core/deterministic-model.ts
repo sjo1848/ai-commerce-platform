@@ -92,6 +92,9 @@ export class DeterministicModelRouter implements ModelRouter {
 
     const reservationIntent = /\b(reservar|reserva|confirmar\s+reserva)\b/i.test(message);
     if (reservationIntent) {
+      if ((state?.selectedRoomIds?.length ?? 0) > 1 || (state?.requestedRoomCount ?? 0) > 1) {
+        return { kind: "message", purpose: "unsupported", message: "Tengo registrada la selección de varias habitaciones. La reserva conjunta todavía no se ejecuta en esta etapa." };
+      }
       const tool = availableTools.find((candidate) => candidate.id === "hms.createReservation");
       if (!tool) return { kind: "message", purpose: "unsupported", message: "La creación de reservas no está habilitada para este negocio." };
       const roomId = extractLabeledId(message, ["habitaci[oó]n", "room"]) ?? state?.selectedRoomId;

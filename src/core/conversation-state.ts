@@ -18,11 +18,25 @@ export type SemanticMemory = {
   activeIntent?: { value: ConversationIntent; source: "user" | "server" | "legacy"; revision: number };
 };
 export type StayState = { checkIn?: string; checkOut?: string; guests?: number };
+export type AvailabilityRoomCandidate = { id: string; roomNumber?: string; roomType?: string; capacity?: number };
+export type RoomOccupancy = { roomId: string; guests: number };
+export type RoomOccupancyPatch = { roomId?: string; roomNumber?: string; roomIndex?: number; guests: number };
 export type ConversationState = {
   stay: StayState;
   semanticMemory: SemanticMemory;
+  /** Legacy ordered IDs remain for compatibility; availabilityRooms is canonical in R2.4. */
   availabilityRoomIds: string[];
+  availabilityRooms: AvailabilityRoomCandidate[];
+  /** Compatibility alias present only when exactly one room is selected. */
   selectedRoomId?: string;
+  selectedRoomIds: string[];
+  requestedRoomCount?: number;
+  roomOccupancy: RoomOccupancy[];
+  /** Server-owned markers: invalid/ambiguous references require clarification, never silent acknowledgement. */
+  roomSelectionNeedsClarification?: boolean;
+  roomOccupancyNeedsClarification?: boolean;
+  /** Server-managed revision preventing stale/concurrent room-selection rollback. */
+  roomSelectionRevision?: number;
   activeBookingId?: string;
   bookingStatus?: string;
   /** Server-owned revision for operational booking grounding; never model-authored. */
@@ -34,6 +48,12 @@ export type ConversationStatePatch = {
   guests?: number | null;
   selectedRoomId?: string | null;
   selectedRoomIndex?: number | null;
+  selectedRoomIds?: string[] | null;
+  selectedRoomIndexes?: number[] | null;
+  selectedRoomNumbers?: string[] | null;
+  selectedRoomRelation?: "both" | "other" | null;
+  requestedRoomCount?: number | null;
+  roomOccupancy?: RoomOccupancyPatch[] | null;
   activeBookingId?: string | null;
 };
 export type UserSemanticMemoryUpdate = {
@@ -54,7 +74,14 @@ function emptySemanticMemory(): SemanticMemory {
 }
 
 export function emptyConversationState(): ConversationState {
-  return { stay: {}, semanticMemory: emptySemanticMemory(), availabilityRoomIds: [] };
+  return {
+    stay: {},
+    semanticMemory: emptySemanticMemory(),
+    availabilityRoomIds: [],
+    availabilityRooms: [],
+    selectedRoomIds: [],
+    roomOccupancy: [],
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -75,6 +102,64 @@ function validGuests(value: unknown): value is number {
 
 function validSelectionIndex(value: unknown): value is number {
   return Number.isInteger(value) && Number(value) >= 1 && Number(value) <= 25;
+}
+
+function validRoomCount(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) >= 1 && Number(value) <= 10;
+}
+
+function uniqueStrings(values: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const raw of values) {
+    const value = raw.trim();
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    result.push(value);
+  }
+  return result;
+}
+
+function parseAvailabilityCandidate(value: unknown): AvailabilityRoomCandidate | undefined {
+  if (!isRecord(value)) return undefined;
+  const id = stringField(value.id);
+  if (!id) return undefined;
+  const roomNumber = stringField(value.roomNumber);
+  const roomType = stringField(value.roomType);
+  const capacity = Number.isInteger(value.capacity) && Number(value.capacity) > 0 && Number(value.capacity) <= 20
+    ? Number(value.capacity)
+    : undefined;
+  return { id, ...(roomNumber ? { roomNumber } : {}), ...(roomType ? { roomType } : {}), ...(capacity ? { capacity } : {}) };
+}
+
+function syncSingleSelectionAlias(state: ConversationState): void {
+  const onlyRoomId = state.selectedRoomIds.length === 1 ? state.selectedRoomIds[0] : undefined;
+  if (onlyRoomId) state.selectedRoomId = onlyRoomId;
+  else delete state.selectedRoomId;
+}
+
+function sameStringArray(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function sameRoomOccupancy(left: readonly RoomOccupancy[], right: readonly RoomOccupancy[]): boolean {
+  return left.length === right.length && left.every((value, index) => value.roomId === right[index]?.roomId && value.guests === right[index]?.guests);
+}
+
+function hasRoomSelectionState(state: ConversationState): boolean {
+  return state.selectedRoomIds.length > 0
+    || state.requestedRoomCount !== undefined
+    || state.roomOccupancy.length > 0
+    || state.roomSelectionNeedsClarification === true
+    || state.roomOccupancyNeedsClarification === true;
+}
+
+function sameRoomSelectionState(left: ConversationState, right: ConversationState): boolean {
+  return sameStringArray(left.selectedRoomIds, right.selectedRoomIds)
+    && left.requestedRoomCount === right.requestedRoomCount
+    && sameRoomOccupancy(left.roomOccupancy, right.roomOccupancy)
+    && left.roomSelectionNeedsClarification === right.roomSelectionNeedsClarification
+    && left.roomOccupancyNeedsClarification === right.roomOccupancyNeedsClarification;
 }
 
 function validIsoDate(value: unknown): value is string {
@@ -115,14 +200,39 @@ function parseStoredState(value: unknown): ConversationState | undefined {
   if (validIsoDate(rawStay.checkOut)) state.stay.checkOut = rawStay.checkOut;
   if (validGuests(rawStay.guests)) state.stay.guests = Number(rawStay.guests);
 
-  if (Array.isArray(value.availabilityRoomIds)) {
-    state.availabilityRoomIds = value.availabilityRoomIds
-      .map(stringField)
-      .filter((item): item is string => Boolean(item))
-      .slice(0, 25);
+  const legacyRoomIds = Array.isArray(value.availabilityRoomIds)
+    ? uniqueStrings(value.availabilityRoomIds.map(stringField).filter((item): item is string => Boolean(item))).slice(0, 25)
+    : [];
+  const candidates = Array.isArray(value.availabilityRooms)
+    ? value.availabilityRooms.map(parseAvailabilityCandidate).filter((item): item is AvailabilityRoomCandidate => Boolean(item)).slice(0, 25)
+    : [];
+  state.availabilityRooms = candidates.length ? candidates : legacyRoomIds.map((id) => ({ id }));
+  state.availabilityRoomIds = uniqueStrings(state.availabilityRooms.map((room) => room.id)).slice(0, 25);
+
+  const selectedIds = Array.isArray(value.selectedRoomIds)
+    ? uniqueStrings(value.selectedRoomIds.map(stringField).filter((item): item is string => Boolean(item)))
+    : [];
+  const legacySelectedRoomId = stringField(value.selectedRoomId);
+  if (selectedIds.length === 0 && legacySelectedRoomId) selectedIds.push(legacySelectedRoomId);
+  state.selectedRoomIds = selectedIds.filter((roomId) => state.availabilityRoomIds.includes(roomId)).slice(0, 10);
+  syncSingleSelectionAlias(state);
+  if (validRoomCount(value.requestedRoomCount)) state.requestedRoomCount = Number(value.requestedRoomCount);
+  if (value.roomSelectionNeedsClarification === true) state.roomSelectionNeedsClarification = true;
+  if (value.roomOccupancyNeedsClarification === true) state.roomOccupancyNeedsClarification = true;
+
+  if (Array.isArray(value.roomOccupancy)) {
+    const seen = new Set<string>();
+    for (const item of value.roomOccupancy) {
+      if (!isRecord(item)) continue;
+      const roomId = stringField(item.roomId);
+      if (!roomId || seen.has(roomId) || !state.selectedRoomIds.includes(roomId) || !validGuests(item.guests)) continue;
+      seen.add(roomId);
+      state.roomOccupancy.push({ roomId, guests: Number(item.guests) });
+    }
   }
-  const selectedRoomId = stringField(value.selectedRoomId);
-  if (selectedRoomId && state.availabilityRoomIds.includes(selectedRoomId)) state.selectedRoomId = selectedRoomId;
+  if (validRevision(value.roomSelectionRevision)) state.roomSelectionRevision = value.roomSelectionRevision;
+  else if (hasRoomSelectionState(state)) state.roomSelectionRevision = 0;
+
   const activeBookingId = stringField(value.activeBookingId);
   if (activeBookingId) state.activeBookingId = activeBookingId;
   const bookingStatus = stringField(value.bookingStatus);
@@ -324,11 +434,33 @@ export function mergeConcurrentConversationState(current: ConversationState, inc
     .sort((a, b) => a.semanticMemory.revision - b.semanticMemory.revision);
   const grounding = groundingCandidates.at(-1);
   if (grounding) {
+    next.availabilityRooms = grounding.availabilityRooms.map((room) => structuredClone(room));
     next.availabilityRoomIds = [...grounding.availabilityRoomIds];
-    if (grounding.selectedRoomId && next.availabilityRoomIds.includes(grounding.selectedRoomId)) {
-      next.selectedRoomId = grounding.selectedRoomId;
-    }
   }
+
+  const leftRoomRevision = left.roomSelectionRevision ?? (hasRoomSelectionState(left) ? 0 : -1);
+  const rightRoomRevision = right.roomSelectionRevision ?? (hasRoomSelectionState(right) ? 0 : -1);
+  const roomConflict = leftRoomRevision >= 0
+    && leftRoomRevision === rightRoomRevision
+    && !sameRoomSelectionState(left, right);
+  let roomSource = right;
+  if (leftRoomRevision > rightRoomRevision) roomSource = left;
+  else if (rightRoomRevision === leftRoomRevision) {
+    if (leftMemory.revision > rightMemory.revision) roomSource = left;
+    else if (rightMemory.revision > leftMemory.revision) roomSource = right;
+  }
+  const mergedRoomRevision = Math.max(leftRoomRevision, rightRoomRevision) + (roomConflict ? 1 : 0);
+  if (mergedRoomRevision >= 0) next.roomSelectionRevision = mergedRoomRevision;
+  if (roomSource.requestedRoomCount !== undefined) next.requestedRoomCount = roomSource.requestedRoomCount;
+  if (roomSource.roomSelectionNeedsClarification === true) next.roomSelectionNeedsClarification = true;
+  else delete next.roomSelectionNeedsClarification;
+  if (roomSource.roomOccupancyNeedsClarification === true) next.roomOccupancyNeedsClarification = true;
+  else delete next.roomOccupancyNeedsClarification;
+  next.selectedRoomIds = roomSource.selectedRoomIds.filter((roomId) => next.availabilityRoomIds.includes(roomId));
+  next.roomOccupancy = roomSource.roomOccupancy
+    .filter((entry) => next.selectedRoomIds.includes(entry.roomId))
+    .map((entry) => structuredClone(entry));
+  syncSingleSelectionAlias(next);
 
   const leftBookingRevision = left.bookingStateRevision ?? (left.activeBookingId || left.bookingStatus ? 0 : -1);
   const rightBookingRevision = right.bookingStateRevision ?? (right.activeBookingId || right.bookingStatus ? 0 : -1);
@@ -413,6 +545,84 @@ export type ApplyConversationStateOptions = {
   activeIntentSource?: "user" | "server" | "legacy";
 };
 
+function roomIdForNumber(state: ConversationState, roomNumber: string): string | undefined {
+  const normalized = roomNumber.trim();
+  return state.availabilityRooms.find((room) => room.roomNumber === normalized)?.id;
+}
+
+function roomIdForIndex(state: ConversationState, index: number): string | undefined {
+  return validSelectionIndex(index) ? state.availabilityRoomIds[index - 1] : undefined;
+}
+
+function resolveRoomOccupancyPatch(state: ConversationState, values: readonly RoomOccupancyPatch[]): RoomOccupancy[] | undefined {
+  const result: RoomOccupancy[] = [];
+  const seen = new Set<string>();
+  for (const item of values) {
+    if (!validGuests(item.guests)) return undefined;
+    const refs = [item.roomId !== undefined, item.roomNumber !== undefined, item.roomIndex !== undefined].filter(Boolean).length;
+    if (refs !== 1) return undefined;
+    let roomId: string | undefined;
+    if (item.roomId !== undefined) roomId = stringField(item.roomId);
+    else if (item.roomNumber !== undefined) roomId = roomIdForNumber(state, item.roomNumber);
+    else if (item.roomIndex !== undefined) roomId = roomIdForIndex(state, item.roomIndex);
+    if (!roomId || seen.has(roomId) || !state.selectedRoomIds.includes(roomId)) return undefined;
+    seen.add(roomId);
+    result.push({ roomId, guests: Number(item.guests) });
+  }
+  return result;
+}
+
+function roomSelectionFingerprint(state: ConversationState): string {
+  return JSON.stringify({
+    selectedRoomIds: state.selectedRoomIds,
+    requestedRoomCount: state.requestedRoomCount ?? null,
+    roomOccupancy: state.roomOccupancy,
+    roomSelectionNeedsClarification: state.roomSelectionNeedsClarification === true,
+    roomOccupancyNeedsClarification: state.roomOccupancyNeedsClarification === true,
+  });
+}
+
+function bumpRoomSelectionRevisionIfChanged(state: ConversationState, beforeFingerprint: string): void {
+  if (roomSelectionFingerprint(state) !== beforeFingerprint) {
+    state.roomSelectionRevision = (state.roomSelectionRevision ?? 0) + 1;
+  }
+}
+
+export function clearStaleRoomGrounding(current: ConversationState): ConversationState {
+  const next = normalizeConversationState(current);
+  const before = roomSelectionFingerprint(next);
+  next.availabilityRoomIds = [];
+  next.availabilityRooms = [];
+  next.selectedRoomIds = [];
+  next.roomOccupancy = [];
+  delete next.selectedRoomId;
+  delete next.roomSelectionNeedsClarification;
+  delete next.roomOccupancyNeedsClarification;
+  bumpRoomSelectionRevisionIfChanged(next, before);
+  return next;
+}
+
+export type MultiRoomConversationIssue = "which_rooms" | "occupancy_distribution";
+
+export function multiRoomConversationIssue(current: ConversationState): MultiRoomConversationIssue | undefined {
+  const state = normalizeConversationState(current);
+  if (state.roomSelectionNeedsClarification === true) return "which_rooms";
+  if (state.requestedRoomCount !== undefined && state.selectedRoomIds.length !== state.requestedRoomCount) return "which_rooms";
+  if (state.roomOccupancyNeedsClarification === true) return "occupancy_distribution";
+  if (state.roomOccupancy.length > 0) {
+    if (state.roomOccupancy.length !== state.selectedRoomIds.length) return "occupancy_distribution";
+    if (state.stay.guests !== undefined) {
+      const allocated = state.roomOccupancy.reduce((sum, entry) => sum + entry.guests, 0);
+      if (allocated !== state.stay.guests) return "occupancy_distribution";
+    }
+  }
+  return undefined;
+}
+
+export function canonicalSelectedRoomIds(current: ConversationState): string[] {
+  return [...normalizeConversationState(current).selectedRoomIds];
+}
+
 export function applyConversationStatePatch(
   current: ConversationState,
   patch: ConversationStatePatch | undefined,
@@ -464,15 +674,103 @@ export function applyConversationStatePatch(
   setDate("checkOut", patch?.checkOut);
   setGuests(patch?.guests);
 
-  if (patch?.selectedRoomId === null || patch?.selectedRoomIndex === null) delete next.selectedRoomId;
-  if (validSelectionIndex(patch?.selectedRoomIndex)) {
-    const roomId = next.availabilityRoomIds[patch.selectedRoomIndex - 1];
-    if (roomId) next.selectedRoomId = roomId;
-    else delete next.selectedRoomId;
-  } else {
-    const roomId = stringField(patch?.selectedRoomId);
-    if (roomId && next.availabilityRoomIds.includes(roomId)) next.selectedRoomId = roomId;
+  const roomBefore = roomSelectionFingerprint(next);
+  const multiSelectionTouched = patch?.selectedRoomIds !== undefined
+    || patch?.selectedRoomIndexes !== undefined
+    || patch?.selectedRoomNumbers !== undefined
+    || patch?.selectedRoomRelation !== undefined;
+  const legacySelectionTouched = !multiSelectionTouched
+    && (patch?.selectedRoomId !== undefined || patch?.selectedRoomIndex !== undefined);
+  const selectionTouched = multiSelectionTouched || legacySelectionTouched;
+
+  if (selectionTouched) {
+    const explicitClear = patch?.selectedRoomIds === null
+      || patch?.selectedRoomIndexes === null
+      || patch?.selectedRoomNumbers === null
+      || patch?.selectedRoomRelation === null
+      || patch?.selectedRoomId === null
+      || patch?.selectedRoomIndex === null;
+    let resolved: string[] | undefined = explicitClear ? [] : undefined;
+    if (!explicitClear && multiSelectionTouched) {
+      const ids: string[] = [];
+      let valid = true;
+      if (Array.isArray(patch?.selectedRoomIds)) {
+        for (const rawId of patch.selectedRoomIds) {
+          const roomId = stringField(rawId);
+          if (!roomId || !next.availabilityRoomIds.includes(roomId)) { valid = false; break; }
+          ids.push(roomId);
+        }
+      }
+      if (valid && Array.isArray(patch?.selectedRoomIndexes)) {
+        for (const index of patch.selectedRoomIndexes) {
+          const roomId = roomIdForIndex(next, index);
+          if (!roomId) { valid = false; break; }
+          ids.push(roomId);
+        }
+      }
+      if (valid && Array.isArray(patch?.selectedRoomNumbers)) {
+        for (const number of patch.selectedRoomNumbers) {
+          const roomId = roomIdForNumber(next, number);
+          if (!roomId) { valid = false; break; }
+          ids.push(roomId);
+        }
+      }
+      if (valid && patch?.selectedRoomRelation === "both") {
+        if (next.availabilityRoomIds.length === 2) ids.push(...next.availabilityRoomIds);
+        else valid = false;
+      }
+      if (valid && patch?.selectedRoomRelation === "other") {
+        if (next.availabilityRoomIds.length === 2 && next.selectedRoomIds.length === 1) {
+          const other = next.availabilityRoomIds.find((roomId) => roomId !== next.selectedRoomIds[0]);
+          if (other) ids.push(other);
+          else valid = false;
+        } else valid = false;
+      }
+      resolved = valid ? uniqueStrings(ids).slice(0, 10) : undefined;
+      if (!valid) next.roomSelectionNeedsClarification = true;
+      else delete next.roomSelectionNeedsClarification;
+    } else if (!explicitClear && legacySelectionTouched) {
+      const roomId = validSelectionIndex(patch?.selectedRoomIndex)
+        ? roomIdForIndex(next, patch!.selectedRoomIndex!)
+        : stringField(patch?.selectedRoomId);
+      if (roomId && next.availabilityRoomIds.includes(roomId)) {
+        resolved = [roomId];
+        delete next.roomSelectionNeedsClarification;
+      } else {
+        next.roomSelectionNeedsClarification = true;
+      }
+    }
+    if (explicitClear) delete next.roomSelectionNeedsClarification;
+    next.selectedRoomIds = resolved ?? next.selectedRoomIds;
+    next.roomOccupancy = next.roomOccupancy.filter((entry) => next.selectedRoomIds.includes(entry.roomId));
+    syncSingleSelectionAlias(next);
   }
+
+  if (patch?.requestedRoomCount === null) delete next.requestedRoomCount;
+  else if (validRoomCount(patch?.requestedRoomCount)) {
+    next.requestedRoomCount = Number(patch.requestedRoomCount);
+    if (!selectionTouched && next.selectedRoomIds.length > 0 && next.selectedRoomIds.length !== next.requestedRoomCount) {
+      next.selectedRoomIds = [];
+      next.roomOccupancy = [];
+      syncSingleSelectionAlias(next);
+    }
+  } else if (selectionTouched && next.selectedRoomIds.length > 0) {
+    next.requestedRoomCount = next.selectedRoomIds.length;
+  }
+
+  if (patch?.roomOccupancy === null) {
+    next.roomOccupancy = [];
+    delete next.roomOccupancyNeedsClarification;
+  } else if (Array.isArray(patch?.roomOccupancy)) {
+    const resolvedOccupancy = resolveRoomOccupancyPatch(next, patch.roomOccupancy);
+    if (resolvedOccupancy) {
+      next.roomOccupancy = resolvedOccupancy;
+      delete next.roomOccupancyNeedsClarification;
+    } else {
+      next.roomOccupancyNeedsClarification = true;
+    }
+  }
+  bumpRoomSelectionRevisionIfChanged(next, roomBefore);
 
   if (patch?.activeBookingId === null) delete next.activeBookingId;
   else {
@@ -870,6 +1168,12 @@ export function stripModelSemanticStatePatch(patch: ConversationStatePatch | und
   const safe: ConversationStatePatch = {};
   if (patch.selectedRoomId !== undefined) safe.selectedRoomId = patch.selectedRoomId;
   if (patch.selectedRoomIndex !== undefined) safe.selectedRoomIndex = patch.selectedRoomIndex;
+  if (patch.selectedRoomIds !== undefined) safe.selectedRoomIds = patch.selectedRoomIds;
+  if (patch.selectedRoomIndexes !== undefined) safe.selectedRoomIndexes = patch.selectedRoomIndexes;
+  if (patch.selectedRoomNumbers !== undefined) safe.selectedRoomNumbers = patch.selectedRoomNumbers;
+  if (patch.selectedRoomRelation !== undefined) safe.selectedRoomRelation = patch.selectedRoomRelation;
+  if (patch.requestedRoomCount !== undefined) safe.requestedRoomCount = patch.requestedRoomCount;
+  if (patch.roomOccupancy !== undefined) safe.roomOccupancy = patch.roomOccupancy;
   // Booking grounding is exclusively server/tool-owned. The model may use
   // the current active booking for planning, but cannot mutate or clear it.
   return Object.keys(safe).length ? safe : undefined;
@@ -891,7 +1195,8 @@ export function enrichPlanInputFromState(toolId: string, input: unknown, state: 
     if (state.stay.guests !== undefined) raw.guests = state.stay.guests;
   }
   if (toolId === "hms.getQuote" || toolId === "hms.createReservation") {
-    if (raw.roomId === undefined && state.selectedRoomId) raw.roomId = state.selectedRoomId;
+    const selectedRoomIds = canonicalSelectedRoomIds(state);
+    if (raw.roomId === undefined && selectedRoomIds.length === 1) raw.roomId = selectedRoomIds[0];
     if (state.stay.checkIn) raw.checkIn = state.stay.checkIn;
     if (state.stay.checkOut) raw.checkOut = state.stay.checkOut;
   }
@@ -937,26 +1242,35 @@ export function updateConversationStateFromTool(
 
   if (toolId === "hms.checkAvailability") {
     if (stale) {
-      next.availabilityRoomIds = [];
-      delete next.selectedRoomId;
-    } else {
-      const rooms = Array.isArray(rawData.rooms) ? rawData.rooms : [];
-      next.availabilityRoomIds = rooms
-        .map((room) => isRecord(room) ? stringField(room.id) : undefined)
-        .filter((roomId): roomId is string => Boolean(roomId))
-        .slice(0, 25);
-      if (next.selectedRoomId && !next.availabilityRoomIds.includes(next.selectedRoomId)) delete next.selectedRoomId;
+      return clearStaleRoomGrounding(next);
     }
+    const roomBefore = roomSelectionFingerprint(next);
+    const rooms = Array.isArray(rawData.rooms) ? rawData.rooms : [];
+    next.availabilityRooms = rooms
+      .map(parseAvailabilityCandidate)
+      .filter((room): room is AvailabilityRoomCandidate => Boolean(room))
+      .slice(0, 25);
+    next.availabilityRoomIds = next.availabilityRooms.map((room) => room.id);
+    next.selectedRoomIds = next.selectedRoomIds.filter((roomId) => next.availabilityRoomIds.includes(roomId));
+    next.roomOccupancy = next.roomOccupancy.filter((entry) => next.selectedRoomIds.includes(entry.roomId));
+    syncSingleSelectionAlias(next);
+    bumpRoomSelectionRevisionIfChanged(next, roomBefore);
   }
 
   const roomId = stringField(rawInput.roomId) ?? stringField(rawData.roomId);
-  if (
-    !stale
-    && (toolId === "hms.getQuote" || toolId === "hms.createReservation")
-    && roomId
-    && (next.availabilityRoomIds.length === 0 || next.availabilityRoomIds.includes(roomId))
-  ) {
-    next.selectedRoomId = roomId;
+  if (!stale && (toolId === "hms.getQuote" || toolId === "hms.createReservation") && roomId) {
+    if (next.availabilityRoomIds.length === 0) {
+      next.availabilityRoomIds = [roomId];
+      next.availabilityRooms = [{ id: roomId }];
+    }
+    if (next.availabilityRoomIds.includes(roomId) && (next.selectedRoomIds.length <= 1 || !next.selectedRoomIds.includes(roomId))) {
+      const roomBefore = roomSelectionFingerprint(next);
+      next.selectedRoomIds = [roomId];
+      next.requestedRoomCount = 1;
+      next.roomOccupancy = [];
+      syncSingleSelectionAlias(next);
+      bumpRoomSelectionRevisionIfChanged(next, roomBefore);
+    }
   }
 
   const bookingId = stringField(rawData.bookingId);
