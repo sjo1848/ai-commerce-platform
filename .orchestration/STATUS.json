@@ -1,13 +1,13 @@
 {
   "phase": "ACP_INTEGRATION_PHASE_2_6",
-  "runtime_status": "IN_PROGRESS",
+  "runtime_status": "READY_FOR_NEXT_SUBSTAGE",
   "resume_authorized": true,
   "active_task": "ACP-2.6.9-R2-NATURAL-RECEPTIONIST",
-  "last_completed_task": "ACP-2.6.9-R2.2-NATURAL-RECEPTIONIST-DIALOGUE-LAYER",
-  "last_completed_head": "5d65d9ff962cd0000fbf5ded1f0facc37efb9fe4",
-  "current_substage": "2.6.9-R2.3_DURABLE_SEMANTIC_MEMORY_V2",
-  "next_action": "DEFINE_AND_IMPLEMENT_R2_3_DURABLE_SEMANTIC_MEMORY_V2",
-  "stop_reason": null,
+  "last_completed_task": "ACP-2.6.9-R2.3-DURABLE-SEMANTIC-MEMORY-V2",
+  "last_completed_head": "8ad5eafd8bcfec077fa12a012c75b973291e1335",
+  "current_substage": "2.6.9-R2.4_MULTI_ROOM_CONVERSATION_MODEL_READY_NOT_STARTED",
+  "next_action": "START_R2_4_MULTI_ROOM_CONVERSATION_MODEL",
+  "stop_reason": "R2.3_TECHNICAL_PASS_CLOSED_USER_REQUESTED_THROUGH_CURRENT_SUBSTAGE",
   "product_decision": {
     "id": "DEC-002",
     "decision": "CONSOLIDATE_AI_EXPERIENCE_IN_HMS_BEFORE_SECOND_VERTICAL",
@@ -54,9 +54,32 @@
     }
   },
   "r2_3": {
-    "status": "ACTIVE_NOT_IMPLEMENTED",
-    "semantic_memory_v2": false,
-    "multi_room": false
+    "status": "TECHNICAL_PASS_CLOSED",
+    "semantic_memory_v2": true,
+    "multi_room": false,
+    "artifact_head": "35de13ba292d4bddb7554d0105abed982d42c39d",
+    "artifact_ci_run": 33356166030,
+    "foundation_tests": "121/121_PASS",
+    "qa": "PASS",
+    "pre_critic": "PASS",
+    "independent_critic": "PASS",
+    "open_p0_p1_p2": "0/0/0",
+    "integration_head": "8ad5eafd8bcfec077fa12a012c75b973291e1335",
+    "post_merge_ci_run": 33356508067,
+    "post_merge_result": "PASS",
+    "evidence": ".orchestration/evidence/ACP-2.6.9-R2.3-CLOSURE.md",
+    "durable_user_facts": true,
+    "explicit_clear_tombstones": true,
+    "concurrent_snapshot_merge": true,
+    "stale_snapshot_rollback_protection": true,
+    "stale_tool_rollback_protection": true,
+    "bounded_preference_poison_filter": true,
+    "scope_isolation": true
+  },
+  "r2_4": {
+    "status": "READY_NOT_STARTED",
+    "multi_room_conversation_model": false,
+    "multi_room_execution": false
   },
   "r2_sequence": [
     "2.6.9-R2.1_RECEPTIONIST_PRODUCT_CONTRACT_AND_ACCEPTANCE_CORPUS",
@@ -86,8 +109,8 @@
     "human_approval_required_for_mutations": true
   },
   "event": {
-    "id": "ACP-2.6.9-R2.2-CLOSED-R2.3-ACTIVE",
+    "id": "ACP-2.6.9-R2.3-CLOSED-R2.4-READY",
     "type": "SUBSTAGE_ADVANCE",
-    "seq": 14
+    "seq": 15
   }
 }
