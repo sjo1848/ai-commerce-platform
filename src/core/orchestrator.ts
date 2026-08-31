@@ -54,12 +54,6 @@ function invalidateStaleRoomGrounding(before: ConversationState, after: Conversa
   return clearStaleRoomGrounding(after);
 }
 
-/**
- * Defense in depth for tool completions: explicit user values and explicit
- * clears remain authoritative over a tool plan that was prepared against older
- * conversational state. Operational results remain real/audited, but stale room
- * grounding is discarded.
- */
 function preserveUserSemanticAuthority(before: ConversationState, after: ConversationState): ConversationState {
   const next = structuredClone(after);
   const beforeMemory = (before as ConversationState & { semanticMemory?: ConversationState["semanticMemory"] }).semanticMemory;
@@ -302,6 +296,20 @@ export class ChatOrchestrator {
     return { message: reply, sessionId: context.session.id };
   }
 
+  private async unsupportedMultiRoom(normalized: string, context: ExecutionContext): Promise<ChatResult> {
+    const conversationalContext = modelVisibleConversation(await this.conversation.list(context.session.id, 32));
+    const reply = await this.responder.compose({
+      kind: "message",
+      purpose: "unsupported",
+      baseMessage: "Tengo registrada la selección de varias habitaciones. La reserva conjunta todavía no está habilitada en este runtime.",
+      userMessage: normalized,
+      conversation: conversationalContext,
+      context,
+    });
+    await this.conversation.append(context.session.id, { role: "assistant", content: reply });
+    return { message: reply, sessionId: context.session.id };
+  }
+
   private async executePlan(plan: ToolPlan, context: ExecutionContext, trustedMeta: ToolExecutionMeta): Promise<ChatResult> {
     if (this.maxToolCalls < 1) throw new CoreError("LIMIT_EXCEEDED", "Tool-call limit reached", 429);
     const tools = this.registry.descriptorsFor(context.tenant);
@@ -335,14 +343,10 @@ export class ChatOrchestrator {
     if (normalized.length > this.maxMessageChars) throw new CoreError("LIMIT_EXCEEDED", "Message too long", 413);
 
     const currentGroup = await this.reservationGroupState.get(context.session.id);
-    // Keep the latest server-owned group snapshot inside the bounded durable
-    // conversation window without exposing it to the model.
     if (currentGroup.activeBookingIds.length > 0) await this.reservationGroupState.put(context.session.id, currentGroup);
 
     const priorConversation = modelVisibleConversation(await this.conversation.list(context.session.id, 32));
     const rawPriorState = await this.conversationState.get(context.session.id);
-    // R2.3: extract and persist the current user facts before any provider call.
-    // If routing times out/fails, unambiguous dates/guests/preferences still survive.
     const semanticPriorState = applyUserSemanticTurn(rawPriorState, normalized, {
       tenantId: context.tenant.id,
       actorId: context.actor.id,
@@ -350,8 +354,6 @@ export class ChatOrchestrator {
     });
     const proposedPriorState = invalidateStaleRoomGrounding(rawPriorState, semanticPriorState);
     await this.conversationState.put(context.session.id, proposedPriorState);
-    // State stores merge overlapping snapshots by semantic revision. Read back the
-    // durable merged view so concurrent facts are visible to this routing turn.
     const priorState = await this.conversationState.get(context.session.id);
 
     await this.conversation.append(context.session.id, { role: "user", content: normalized });
@@ -400,6 +402,9 @@ export class ChatOrchestrator {
       if (!durableNextState.stay.checkIn || !durableNextState.stay.checkOut) {
         return this.clarification("¿Para qué fechas sería?", normalized, context, ["dates"]);
       }
+      if (!tools.some((tool) => tool.id === "hms.createMultiReservation")) {
+        return this.unsupportedMultiRoom(normalized, context);
+      }
       planToolId = "hms.createMultiReservation";
       const raw = isRecord(route.plan.input) ? route.plan.input : {};
       planInput = {
@@ -423,6 +428,9 @@ export class ChatOrchestrator {
         planToolId = "hms.cancelReservation";
         planInput = { bookingId: groundedBookingIds[0] };
       } else if (requestsWholeGroupCancellation(normalized)) {
+        if (!tools.some((tool) => tool.id === "hms.cancelMultiReservation")) {
+          return this.clarification("La cancelación grupal no está habilitada en este runtime. Indicame qué reserva específica querés cancelar.", normalized, context, ["booking"]);
+        }
         planToolId = "hms.cancelMultiReservation";
         planInput = { bookingIds: [...groundedBookingIds] };
       } else {
