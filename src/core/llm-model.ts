@@ -99,13 +99,16 @@ function sanitizedConversation(conversation: readonly ModelConversationTurn[]): 
 /**
  * Only expose the minimum conversational state required for planning. Semantic
  * scope, revision counters and provenance are server-authoritative metadata and
- * never need to cross the provider boundary.
+ * never need to cross the provider boundary. Legacy direct callers may still
+ * supply the pre-R2.3 state shape, so absent semantic metadata is treated as
+ * empty rather than weakening the provider boundary.
  */
 function modelVisibleState(state: Readonly<ConversationState>): Record<string, unknown> {
+  const semanticMemory = (state as Readonly<ConversationState> & { semanticMemory?: ConversationState["semanticMemory"] }).semanticMemory;
   return {
     stay: state.stay,
-    preferences: state.semanticMemory.preferences.slice(-8).map((item) => item.value),
-    ...(state.semanticMemory.activeIntent ? { activeIntent: state.semanticMemory.activeIntent.value } : {}),
+    preferences: semanticMemory?.preferences.slice(-8).map((item) => item.value) ?? [],
+    ...(semanticMemory?.activeIntent ? { activeIntent: semanticMemory.activeIntent.value } : {}),
     availabilityRoomIds: state.availabilityRoomIds,
     ...(state.selectedRoomId ? { selectedRoomId: state.selectedRoomId } : {}),
     ...(state.activeBookingId ? { activeBookingId: state.activeBookingId } : {}),
