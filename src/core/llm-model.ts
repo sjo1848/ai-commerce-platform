@@ -20,8 +20,8 @@ const TRUSTED_FIELDS = new Set([
   "requestid", "traceid", "sessionid",
 ]);
 
-const CLARIFICATION_REASONS = ["none", "missing", "ambiguous", "unsupported", "greeting", "social", "help"] as const;
-const CLARIFICATION_FIELDS = ["dates", "guests", "room", "booking", "selection"] as const;
+const CLARIFICATION_REASONS = ["none", "missing", "ambiguous", "unsupported", "greeting", "social", "help", "acknowledgement"] as const;
+const CLARIFICATION_FIELDS = ["dates", "guests", "room", "booking", "selection", "occupancy"] as const;
 type ClarificationReason = typeof CLARIFICATION_REASONS[number];
 type ClarificationField = typeof CLARIFICATION_FIELDS[number];
 
@@ -34,6 +34,25 @@ const STATE_PATCH_SCHEMA: JsonSchema = {
     guests: { type: ["integer", "null"], minimum: 1, maximum: 20 },
     selectedRoomId: { type: ["string", "null"] },
     selectedRoomIndex: { type: ["integer", "null"], minimum: 1, maximum: 25 },
+    selectedRoomIds: { type: ["array", "null"], items: { type: "string" }, maxItems: 10 },
+    selectedRoomIndexes: { type: ["array", "null"], items: { type: "integer", minimum: 1, maximum: 25 }, maxItems: 10 },
+    selectedRoomNumbers: { type: ["array", "null"], items: { type: "string", minLength: 1, maxLength: 20 }, maxItems: 10 },
+    requestedRoomCount: { type: ["integer", "null"], minimum: 1, maximum: 10 },
+    roomOccupancy: {
+      type: ["array", "null"],
+      maxItems: 10,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          roomId: { type: "string" },
+          roomNumber: { type: "string", minLength: 1, maxLength: 20 },
+          roomIndex: { type: "integer", minimum: 1, maximum: 25 },
+          guests: { type: "integer", minimum: 1, maximum: 20 },
+        },
+        required: ["guests"],
+      },
+    },
   },
 };
 
@@ -109,7 +128,14 @@ function modelVisibleState(state: Readonly<ConversationState>): Record<string, u
     preferences: semanticMemory?.preferences.slice(-8).map((item) => item.value) ?? [],
     ...(semanticMemory?.activeIntent ? { activeIntent: semanticMemory.activeIntent.value } : {}),
     availabilityRoomIds: state.availabilityRoomIds,
+    availabilityRooms: (state.availabilityRooms ?? state.availabilityRoomIds.map((id) => ({ id }))).map((room) => ({
+      id: room.id,
+      ...(room.roomNumber ? { roomNumber: room.roomNumber } : {}),
+    })),
+    ...((state.selectedRoomIds?.length ?? 0) > 0 ? { selectedRoomIds: state.selectedRoomIds } : state.selectedRoomId ? { selectedRoomIds: [state.selectedRoomId] } : {}),
     ...(state.selectedRoomId ? { selectedRoomId: state.selectedRoomId } : {}),
+    ...(state.requestedRoomCount !== undefined ? { requestedRoomCount: state.requestedRoomCount } : {}),
+    ...((state.roomOccupancy?.length ?? 0) > 0 ? { roomOccupancy: state.roomOccupancy } : {}),
     ...(state.activeBookingId ? { activeBookingId: state.activeBookingId } : {}),
     ...(state.bookingStatus ? { bookingStatus: state.bookingStatus } : {}),
   };
@@ -125,7 +151,10 @@ function clarificationDecision(value: Record<string, unknown>): { reason: Clarif
 
 function parseStatePatch(value: unknown): ConversationStatePatch | undefined {
   if (!isRecord(value)) return undefined;
-  const allowed = new Set(["checkIn", "checkOut", "guests", "selectedRoomId", "selectedRoomIndex"]);
+  const allowed = new Set([
+    "checkIn", "checkOut", "guests", "selectedRoomId", "selectedRoomIndex",
+    "selectedRoomIds", "selectedRoomIndexes", "selectedRoomNumbers", "requestedRoomCount", "roomOccupancy",
+  ]);
   if (Object.keys(value).some((key) => !allowed.has(key))) return undefined;
   const patch: ConversationStatePatch = {};
   if (value.checkIn === null || typeof value.checkIn === "string") patch.checkIn = value.checkIn;
@@ -133,6 +162,61 @@ function parseStatePatch(value: unknown): ConversationStatePatch | undefined {
   if (value.guests === null || Number.isInteger(value.guests)) patch.guests = value.guests as number | null;
   if (value.selectedRoomId === null || typeof value.selectedRoomId === "string") patch.selectedRoomId = value.selectedRoomId;
   if (value.selectedRoomIndex === null || Number.isInteger(value.selectedRoomIndex)) patch.selectedRoomIndex = value.selectedRoomIndex as number | null;
+
+  const parseStringArray = (raw: unknown): string[] | null | undefined => {
+    if (raw === null) return null;
+    if (!Array.isArray(raw) || raw.some((item) => typeof item !== "string") || raw.length > 10) return undefined;
+    return raw as string[];
+  };
+  const parseIntegerArray = (raw: unknown): number[] | null | undefined => {
+    if (raw === null) return null;
+    if (!Array.isArray(raw) || raw.some((item) => !Number.isInteger(item)) || raw.length > 10) return undefined;
+    return raw as number[];
+  };
+
+  if (value.selectedRoomIds !== undefined) {
+    const parsed = parseStringArray(value.selectedRoomIds);
+    if (parsed === undefined) return undefined;
+    patch.selectedRoomIds = parsed;
+  }
+  if (value.selectedRoomIndexes !== undefined) {
+    const parsed = parseIntegerArray(value.selectedRoomIndexes);
+    if (parsed === undefined) return undefined;
+    patch.selectedRoomIndexes = parsed;
+  }
+  if (value.selectedRoomNumbers !== undefined) {
+    const parsed = parseStringArray(value.selectedRoomNumbers);
+    if (parsed === undefined) return undefined;
+    patch.selectedRoomNumbers = parsed;
+  }
+  if (value.requestedRoomCount !== undefined) {
+    if (value.requestedRoomCount === null) patch.requestedRoomCount = null;
+    else if (Number.isInteger(value.requestedRoomCount) && Number(value.requestedRoomCount) >= 1 && Number(value.requestedRoomCount) <= 10) {
+      patch.requestedRoomCount = Number(value.requestedRoomCount);
+    } else return undefined;
+  }
+  if (value.roomOccupancy !== undefined) {
+    if (value.roomOccupancy === null) patch.roomOccupancy = null;
+    else {
+      if (!Array.isArray(value.roomOccupancy) || value.roomOccupancy.length > 10) return undefined;
+      const occupancy = [];
+      for (const item of value.roomOccupancy) {
+        if (!isRecord(item)) return undefined;
+        const keys = Object.keys(item);
+        if (keys.some((key) => !["roomId", "roomNumber", "roomIndex", "guests"].includes(key))) return undefined;
+        if (!Number.isInteger(item.guests) || Number(item.guests) < 1 || Number(item.guests) > 20) return undefined;
+        const refs = [typeof item.roomId === "string", typeof item.roomNumber === "string", Number.isInteger(item.roomIndex)].filter(Boolean).length;
+        if (refs !== 1) return undefined;
+        occupancy.push({
+          ...(typeof item.roomId === "string" ? { roomId: item.roomId } : {}),
+          ...(typeof item.roomNumber === "string" ? { roomNumber: item.roomNumber } : {}),
+          ...(Number.isInteger(item.roomIndex) ? { roomIndex: Number(item.roomIndex) } : {}),
+          guests: Number(item.guests),
+        });
+      }
+      patch.roomOccupancy = occupancy;
+    }
+  }
   return patch;
 }
 
@@ -159,7 +243,11 @@ function clarificationContradictsState(
   return clarification.missing.some((field) => {
     if (field === "dates") return Boolean(state.stay.checkIn && state.stay.checkOut);
     if (field === "guests") return state.stay.guests !== undefined;
-    if (field === "room" || field === "selection") return Boolean(state.selectedRoomId);
+    if (field === "room" || field === "selection") {
+      const selectedCount = state.selectedRoomIds?.length ?? (state.selectedRoomId ? 1 : 0);
+      return selectedCount === 1;
+    }
+    if (field === "occupancy") return false;
     if (field === "booking") return Boolean(state.activeBookingId);
     return false;
   });
@@ -170,9 +258,11 @@ function clarificationMessage(reason: ClarificationReason, missing: readonly Cla
   if (reason === "greeting") return "¡Hola! Claro, decime en qué te puedo ayudar.";
   if (reason === "social") return "De nada. Cuando quieras, seguimos con la estadía.";
   if (reason === "help") return "Puedo ayudarte con disponibilidad y precios, y a preparar reservas o cancelaciones con confirmación.";
+  if (reason === "acknowledgement") return "Perfecto, lo tengo.";
   if (reason === "unsupported") return "Puedo ayudarte con disponibilidad, cotizaciones, reservas y cancelaciones del hotel.";
   if (reason === "ambiguous") {
     if (set.has("booking")) return "No puedo identificar con seguridad qué reserva querés usar. Decime cuál es.";
+    if (set.has("occupancy")) return "¿Cómo querés repartir la ocupación entre ellas?";
     if (set.has("room") || set.has("selection")) return "No puedo identificar con seguridad qué habitación u opción querés usar. Decime cuál es.";
     return "No tengo suficiente contexto para decidir con seguridad. Dame un poco más de información.";
   }
@@ -182,6 +272,7 @@ function clarificationMessage(reason: ClarificationReason, missing: readonly Cla
   if (set.has("dates")) return "¿Para qué fechas sería?";
   if (set.has("guests")) return "¿Para cuántas personas sería?";
   if (set.has("booking")) return "¿Qué reserva querés usar? Necesito identificarla de forma inequívoca.";
+  if (set.has("occupancy")) return "¿Cómo querés repartir la ocupación entre ellas?";
   if (set.has("room") || set.has("selection")) return "¿Qué habitación u opción querés elegir?";
   return "Me falta información para hacerlo con seguridad. Contame un poco más.";
 }
@@ -191,6 +282,7 @@ function messagePurpose(reason: ClarificationReason): ModelMessagePurpose {
   if (reason === "social") return "social";
   if (reason === "help") return "help";
   if (reason === "unsupported") return "unsupported";
+  if (reason === "acknowledgement") return "acknowledgement";
   return "clarification";
 }
 
@@ -251,8 +343,15 @@ export class LLMModelRouter implements ModelRouter {
       "Server scope, provenance and revision metadata are intentionally not model-visible and must never be inferred or requested.",
       "statePatch records only facts learned or explicitly changed in the CURRENT user message. For dates/guest count it is only a routing hint: Core independently owns durable semantic persistence and ignores ungrounded model memory patches.",
       "For dates and guest count, combine the current message with CURRENT_CONVERSATION_STATE. Never ask again for a value already present there unless the user explicitly changed it ambiguously.",
-      "For a reference to a displayed option by list position (first/primera, second/segunda, third/tercera, last/última, etc.), put the ONE-BASED list position in statePatch.selectedRoomIndex. The Core resolves that index to an authoritative roomId. Do not ask which room when the ordinal is unambiguous.",
-      "selectedRoomId may only copy an exact roomId already present in CURRENT_CONVERSATION_STATE.availabilityRoomIds. Prefer selectedRoomIndex for ordinal references. Booking grounding is server-owned: use the current active booking from state for cancellation planning, never invent or mutate booking IDs in statePatch.",
+      "For one displayed option by position, selectedRoomIndex is the ONE-BASED list position/index. For several ordinals such as 'las dos primeras', use selectedRoomIndexes=[1,2]. Core resolves every index server-side.",
+      "For natural room numbers such as 'la 101 y la 102', use selectedRoomNumbers=['101','102']. They must come from CURRENT_CONVERSATION_STATE.availabilityRooms. Never derive a roomId from the number yourself.",
+      "selectedRoomIds may only copy exact IDs already present in CURRENT_CONVERSATION_STATE.availabilityRoomIds. Core rejects unknown IDs, numbers and out-of-range ordinals.",
+      "selectedRoomIds/Indexes/Numbers represent the FINAL desired selected set for this turn. A correction like 'cambiá la 102 por la 103' must preserve unaffected 101 and emit the final set 101+103.",
+      "For 'quiero dos habitaciones' or 'reservame dos' without exact rooms, set requestedRoomCount=2 and ask only which rooms/selection. Never choose arbitrary candidates.",
+      "For explicit room allocation, use roomOccupancy entries with exactly one roomNumber/roomIndex/roomId plus guests. Never invent missing allocations. If allocations conflict with known total guests, ask only how to repart/distribute occupancy.",
+      "A selection-only or correction-only turn that is complete and needs no tool => kind=message, clarificationReason=acknowledgement, missing=[], toolId='', input={}, with the bounded statePatch.",
+      "More than one selected room is conversation state only in R2.4. Never collapse several rooms into one roomId to execute a reservation. Core blocks multi-room side effects until R2.5.",
+      "Booking grounding is server-owned: use the current active booking from state for cancellation planning, never invent or mutate booking IDs in statePatch.",
       "FIRST identify current intent. THEN apply only requirements for that capability.",
       "Pure greeting with no operational request => kind=message, clarificationReason=greeting, missing=[], toolId='', input={}, statePatch={}.",
       "Pure thanks/social acknowledgement with no operational request => kind=message, clarificationReason=social, missing=[], toolId='', input={}, statePatch={}.",
@@ -267,6 +366,9 @@ export class LLMModelRouter implements ModelRouter {
       "Interpret ordinary date phrasing. 'del 15 al 17 de enero de 2027' => checkIn=2027-01-15, checkOut=2027-01-17.",
       "Example: state has checkIn=2027-01-15/checkOut=2027-01-17, user says 'somos dos' => statePatch={guests:2}; if availability is the active intent/context, use the stored dates and guests=2 rather than asking dates again.",
       "Example after availabilityRoomIds=[roomA,roomB,roomC]: user says '¿Cuánto sale la primera?' => kind=tool, toolId=hms.getQuote, input={}, statePatch={selectedRoomIndex:1}, clarificationReason=none, missing=[].",
+      "Example after availabilityRooms=[{id:roomA,roomNumber:'101'},{id:roomB,roomNumber:'102'},{id:roomC,roomNumber:'103'}]: 'Quiero la 101 y la 102' => kind=message, clarificationReason=acknowledgement, statePatch={selectedRoomNumbers:['101','102']}, missing=[].",
+      "Example with that same state: 'Mejor cambiá la 102 por la 103' => kind=message, clarificationReason=acknowledgement, statePatch={selectedRoomNumbers:['101','103']}, missing=[].",
+      "Example: total guests=5, selected 101+102, 'la 101 para dos y la 102 para dos' => kind=message, clarificationReason=ambiguous, missing=['occupancy'], statePatch includes both selections and both explicit allocations; never assign the fifth guest yourself.",
       "Example after availabilityRoomIds=[roomA,roomB,roomC]: 'me quedo con la segunda, reservámela' => kind=tool, toolId=hms.createReservation, input={}, statePatch={selectedRoomIndex:2}, clarificationReason=none, missing=[].",
       "Example: state already has dates and guests, user says '¿puedo reservar?' => do not ask dates or guests. Ask only for a room/selection if none is grounded; if selectedRoomId exists, route reservation.",
       "Example: user says 'para las que te dije ya' when dates exist in state => preserve/use those dates; never ask them again.",

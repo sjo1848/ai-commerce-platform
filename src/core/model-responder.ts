@@ -221,6 +221,7 @@ function fieldMentioned(text: string, field: ModelClarificationField): boolean {
     case "room":
     case "selection": return /\b(habitaci[oó]n|opci[oó]n)\b/i.test(text);
     case "booking": return /\b(reserva|booking)\b/i.test(text);
+    case "occupancy": return /\b(repart\w*|distribu\w*|ocupaci[oó]n|cada\s+una)\b/i.test(text);
   }
 }
 
@@ -241,6 +242,7 @@ function validateConversationalDraft(input: ConversationalResponseInput, value: 
     if (!missing.includes("guests")) forbidden.push("guests");
     if (!roomGroupMissing) forbidden.push("room");
     if (!missing.includes("booking")) forbidden.push("booking");
+    if (!missing.includes("occupancy")) forbidden.push("occupancy");
     if (forbidden.some((field) => fieldMentioned(text, field))) return undefined;
   }
   return text;

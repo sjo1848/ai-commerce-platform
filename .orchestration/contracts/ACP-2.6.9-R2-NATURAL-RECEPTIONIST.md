@@ -172,4 +172,4 @@ Verdicts:
 Only one R2 substage is active at a time. A substage must meet its exit criteria and evidence must be persisted before the next substage becomes active. Ordinary technical REWORK returns automatically to implementation; only genuine product/risk decisions create a Human Gate.
 
 ## Current active substage
-`2.6.9-R2.1 — Receptionist Product Contract + Acceptance Corpus`.
+`2.6.9-R2.4 — Multi-Room Conversation Model`.
