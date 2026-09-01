@@ -13,13 +13,24 @@ const baselineTelemetry = read(baselineTelemetryPath);
 const candidateEval = read(candidateEvalPath);
 const candidateTelemetry = read(candidateTelemetryPath);
 
+function modelIdentityMatches(evalReport, telemetry) {
+  const expectedModel = evalReport?.expectedModel;
+  const observedModels = telemetry?.models;
+  return typeof expectedModel === "string"
+    && expectedModel.length > 0
+    && Array.isArray(observedModels)
+    && observedModels.length === 1
+    && observedModels[0] === expectedModel;
+}
+
 function eligible(evalReport, telemetry) {
   const e2eP95 = evalReport?.summary?.endToEndLatencyMs?.p95;
   const providerP95 = telemetry?.latencyMs?.p95;
   const fallbackRatio = telemetry?.fallbackRatio;
   const inferenceCount = telemetry?.modelInferences;
   return Boolean(
-    evalReport?.summary?.hardCategoriesPass
+    modelIdentityMatches(evalReport, telemetry)
+    && evalReport?.summary?.hardCategoriesPass
     && evalReport?.summary?.qualityPass
     && evalReport?.summary?.receptionistQualityProxy >= 0.9
     && typeof e2eP95 === "number" && e2eP95 <= 10_000
@@ -29,6 +40,8 @@ function eligible(evalReport, telemetry) {
   );
 }
 
+const baselineModelIdentityMatches = modelIdentityMatches(baselineEval, baselineTelemetry);
+const candidateModelIdentityMatches = modelIdentityMatches(candidateEval, candidateTelemetry);
 const baselineEligible = eligible(baselineEval, baselineTelemetry);
 const candidateEligible = eligible(candidateEval, candidateTelemetry);
 const baselineQuality = baselineEval?.summary?.receptionistQualityProxy ?? 0;
@@ -55,10 +68,14 @@ let decision;
 let reason;
 if (!baselineEligible) {
   decision = "REWORK";
-  reason = "baseline failed one or more R2.6 hard gates";
+  reason = baselineModelIdentityMatches
+    ? "baseline failed one or more R2.6 hard gates"
+    : "baseline telemetry did not match the explicitly deployed baseline model";
 } else if (!candidateEligible) {
   decision = "RETAIN_BASELINE";
-  reason = "candidate failed one or more R2.6 hard gates";
+  reason = candidateModelIdentityMatches
+    ? "candidate failed one or more R2.6 hard gates"
+    : "candidate telemetry did not match the explicitly deployed candidate model";
 } else if (!qualityWithinTolerance || !fallbackNotWorse || !latencyWithinTolerance || !materialEfficiencyGain) {
   decision = "RETAIN_BASELINE";
   reason = "candidate passed hard gates but did not satisfy the bounded replacement rule";
@@ -68,11 +85,13 @@ if (!baselineEligible) {
 }
 
 const report = {
-  version: "ACP-2.6.9-R2.6-comparison-v1",
+  version: "ACP-2.6.9-R2.6-comparison-v2",
   decision,
   reason,
   baseline: {
-    model: baselineTelemetry.models,
+    expectedModel: baselineEval?.expectedModel ?? null,
+    observedModels: baselineTelemetry.models,
+    modelIdentityMatches: baselineModelIdentityMatches,
     eligible: baselineEligible,
     receptionistQualityProxy: baselineQuality,
     fallbackRatio: baselineTelemetry.fallbackRatio,
@@ -83,7 +102,9 @@ const report = {
     outputTokens: baselineTelemetry.totalOutputTokens,
   },
   candidate: {
-    model: candidateTelemetry.models,
+    expectedModel: candidateEval?.expectedModel ?? null,
+    observedModels: candidateTelemetry.models,
+    modelIdentityMatches: candidateModelIdentityMatches,
     eligible: candidateEligible,
     receptionistQualityProxy: candidateQuality,
     fallbackRatio: candidateTelemetry.fallbackRatio,
@@ -99,6 +120,8 @@ const report = {
     qualityDelta: candidateQuality - baselineQuality,
   },
   replacementChecks: {
+    baselineModelIdentityMatches,
+    candidateModelIdentityMatches,
     qualityWithinTolerance,
     fallbackNotWorse,
     latencyWithinTolerance,
