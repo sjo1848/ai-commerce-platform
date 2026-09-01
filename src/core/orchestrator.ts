@@ -171,9 +171,24 @@ function normalizeText(value: string): string {
   return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-function requestsWholeGroupCancellation(message: string): boolean {
+type WholeGroupCancellationIntent = "none" | "all" | "not_all" | "subset_exclusion";
+
+function wholeGroupCancellationIntent(message: string): WholeGroupCancellationIntent {
   const text = normalizeText(message);
-  return /\b(?:todas|todos|ambas|ambos|las dos|los dos|todo el grupo|grupo completo|cancelar todo|anular todo)\b/.test(text);
+  const groupTarget = "(?:todas|todos|ambas|ambos|las dos|los dos|todo el grupo|grupo completo)";
+  const hasWholeGroup = new RegExp(`\\b${groupTarget}\\b|\\b(?:cancelar|anular)\\s+todo\\b`).test(text);
+  if (!hasWholeGroup) return "none";
+
+  const excludesMember = new RegExp(`\\b${groupTarget}\\s+(?:menos|excepto|salvo)\\b`).test(text)
+    || new RegExp(`\\b${groupTarget}\\b[^.!?]{0,50}\\b(?:pero\\s+)?no\\s+(?:la|el|las|los)?\\s*(?:primera|primero|primer|segunda|segundo|tercera|tercero|tercer|cuarta|cuarto|quinta|quinto|\\d{1,6}|habitacion|room|pieza)\\b`).test(text);
+  if (excludesMember) return "subset_exclusion";
+
+  const negatesWholeGroup = new RegExp(`\\b(?:no|nunca)\\s+(?:(?:quiero|queremos|canceles?|anules?|cancelar|anular)\\s+){0,3}${groupTarget}\\b`).test(text)
+    || new RegExp(`\\b(?:no|nunca)\\s+${groupTarget}\\b`).test(text)
+    || /\b(?:no|nunca)\s+(?:cancelar|anular)\s+todo\b/.test(text);
+  if (negatesWholeGroup) return "not_all";
+
+  return "all";
 }
 
 function multiToolIntent(toolId: string) {
@@ -531,7 +546,11 @@ export class ChatOrchestrator {
       }
 
       const reference = resolveSpecificBookingReference(normalized, groupState);
-      if (requestsWholeGroupCancellation(normalized)) {
+      const groupIntent = wholeGroupCancellationIntent(normalized);
+      if (groupIntent === "subset_exclusion") {
+        return this.clarification("No puedo asumir una cancelación parcial del grupo. Indicame una reserva específica o confirmá que querés cancelar todo el grupo.", normalized, context, ["booking"]);
+      }
+      if (groupIntent === "all") {
         if (groundedBookingIds.length === 1) {
           planToolId = "hms.cancelReservation";
           planInput = { bookingId: groundedBookingIds[0] };
@@ -549,6 +568,8 @@ export class ChatOrchestrator {
         return this.clarification("No encuentro esa habitación entre las reservas activas. Indicame cuál querés cancelar.", normalized, context, ["booking"]);
       } else if (reference.kind === "ambiguous") {
         return this.clarification("La referencia coincide con más de una reserva. Indicame una habitación específica.", normalized, context, ["booking"]);
+      } else if (groupIntent === "not_all") {
+        return this.clarification("Entendido: no querés cancelar todo el grupo. Indicame qué reserva específica querés cancelar.", normalized, context, ["booking"]);
       } else if (groundedBookingIds.length === 1) {
         planToolId = "hms.cancelReservation";
         planInput = { bookingId: groundedBookingIds[0] };
