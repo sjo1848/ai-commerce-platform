@@ -153,15 +153,18 @@ function createMultiReservationTool(
       if (!expectedGuestId || input.guestId !== expectedGuestId) {
         throw new CoreError("FORBIDDEN", "Reservation guest identity does not match trusted tenant/actor binding", 403);
       }
-      // Fresh transactional preflight immediately before the composite mutation.
-      // Capacity is not modeled yet, so guests=1 is only a schema placeholder;
-      // this gate verifies that every exact approved room still exists in HMS
-      // availability for the exact approved date range.
-      const fresh = await availability.execute({ checkIn: input.checkIn, checkOut: input.checkOut, guests: 1 }, context, {});
-      const availableIds = new Set(fresh.rooms.map((room) => room.id));
-      const staleRoomIds = input.roomIds.filter((roomId: string) => !availableIds.has(roomId));
-      if (staleRoomIds.length > 0) {
-        throw new CoreError("CONFLICT", `Approved room selection is stale: ${staleRoomIds.join(", ")}`, 409);
+      // On initial execution, perform an aggregate fresh preflight immediately
+      // before entering the composite. A trusted recovery deliberately skips
+      // this read: already-committed children may be absent because our own
+      // reservation holds them, and the exact downstream child tokens are the
+      // authoritative reconciliation mechanism in that mode.
+      if (!(Number.isInteger(meta.recoveryAttempt) && Number(meta.recoveryAttempt) > 0)) {
+        const fresh = await availability.execute({ checkIn: input.checkIn, checkOut: input.checkOut, guests: 1 }, context, {});
+        const availableIds = new Set(fresh.rooms.map((room) => room.id));
+        const staleRoomIds = input.roomIds.filter((roomId: string) => !availableIds.has(roomId));
+        if (staleRoomIds.length > 0) {
+          throw new CoreError("CONFLICT", `Approved room selection is stale: ${staleRoomIds.join(", ")}`, 409);
+        }
       }
       return base.execute(input, context, meta);
     },
