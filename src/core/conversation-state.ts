@@ -961,9 +961,6 @@ function positiveClearSegments(text: string): string[] {
 }
 
 function clearOwnedClause(segment: string): string {
-  // A clear cue owns only its clause. A later follow-up such as
-  // `limpia mis preferencias y usa las fechas que ya te dije` must not turn
-  // that later date reference into another clear target.
   return segment.split(
     /[;.!?]|\by\s+(?:muestr\w*|mostr\w*|decim\w*|dime|consult\w*|list\w*|quiero|quisiera|prefiero|usa\w*|utiliza\w*)\b/i,
     1,
@@ -1042,6 +1039,7 @@ function extractGuests(
   for (const pattern of [
     new RegExp(`\\b(?:somos|seremos|seriamos|vamos\\s+a\\s+ser|viajamos)\\s+(${NUMBER_TOKEN})\\b`, "gi"),
     new RegExp(`\\b(${NUMBER_TOKEN})\\s+(?:personas?|huespedes?|pax)\\b`, "gi"),
+    new RegExp(`\\b(?:habitaciones?|cuartos?|rooms?)\\s+para\\s+(${NUMBER_TOKEN})\\b`, "gi"),
   ]) {
     for (const match of partyText.matchAll(pattern)) {
       const count = parseCountToken(match[1]);
@@ -1103,7 +1101,8 @@ export function inferConversationIntent(
   if (/\b(?:reservar|reserva|confirmar\s+(?:la\s+)?reserva|hacer\s+(?:una\s+)?reserva)\b/i.test(text)) return "reservation";
   if (/\b(?:cotiz|precio|tarifa|cuanto\s+sale|cuanto\s+cuesta)\b/i.test(text)) return "quote";
   const party = new RegExp(`\\b(?:somos|seremos|seriamos|vamos\\s+a\\s+ser|viajamos)\\s+${NUMBER_TOKEN}\\b`, "i").test(text)
-    || new RegExp(`\\b${NUMBER_TOKEN}\\s+(?:personas?|huespedes?|pax|adultos?|ninos?|menores?)\\b`, "i").test(text);
+    || new RegExp(`\\b${NUMBER_TOKEN}\\s+(?:personas?|huespedes?|pax|adultos?|ninos?|menores?)\\b`, "i").test(text)
+    || new RegExp(`\\b(?:habitaciones?|cuartos?|rooms?)\\s+para\\s+${NUMBER_TOKEN}\\b`, "i").test(text);
   if (/\b(?:dispon|hay\s+lugar|tenes\s+lugar|que\s+tenes|que\s+hay|aloj|qued|hosped|estadia)\b/i.test(text) || party) return "availability";
   if (dateRange && /\b(?:quiero|queremos|necesito|necesitamos|vamos|ir|viajar)\b/i.test(text)) return "availability";
   return undefined;
@@ -1174,8 +1173,6 @@ export function stripModelSemanticStatePatch(patch: ConversationStatePatch | und
   if (patch.selectedRoomRelation !== undefined) safe.selectedRoomRelation = patch.selectedRoomRelation;
   if (patch.requestedRoomCount !== undefined) safe.requestedRoomCount = patch.requestedRoomCount;
   if (patch.roomOccupancy !== undefined) safe.roomOccupancy = patch.roomOccupancy;
-  // Booking grounding is exclusively server/tool-owned. The model may use
-  // the current active booking for planning, but cannot mutate or clear it.
   return Object.keys(safe).length ? safe : undefined;
 }
 
@@ -1241,15 +1238,10 @@ export function updateConversationStateFromTool(
   });
 
   if (toolId === "hms.checkAvailability") {
-    if (stale) {
-      return clearStaleRoomGrounding(next);
-    }
+    if (stale) return clearStaleRoomGrounding(next);
     const roomBefore = roomSelectionFingerprint(next);
     const rooms = Array.isArray(rawData.rooms) ? rawData.rooms : [];
-    next.availabilityRooms = rooms
-      .map(parseAvailabilityCandidate)
-      .filter((room): room is AvailabilityRoomCandidate => Boolean(room))
-      .slice(0, 25);
+    next.availabilityRooms = rooms.map(parseAvailabilityCandidate).filter((room): room is AvailabilityRoomCandidate => Boolean(room)).slice(0, 25);
     next.availabilityRoomIds = next.availabilityRooms.map((room) => room.id);
     next.selectedRoomIds = next.selectedRoomIds.filter((roomId) => next.availabilityRoomIds.includes(roomId));
     next.roomOccupancy = next.roomOccupancy.filter((entry) => next.selectedRoomIds.includes(entry.roomId));
@@ -1276,12 +1268,9 @@ export function updateConversationStateFromTool(
   const bookingId = stringField(rawData.bookingId);
   const status = stringField(rawData.status);
   if (toolId === "hms.createReservation" || toolId === "hms.cancelReservation") {
-    const resultingBookingId = toolId === "hms.createReservation" && bookingId
-      ? bookingId
-      : normalized.activeBookingId;
+    const resultingBookingId = toolId === "hms.createReservation" && bookingId ? bookingId : normalized.activeBookingId;
     const resultingStatus = status ?? normalized.bookingStatus;
-    const bookingChanged = resultingBookingId !== normalized.activeBookingId
-      || resultingStatus !== normalized.bookingStatus;
+    const bookingChanged = resultingBookingId !== normalized.activeBookingId || resultingStatus !== normalized.bookingStatus;
     if (bookingChanged) next.bookingStateRevision = (normalized.bookingStateRevision ?? 0) + 1;
     else if (normalized.bookingStateRevision !== undefined) next.bookingStateRevision = normalized.bookingStateRevision;
     if (toolId === "hms.createReservation" && bookingId) next.activeBookingId = bookingId;
