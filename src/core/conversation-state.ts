@@ -1039,7 +1039,7 @@ function extractGuests(
   for (const pattern of [
     new RegExp(`\\b(?:somos|seremos|seriamos|vamos\\s+a\\s+ser|viajamos)\\s+(${NUMBER_TOKEN})\\b`, "gi"),
     new RegExp(`\\b(${NUMBER_TOKEN})\\s+(?:personas?|huespedes?|pax)\\b`, "gi"),
-    new RegExp(`\\b(?:habitaciones?|cuartos?|rooms?)\\s+para\\s+(${NUMBER_TOKEN})\\b`, "gi"),
+    new RegExp(`\\b(?:habitaciones?|cuartos?|rooms?)\\s+para\\s+(${NUMBER_TOKEN})(?!\\s+(?:noches?|dias?|camas?|habitaciones?|cuartos?|rooms?)\\b)\\b`, "gi"),
   ]) {
     for (const match of partyText.matchAll(pattern)) {
       const count = parseCountToken(match[1]);
@@ -1102,8 +1102,8 @@ export function inferConversationIntent(
   if (/\b(?:cotiz|precio|tarifa|cuanto\s+sale|cuanto\s+cuesta)\b/i.test(text)) return "quote";
   const party = new RegExp(`\\b(?:somos|seremos|seriamos|vamos\\s+a\\s+ser|viajamos)\\s+${NUMBER_TOKEN}\\b`, "i").test(text)
     || new RegExp(`\\b${NUMBER_TOKEN}\\s+(?:personas?|huespedes?|pax|adultos?|ninos?|menores?)\\b`, "i").test(text)
-    || new RegExp(`\\b(?:habitaciones?|cuartos?|rooms?)\\s+para\\s+${NUMBER_TOKEN}\\b`, "i").test(text);
-  if (/\b(?:dispon|hay\s+lugar|tenes\s+lugar|que\s+tenes|que\s+hay|aloj|qued|hosped|estadia)\b/i.test(text) || party) return "availability";
+    || new RegExp(`\\b(?:habitaciones?|cuartos?|rooms?)\\s+para\\s+${NUMBER_TOKEN}(?!\\s+(?:noches?|dias?|camas?|habitaciones?|cuartos?|rooms?)\\b)\\b`, "i").test(text);
+  if (/\b(?:dispon|hay\s+lugar|tenes\s+lugar|que\s+tenes|que\s+hay|habitacion(?:es)?|cuartos?|rooms?|aloj|qued|hosped|estadia)\b/i.test(text) || party) return "availability";
   if (dateRange && /\b(?:quiero|queremos|necesito|necesitamos|vamos|ir|viajar)\b/i.test(text)) return "availability";
   return undefined;
 }
