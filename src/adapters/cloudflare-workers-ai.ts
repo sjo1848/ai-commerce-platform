@@ -5,8 +5,14 @@ export interface WorkersAiBinding {
   readonly aiGatewayLogId?: string;
 }
 
-const DEFAULT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+export const DEFAULT_WORKERS_AI_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+export const R2_6_CANDIDATE_MODEL = "@cf/openai/gpt-oss-20b";
 const DEFAULT_TIMEOUT_MS = 8_000;
+
+export const WORKERS_AI_PRICING_USD_PER_MILLION: Readonly<Record<string, Readonly<{ input: number; output: number }>>> = {
+  [DEFAULT_WORKERS_AI_MODEL]: { input: 0.293, output: 2.253 },
+  [R2_6_CANDIDATE_MODEL]: { input: 0.200, output: 0.300 },
+};
 
 export type WorkersAiModelProviderOptions = {
   model?: string;
@@ -51,14 +57,15 @@ export class WorkersAiModelProvider implements ModelProvider {
     private readonly ai: WorkersAiBinding,
     options: WorkersAiModelProviderOptions = {},
   ) {
-    // Strong enough for natural Spanish/tool planning while remaining available on Workers Free.
-    this.model = options.model ?? DEFAULT_MODEL;
+    this.model = options.model ?? DEFAULT_WORKERS_AI_MODEL;
     this.gatewayId = options.gatewayId ?? "default";
     this.timeoutMs = normalizedTimeout(options.timeoutMs);
-    // Cloudflare Workers AI public pricing verified 2026-08-30 for the default model.
-    // Custom models must supply their own rates to avoid silently stale estimates.
-    this.inputPerMillionUsd = options.inputPerMillionUsd ?? (this.model === DEFAULT_MODEL ? 0.293 : undefined);
-    this.outputPerMillionUsd = options.outputPerMillionUsd ?? (this.model === DEFAULT_MODEL ? 2.253 : undefined);
+
+    // Public Cloudflare Workers AI pricing snapshot verified for R2.6 on 2026-08-31/2026-09-01.
+    // Unknown/custom models intentionally remain unpriced unless the caller supplies explicit rates.
+    const catalogPricing = WORKERS_AI_PRICING_USD_PER_MILLION[this.model];
+    this.inputPerMillionUsd = options.inputPerMillionUsd ?? catalogPricing?.input;
+    this.outputPerMillionUsd = options.outputPerMillionUsd ?? catalogPricing?.output;
   }
 
   private async runBounded(request: StructuredModelRequest): Promise<unknown> {

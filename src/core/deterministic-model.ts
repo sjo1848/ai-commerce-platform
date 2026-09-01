@@ -133,6 +133,14 @@ export class DeterministicModelRouter implements ModelRouter {
 
     const availabilityTool = availableTools.find((tool) => tool.id === "hms.checkAvailability");
     const availabilityIntent = lower.includes("dispon") || lower.includes("habitaci") || lower.includes("aloj") || /\b(somos|seríamos|seremos)\b/i.test(message);
+    if (availabilityIntent && dates.length < 2) {
+      return {
+        kind: "message",
+        purpose: "clarification",
+        missing: ["dates"],
+        message: "¿Para qué fechas sería la estadía?",
+      };
+    }
     if (availabilityIntent && dates.length >= 2) {
       if (!availabilityTool) return { kind: "message", purpose: "unsupported", message: "La consulta de disponibilidad no está habilitada para este negocio." };
       const guestsRequired = schemaRequired(availabilityTool.inputSchema, "guests") ?? false;

@@ -22,6 +22,8 @@ type Env = {
   AI: WorkersAiBinding;
   HMS: HmsRpcService;
   SESSIONS: DurableObjectNamespace<SessionDurableObject>;
+  /** Evaluation-only deployment override. Omit in normal staging/production config to retain the default model. */
+  ACP_MODEL_ID?: string;
 };
 
 const tenant = {
@@ -63,7 +65,7 @@ function handler(env: Env): (request: Request) => Promise<Response> {
     "hotel-demo": { hotelId: "10000000-0000-0000-0000-000000000001" },
   }, reservationOperations);
   const usage = new ConsoleUsageSink();
-  const provider = new WorkersAiModelProvider(env.AI);
+  const provider = new WorkersAiModelProvider(env.AI, env.ACP_MODEL_ID ? { model: env.ACP_MODEL_ID } : {});
   const model = new LLMModelRouter(provider, new DeterministicModelRouter(), usage);
   const responder = new LLMGroundedResponder(provider, undefined, usage);
   const conversationStore = new DurableObjectConversationStore(env.SESSIONS);

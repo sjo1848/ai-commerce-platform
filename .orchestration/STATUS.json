@@ -3,10 +3,10 @@
   "runtime_status": "IN_PROGRESS",
   "resume_authorized": true,
   "active_task": "ACP-2.6.9-R2-NATURAL-RECEPTIONIST",
-  "last_completed_task": "ACP-2.6.9-R2.5-MULTI-ROOM-RESERVATION-ORCHESTRATION",
-  "last_completed_head": "a2eed3617f5f77c35c653d72c91fbdfcb1eded9a",
-  "current_substage": "2.6.9-R2.6_MODEL_QUALITY_LATENCY_COST_EVALUATION_ACTIVE",
-  "next_action": "DEFINE_R2_6_EVALUATION_CONTRACT_AND_BASELINE",
+  "last_completed_task": "ACP-2.6.9-R2.6-MODEL-QUALITY-LATENCY-COST-EVALUATION",
+  "last_completed_head": "4fd636b599cd2a3389ca94e289146cdcc74485ab",
+  "current_substage": "2.6.9-R2.7_ADVERSARIAL_QA_AND_INDEPENDENT_CRITIC_ACTIVE",
+  "next_action": "FREEZE_R2_7_ADVERSARIAL_CONTRACT_AND_CLOSE_CROSS_STAGE_REGRESSIONS",
   "stop_reason": null,
   "product_decision": {
     "id": "DEC-002",
@@ -84,10 +84,44 @@
     "evidence": ".orchestration/evidence/ACP-2.6.9-R2.5-MULTI-ROOM-RESERVATION-CLOSURE.md"
   },
   "r2_6": {
+    "status": "TECHNICAL_PASS_CLOSED_PENDING_MERGE",
+    "evaluation_contract": ".orchestration/contracts/ACP-2.6.9-R2.6-MODEL-EVALUATION.md",
+    "final_substantive_head": "4fd636b599cd2a3389ca94e289146cdcc74485ab",
+    "final_tests": "211/211_PASS",
+    "exact_head_ci_run": 33464908885,
+    "real_model_eval_run": 33464946093,
+    "evidence_artifact_id": 9784554147,
+    "baseline_model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "baseline_eligible": true,
+    "baseline_corpus": "13/13_PASS",
+    "baseline_fallback_ratio": 0.041666666666666664,
+    "baseline_e2e_p95_ms": 6589,
+    "baseline_provider_p95_ms": 4123,
+    "baseline_estimated_eval_cost_usd": 0.013752707,
+    "candidate_model": "@cf/openai/gpt-oss-20b",
+    "candidate_eligible": false,
+    "candidate_valid_inferences": 0,
+    "candidate_fallback_ratio": 1,
+    "model_decision": "RETAIN_BASELINE",
+    "restored_worker_version": "ca1cb430-aa17-4c4a-b25c-f11b2058b032",
+    "qa": "PASS_RECLOSED",
+    "pre_critic": "PASS",
+    "pre_critic_review": 5073654629,
+    "independent_critic": "PASS",
+    "independent_critic_review": 5073655778,
+    "open_p0_p1_p2": "0/0/0",
+    "evidence": ".orchestration/evidence/ACP-2.6.9-R2.6-MODEL-EVALUATION.md"
+  },
+  "r2_7": {
     "status": "IN_PROGRESS_ACTIVE",
-    "evaluation_contract": null,
-    "baseline": null,
-    "model_comparison": null
+    "mandatory_cross_stage_attacks": [
+      "PROVIDER_FAILURE_MULTI_ROOM_MUST_PRESERVE_R2_5_ORCHESTRATION",
+      "NATURAL_PARA_DOS_GUEST_COUNT_MUST_NOT_BE_REASKED"
+    ],
+    "qa": null,
+    "pre_critic": null,
+    "independent_critic": null,
+    "open_p0_p1_p2": null
   },
   "r2_sequence": [
     "2.6.9-R2.1_RECEPTIONIST_PRODUCT_CONTRACT_AND_ACCEPTANCE_CORPUS",
@@ -117,8 +151,8 @@
     "human_approval_required_for_mutations": true
   },
   "event": {
-    "id": "ACP-2.6.9-R2.5-TECHNICAL-PASS-CLOSED-R2.6-ACTIVE",
+    "id": "ACP-2.6.9-R2.6-TECHNICAL-PASS-CLOSED-R2.7-ACTIVE",
     "type": "SUBSTAGE_TRANSITION",
-    "seq": 20
+    "seq": 21
   }
 }
