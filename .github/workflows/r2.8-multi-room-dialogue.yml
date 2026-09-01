@@ -41,7 +41,6 @@ jobs:
       - name: Validate R2.8.4 harness
         run: |
           node --check scripts/r2.8-multi-room-dialogue.mjs
-          node --check scripts/query-workers-observability.mjs
           node --check scripts/count-model-telemetry.mjs
           node --check scripts/count-audit-events.mjs
 
@@ -101,92 +100,97 @@ jobs:
           cat /tmp/r28-r4-root.html >&2 || true
           exit 1
 
-      - name: Prove persisted Workers Logs attachment
+      - name: Real-model natural multi-room dialogue
         shell: bash
         run: |
           set -euo pipefail
-          log_from_ms="$(node -e 'process.stdout.write(String(Date.now()-5000))')"
-          echo "R28_LOG_FROM_MS=$log_from_ms" >> "$GITHUB_ENV"
-          probe_path="/__r28-observability-probe?run=${GITHUB_RUN_ID}"
+          : > /tmp/r28-r4-tail.log
+          timeout 180s npx wrangler tail "$WORKER_NAME" \
+            --format=json \
+            --method POST \
+            > /tmp/r28-r4-tail.log 2>&1 &
+          TAIL_PID=$!
+          trap 'kill "$TAIL_PID" 2>/dev/null || true' EXIT
+
+          connected=0
+          for attempt in $(seq 1 30); do
+            if grep -Fq 'Connected to ' /tmp/r28-r4-tail.log && grep -Fq 'waiting for logs' /tmp/r28-r4-tail.log; then
+              connected=1
+              echo "Live tail connection proved on attempt $attempt."
+              break
+            fi
+            if ! kill -0 "$TAIL_PID" 2>/dev/null; then
+              echo "R2.8.4 OBSERVABILITY_INVALID: wrangler tail exited before connection readiness" >&2
+              cat /tmp/r28-r4-tail.log >&2 || true
+              exit 1
+            fi
+            sleep 1
+          done
+          if [[ "$connected" -ne 1 ]]; then
+            echo "R2.8.4 OBSERVABILITY_INVALID: wrangler tail never reported connection readiness" >&2
+            cat /tmp/r28-r4-tail.log >&2 || true
+            exit 1
+          fi
+
+          probe_path="/__r28-tail-probe?run=${GITHUB_RUN_ID}"
           probe_status="$(curl -sS --max-time 10 -X POST \
-            -o /tmp/r28-r4-observability-probe.txt \
+            -o /tmp/r28-r4-tail-probe.txt \
             -w '%{http_code}' \
             "$AI_COMMERCE_STAGING_URL$probe_path" || true)"
           if [[ "$probe_status" != "404" ]]; then
-            echo "R2.8.4 OBSERVABILITY_INVALID: persisted-log probe expected 404, got $probe_status" >&2
-            cat /tmp/r28-r4-observability-probe.txt >&2 || true
+            echo "R2.8.4 OBSERVABILITY_INVALID: attachment probe expected 404, got $probe_status" >&2
+            cat /tmp/r28-r4-tail-probe.txt >&2 || true
             exit 1
           fi
 
           attached=0
           for attempt in $(seq 1 20); do
-            to_ms="$(node -e 'process.stdout.write(String(Date.now()))')"
-            if node scripts/query-workers-observability.mjs "$log_from_ms" "$to_ms" "$probe_path" > /tmp/r28-r4-probe-logs.json; then
-              if grep -Fq "$probe_path" /tmp/r28-r4-probe-logs.json; then
-                attached=1
-                echo "Persisted Workers Logs attachment proved on attempt $attempt."
-                break
-              fi
-            else
-              if [[ "$attempt" -eq 1 ]]; then
-                echo "R2.8.4 OBSERVABILITY_INVALID: Workers Observability API query failed; verify API token has Workers Observability Write permission" >&2
-                exit 1
-              fi
+            if grep -Fq "$probe_path" /tmp/r28-r4-tail.log; then
+              attached=1
+              echo "Live tail attachment proved on attempt $attempt."
+              break
             fi
-            sleep 3
+            if ! kill -0 "$TAIL_PID" 2>/dev/null; then
+              echo "R2.8.4 OBSERVABILITY_INVALID: wrangler tail exited before attachment proof" >&2
+              cat /tmp/r28-r4-tail.log >&2 || true
+              exit 1
+            fi
+            sleep 1
           done
           if [[ "$attached" -ne 1 ]]; then
-            echo "R2.8.4 OBSERVABILITY_INVALID: persisted Workers Logs did not ingest the non-LLM POST probe" >&2
-            cat /tmp/r28-r4-probe-logs.json >&2 || true
+            echo "R2.8.4 OBSERVABILITY_INVALID: connected live tail did not capture the non-LLM POST probe" >&2
+            cat /tmp/r28-r4-tail.log >&2 || true
             exit 1
           fi
-
-      - name: Real-model natural multi-room dialogue
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -n "$R28_LOG_FROM_MS"
 
           set +e
           node scripts/r2.8-multi-room-dialogue.mjs > /tmp/r28-r4-report.json 2>&1
           DIALOGUE_CODE=$?
           set -e
-
-          evidence_ready=0
-          for attempt in $(seq 1 20); do
-            to_ms="$(node -e 'process.stdout.write(String(Date.now()))')"
-            node scripts/query-workers-observability.mjs "$R28_LOG_FROM_MS" "$to_ms" > /tmp/r28-r4-persisted-logs.json
-            MODEL_TELEMETRY="$(node scripts/count-model-telemetry.mjs /tmp/r28-r4-persisted-logs.json)"
-            AUDIT_TELEMETRY="$(node scripts/count-audit-events.mjs /tmp/r28-r4-persisted-logs.json)"
-            model_count="$(MODEL_TELEMETRY="$MODEL_TELEMETRY" node -e 'process.stdout.write(String(JSON.parse(process.env.MODEL_TELEMETRY).modelInferences + JSON.parse(process.env.MODEL_TELEMETRY).modelFallbacks))')"
-            audit_count="$(AUDIT_TELEMETRY="$AUDIT_TELEMETRY" node -e 'process.stdout.write(String(JSON.parse(process.env.AUDIT_TELEMETRY).auditEvents))')"
-            if [[ "$model_count" -gt 0 && "$audit_count" -gt 0 ]]; then
-              evidence_ready=1
-              echo "$MODEL_TELEMETRY" > /tmp/r28-r4-model-telemetry.json
-              echo "$AUDIT_TELEMETRY" > /tmp/r28-r4-audit-telemetry.json
-              echo "Persisted model+audit evidence available on attempt $attempt."
-              break
-            fi
-            sleep 3
-          done
+          sleep 4
+          kill "$TAIL_PID" 2>/dev/null || true
 
           echo '--- multi-room dialogue report ---'
           cat /tmp/r28-r4-report.json || true
-          echo '--- persisted model telemetry ---'
-          cat /tmp/r28-r4-model-telemetry.json || true
-          echo
-          echo '--- persisted audit telemetry ---'
-          cat /tmp/r28-r4-audit-telemetry.json || true
-          echo
+          echo '--- tail diagnostics ---'
+          cat /tmp/r28-r4-tail.log || true
 
-          if [[ "$evidence_ready" -ne 1 ]]; then
-            echo "R2.8.4 OBSERVABILITY_INVALID: persisted Workers Logs never exposed model and audit evidence" >&2
-            exit 1
-          fi
+          MODEL_TELEMETRY="$(node scripts/count-model-telemetry.mjs /tmp/r28-r4-tail.log)"
+          AUDIT_TELEMETRY="$(node scripts/count-audit-events.mjs /tmp/r28-r4-tail.log)"
+          echo "$MODEL_TELEMETRY" > /tmp/r28-r4-model-telemetry.json
+          echo "$AUDIT_TELEMETRY" > /tmp/r28-r4-audit-telemetry.json
+          echo "MODEL_TELEMETRY=$MODEL_TELEMETRY"
+          echo "AUDIT_TELEMETRY=$AUDIT_TELEMETRY"
+
+          MODEL_TELEMETRY="$MODEL_TELEMETRY" AUDIT_TELEMETRY="$AUDIT_TELEMETRY" node - <<'NODE'
+          const model = JSON.parse(process.env.MODEL_TELEMETRY);
+          const audit = JSON.parse(process.env.AUDIT_TELEMETRY);
+          if (model.modelInferences === 0 && model.modelFallbacks === 0 && audit.auditEvents === 0) {
+            throw new Error('R2.8.4 OBSERVABILITY_INVALID: connected tail captured probe but no model or audit runtime evidence');
+          }
+          NODE
+
           if [[ "$DIALOGUE_CODE" -ne 0 ]]; then exit "$DIALOGUE_CODE"; fi
-
-          MODEL_TELEMETRY="$(cat /tmp/r28-r4-model-telemetry.json)"
-          AUDIT_TELEMETRY="$(cat /tmp/r28-r4-audit-telemetry.json)"
 
           EXPECTED_MODEL="$EXPECTED_MODEL" MODEL_TELEMETRY="$MODEL_TELEMETRY" REPORT_PATH=/tmp/r28-r4-report.json node - <<'NODE'
           const fs = require('fs');
@@ -250,9 +254,8 @@ jobs:
           path: |
             /tmp/r28-r4-deploy.log
             /tmp/r28-r4-report.json
-            /tmp/r28-r4-observability-probe.txt
-            /tmp/r28-r4-probe-logs.json
-            /tmp/r28-r4-persisted-logs.json
+            /tmp/r28-r4-tail.log
+            /tmp/r28-r4-tail-probe.txt
             /tmp/r28-r4-model-telemetry.json
             /tmp/r28-r4-audit-telemetry.json
           if-no-files-found: warn
