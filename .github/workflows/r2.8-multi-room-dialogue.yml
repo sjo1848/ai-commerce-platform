@@ -109,7 +109,6 @@ jobs:
           timeout 180s npx wrangler tail "$WORKER_NAME" \
             --format=json \
             --method POST \
-            --sampling-rate 1 \
             --version-id "$R28_VERSION_ID" \
             > /tmp/r28-r4-tail.log 2>&1 &
           TAIL_PID=$!
