@@ -10,6 +10,7 @@ const quoteTool = {
 };
 
 const roomId = "11000000-0000-0000-0000-000000000001";
+const roomId102 = "11000000-0000-0000-0000-000000000002";
 const guestId = "12000000-0000-0000-0000-000000000001";
 
 const availabilityTool26 = {
@@ -34,6 +35,13 @@ const reservationTool26 = {
     properties: { roomId: { type: "string" }, checkIn: { type: "string" }, checkOut: { type: "string" } },
     required: ["roomId", "checkIn", "checkOut"],
   },
+};
+
+const multiReservationTool = {
+  id: "hms.createMultiReservation",
+  primitive: "RESERVE",
+  description: "reserve multiple grounded rooms",
+  risk: "write",
 };
 
 test("router accepts HMS UUID-shaped room ids without RFC version bits", async () => {
@@ -111,4 +119,38 @@ test("legacy schema-less reservation fallback still requires explicit guest iden
   );
   assert.equal(explicit.kind, "tool");
   assert.equal(explicit.plan.input.guestId, guestId);
+});
+
+test("R2.8.4 fallback resolves explicit room numbers only against authoritative availability before composite routing", async () => {
+  const router = new DeterministicModelRouter();
+  const state = {
+    stay: { checkIn: "2030-01-01", checkOut: "2030-01-03", guests: 4 },
+    availabilityRoomIds: [roomId, roomId102],
+    availabilityRooms: [
+      { id: roomId, roomNumber: "101" },
+      { id: roomId102, roomNumber: "102" },
+    ],
+    selectedRoomIds: [],
+  };
+
+  const result = await router.route(
+    "Quiero reservar la 101 y la 102.",
+    {},
+    [reservationTool26, multiReservationTool],
+    [],
+    state,
+  );
+
+  assert.deepEqual(result, {
+    kind: "tool",
+    plan: {
+      toolId: "hms.createMultiReservation",
+      input: {
+        roomIds: [roomId, roomId102],
+        checkIn: "2030-01-01",
+        checkOut: "2030-01-03",
+      },
+    },
+    statePatch: { selectedRoomIds: [roomId, roomId102] },
+  });
 });
