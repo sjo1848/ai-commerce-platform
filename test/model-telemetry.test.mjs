@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { LLMModelRouter } from "../dist/core/llm-model.js";
+import { ModelProviderError } from "../dist/core/model-provider.js";
 import { LLMGroundedResponder } from "../dist/core/model-responder.js";
 import { InMemoryUsageSink } from "../dist/core/usage.js";
 
@@ -79,6 +80,24 @@ test("invalid model plan records both paid inference and explicit fallback reaso
   assert.equal(route.kind, "message");
   assert.deepEqual(usage.events.map((event) => event.kind), ["model_inference", "model_fallback"]);
   assert.equal(usage.events[1].fallbackReason, "trusted_field_attempt");
+});
+
+test("provider failure keeps stable fallback reason and records only a bounded safe category", async () => {
+  const usage = new InMemoryUsageSink();
+  const provider = {
+    async completeStructured() {
+      throw new ModelProviderError("private upstream detail must never be logged", "CloudflareError3036");
+    },
+  };
+  const fallback = { async route() { return { kind: "message", message: "fallback" }; } };
+  const router = new LLMModelRouter(provider, fallback, usage);
+  const route = await router.route("consulta", context, tools);
+  assert.equal(route.kind, "message");
+  assert.equal(usage.events.length, 1);
+  assert.equal(usage.events[0].kind, "model_fallback");
+  assert.equal(usage.events[0].fallbackReason, "provider_failure");
+  assert.equal(usage.events[0].failureCategory, "CloudflareError3036");
+  assert.equal(JSON.stringify(usage.events).includes("private upstream detail"), false);
 });
 
 test("natural grounded response records inference telemetry while Core hydrates authoritative facts", async () => {
