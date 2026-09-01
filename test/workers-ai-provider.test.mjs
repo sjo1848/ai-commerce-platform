@@ -79,6 +79,25 @@ test("Workers AI provider times out without automatic retry", async () => {
   assert.ok(Date.now() - started < 1_500);
 });
 
+test("Workers AI provider exposes only known public Cloudflare error codes as diagnostic categories", async () => {
+  const ai = {
+    async run() {
+      throw new Error("private upstream detail: account limit reached (code 3036), token=do-not-log");
+    },
+  };
+  const provider = new WorkersAiModelProvider(ai);
+  await assert.rejects(
+    provider.completeStructured(request),
+    (error) => {
+      assert.equal(error?.name, "ModelProviderError");
+      assert.equal(error?.causeName, "CloudflareError3036");
+      assert.equal(error?.message, "Workers AI inference failed");
+      assert.doesNotMatch(error?.message ?? "", /token=|private upstream/i);
+      return true;
+    },
+  );
+});
+
 test("invalid timeout configuration fails at construction", () => {
   const ai = { async run() { return { response: { ok: true } }; } };
   assert.throws(() => new WorkersAiModelProvider(ai, { timeoutMs: 100 }), /timeout must be between/i);
