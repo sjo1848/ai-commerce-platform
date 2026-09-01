@@ -210,10 +210,11 @@ function roomNumberForRoomId(state: Readonly<ConversationState>, roomId: string)
 }
 
 function sameBookingGrounding(left: readonly ReservationGroupBooking[], right: readonly ReservationGroupBooking[]): boolean {
-  return left.length === right.length && left.every((booking, index) => {
+  if (left.length !== right.length) return false;
+  return left.every((booking, index) => {
     const other = right[index];
-    return Boolean(other)
-      && booking.bookingId === other.bookingId
+    if (!other) return false;
+    return booking.bookingId === other.bookingId
       && booking.roomId === other.roomId
       && booking.roomNumber === other.roomNumber;
   });
@@ -234,7 +235,10 @@ function resolveSpecificBookingReference(message: string, group: Readonly<Reserv
     const escaped = roomNumber.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     return new RegExp(`(?:^|[^0-9])${escaped}(?:[^0-9]|$)`).test(text);
   });
-  if (roomMatches.length === 1) return { kind: "match", bookingId: roomMatches[0].bookingId };
+  if (roomMatches.length === 1) {
+    const booking = roomMatches[0];
+    return booking ? { kind: "match", bookingId: booking.bookingId } : { kind: "ambiguous" };
+  }
   if (roomMatches.length > 1) return { kind: "ambiguous" };
 
   const ordinalWords = [
@@ -247,8 +251,9 @@ function resolveSpecificBookingReference(message: string, group: Readonly<Reserv
   const ordinalIndexes = ordinalWords
     .map((pattern, index) => pattern.test(text) ? index : -1)
     .filter((index) => index >= 0);
-  if (ordinalIndexes.length === 1) {
-    const booking = group.activeBookings[ordinalIndexes[0]];
+  const ordinalIndex = ordinalIndexes[0];
+  if (ordinalIndexes.length === 1 && ordinalIndex !== undefined) {
+    const booking = group.activeBookings[ordinalIndex];
     return booking ? { kind: "match", bookingId: booking.bookingId } : { kind: "invalid" };
   }
   if (ordinalIndexes.length > 1) return { kind: "ambiguous" };
