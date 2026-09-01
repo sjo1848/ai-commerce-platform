@@ -2,18 +2,18 @@
 
 Phase: `ACP INTEGRATION — PHASE 2.6`
 Task: `ACP-2.6.9-R2-NATURAL-RECEPTIONIST`
-Status: `IN PROGRESS — R2.5 TECHNICAL_PASS / CLOSED`
-Current sub-stage: `2.6.9-R2.6 — MODEL QUALITY / LATENCY / COST EVALUATION — ACTIVE`
-Last closed sub-stage: `2.6.9-R2.5 — MULTI-ROOM RESERVATION ORCHESTRATION — TECHNICAL_PASS / CLOSED`
+Status: `IN PROGRESS — R2.6 TECHNICAL_PASS / CLOSED`
+Current sub-stage: `2.6.9-R2.7 — ADVERSARIAL QA + INDEPENDENT CRITIC — ACTIVE`
+Last closed sub-stage: `2.6.9-R2.6 — MODEL QUALITY / LATENCY / COST EVALUATION — TECHNICAL_PASS / CLOSED`
 
 ## Why R2 remains open
-Human Product Acceptance remains `REWORK` until the final natural-receptionist staging gate. R2.1 through R2.5 are technically closed. R2.6 now evaluates whether the current model/provider path delivers adequate receptionist quality, latency and cost before the final adversarial/staging/product gates.
+Human Product Acceptance remains `REWORK` until the final natural-receptionist staging gate. R2.1 through R2.6 are technically closed. R2.7 now attacks the accumulated agentic behavior and deterministic safety boundary before the real-model staging E2E and human product gate.
 
 Canonical R2 contract:
 `.orchestration/contracts/ACP-2.6.9-R2-NATURAL-RECEPTIONIST.md`
 
-R2.5 closure evidence:
-`.orchestration/evidence/ACP-2.6.9-R2.5-MULTI-ROOM-RESERVATION-CLOSURE.md`
+R2.6 closure evidence:
+`.orchestration/evidence/ACP-2.6.9-R2.6-MODEL-EVALUATION.md`
 
 ## R2 execution sequence
 1. `2.6.9-R2.1` — Receptionist Product Contract + Acceptance Corpus — **TECHNICAL_PASS / CLOSED**
@@ -21,53 +21,43 @@ R2.5 closure evidence:
 3. `2.6.9-R2.3` — Durable Semantic Memory v2 — **TECHNICAL_PASS / CLOSED**
 4. `2.6.9-R2.4` — Multi-Room Conversation Model — **TECHNICAL_PASS / CLOSED**
 5. `2.6.9-R2.5` — Multi-Room Reservation Orchestration — **TECHNICAL_PASS / CLOSED**
-6. `2.6.9-R2.6` — Model Quality / Latency / Cost Evaluation — **ACTIVE**
-7. `2.6.9-R2.7` — Adversarial QA + Independent Critic
+6. `2.6.9-R2.6` — Model Quality / Latency / Cost Evaluation — **TECHNICAL_PASS / CLOSED**
+7. `2.6.9-R2.7` — Adversarial QA + Independent Critic — **ACTIVE**
 8. `2.6.9-R2.8` — Real-Model Receptionist Staging E2E
 9. `2.6.9-R2.9` — Human Product Acceptance — Natural Receptionist
 
-## R2.5 final closure
-Final substantive Artifact A:
-`63e61e153222c77f44061840178d258c52a7875f`
+## R2.6 final closure
+Final substantive head:
+`4fd636b599cd2a3389ca94e289146cdcc74485ab`
 
 Verification:
-- final substantive core-ci `33461399664` / run #434 — **202/202 PASS**;
-- QA V2 — **PASS / RECLOSED AFTER INDEPENDENT CRITIC REWORK**;
-- Pre-Critic — **PASS / RECLOSED**;
-- Independent Critic — **PASS**;
-- final critic evidence head `aa43456d4e964e3450f3f445273f73be0798da5e`;
-- exact-head critic core-ci `33461563342` / run #438 — **PASS**;
-- open P0/P1/P2 = `0/0/0`;
-- PR #48 merged at `a2eed3617f5f77c35c653d72c91fbdfcb1eded9a`;
-- post-merge main core-ci `33461710845` / run #439 — **202/202 PASS**;
-- post-merge typecheck, staging E2 syntax and Wrangler dry-run — **PASS**.
+- exact-head core-ci `33464908885` — **211/211 PASS** plus typecheck, staging E2 syntax and Wrangler dry-run;
+- final real-model comparison `33464946093` — **PASS**;
+- baseline model `@cf/meta/llama-3.3-70b-instruct-fp8-fast` — **13/13 PASS**, fallback `4.17%`, E2E p95 `6.589 s`, provider p95 `4.123 s`;
+- candidate `@cf/openai/gpt-oss-20b` — **INELIGIBLE**, `0` valid inferences and `100% provider_failure`;
+- model decision — **RETAIN_BASELINE**;
+- baseline restored after comparison, Worker version `ca1cb430-aa17-4c4a-b25c-f11b2058b032`;
+- QA — **PASS / RECLOSED** after three P1 false-green/safety fixes;
+- Pre-Critic review `5073654629` — **PASS**;
+- Independent Critic review `5073655778` — **PASS**;
+- open P0/P1/P2 = `0/0/0`.
 
-Closed R2.5 invariants:
-- multi-room create scope is derived from server-owned room/date state and revalidated before mutation;
-- multi-room and cancellation writes require exact human confirmation and stored-plan fingerprint binding;
-- Core idempotency is scoped to tenant + actor + session + tool + canonical input fingerprint;
-- downstream child operation tokens and reservation ownership remain server-owned;
-- partial create failure uses explicit compensation semantics and never pretends atomicity;
-- group cancellation verifies ownership before irreversible side effects and preserves failed bookings after partial failure;
-- specific cancellation references resolve from server-owned booking↔room grounding;
-- negated or exclusion language cannot broaden cancellation scope; unsupported subset scope clarifies;
-- primary mutation uncertainty has bounded exact-plan recovery;
-- uncertain compensation is manual-reconciliation-only and cannot issue an automatic recovery approval;
-- LLM/model authority remains limited to interpretation/planning/composition; trusted identity, approval, operation tokens, ownership and HMS truth remain server-side.
+Closed R2.6 invariants:
+- model replacement requires exact observed-model telemetry identity and hard-gate eligibility;
+- quality evaluation cannot false-pass on loose substring matching;
+- conversational model prose cannot introduce payment/process steps outside server-authorized safe meaning;
+- model pricing is model-specific and unknown models cannot borrow stale baseline pricing;
+- R2.6 model evaluation is read-only with respect to business mutations;
+- trusted identity, policy/HITL, approval, idempotency, operation tokens, ownership and HMS transactional truth remain server-authoritative.
 
-## R2.6 active scope
-`2.6.9-R2.6 — Model Quality / Latency / Cost Evaluation` is now the only active R2 substage.
+## R2.7 active scope
+`2.6.9-R2.7 — Adversarial QA + Independent Critic` is now the only active R2 substage.
 
-Its job is to evaluate the currently authorized model/provider path against the R2 receptionist corpus and determine whether a different already-affordable model is justified, measuring at minimum:
-- natural receptionist quality;
-- routing/tool-plan correctness;
-- grounded response correctness;
-- latency;
-- input/output tokens and estimated cost;
-- fallback frequency/reasons;
-- operational reliability under the existing deterministic safety boundary.
+Mandatory attacks include the full R2 safety surface plus two explicit cross-stage regressions discovered during R2.6:
+- provider failure after grounded multi-room selection must preserve R2.5 orchestration semantics rather than regress to the stale R2.4 unsupported path;
+- semantically explicit guest phrasing such as `para dos` must not trigger a redundant guest-count clarification.
 
-R2.6 does not authorize production, payments, paid expansion, WhatsApp as a requirement, broader autonomous writes or a second vertical.
+R2.7 must also re-attack prompt/tool injection, trusted tenant/hotel/actor spoofing, booking/room/guest injection, model-override injection, forged approval/idempotency/operation metadata, stale approvals, stale inventory, occupancy ambiguity, cancellation scope, cross-tenant/session ownership, OUTCOME_UNKNOWN/compensation uncertainty, memory poisoning and concurrent/stale replay.
 
 ## Gate to Fase 3
 Fase 3 — Alquileres remains blocked until `2.6.9-R2.9` receives explicit human `ACCEPT`.
