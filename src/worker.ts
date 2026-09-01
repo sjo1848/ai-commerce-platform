@@ -8,6 +8,7 @@ import {
   DurableObjectSessionStore,
   SessionDurableObject,
 } from "./cloudflare/session-durable-object.js";
+import { ConsoleAuditSink } from "./core/audit.js";
 import { ConversationBackedStateStore } from "./core/conversation-state.js";
 import { DeterministicModelRouter } from "./core/deterministic-model.js";
 import { LLMModelRouter } from "./core/llm-model.js";
@@ -65,6 +66,7 @@ function handler(env: Env): (request: Request) => Promise<Response> {
     "hotel-demo": { hotelId: "10000000-0000-0000-0000-000000000001" },
   }, reservationOperations);
   const usage = new ConsoleUsageSink();
+  const audit = new ConsoleAuditSink();
   const provider = new WorkersAiModelProvider(env.AI, env.ACP_MODEL_ID ? { model: env.ACP_MODEL_ID } : {});
   const model = new LLMModelRouter(provider, new DeterministicModelRouter(), usage);
   const responder = new LLMGroundedResponder(provider, undefined, usage);
@@ -75,6 +77,7 @@ function handler(env: Env): (request: Request) => Promise<Response> {
     sessionStore: new DurableObjectSessionStore(env.SESSIONS),
     conversationStore,
     conversationStateStore: new ConversationBackedStateStore(conversationStore),
+    auditSink: audit,
     usageSink: usage,
     model,
     responder,
