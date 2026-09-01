@@ -117,6 +117,14 @@ jobs:
           echo "MODEL_TELEMETRY=$MODEL_TELEMETRY"
           echo "AUDIT_TELEMETRY=$AUDIT_TELEMETRY"
 
+          MODEL_TELEMETRY="$MODEL_TELEMETRY" AUDIT_TELEMETRY="$AUDIT_TELEMETRY" node - <<'NODE'
+          const model = JSON.parse(process.env.MODEL_TELEMETRY);
+          const audit = JSON.parse(process.env.AUDIT_TELEMETRY);
+          if (model.modelInferences === 0 && model.modelFallbacks === 0 && audit.auditEvents === 0) {
+            throw new Error('R2.8.4 OBSERVABILITY_INVALID: wrangler tail captured no model or audit runtime evidence');
+          }
+          NODE
+
           if [[ "$DIALOGUE_CODE" -ne 0 ]]; then exit "$DIALOGUE_CODE"; fi
 
           EXPECTED_MODEL="$EXPECTED_MODEL" MODEL_TELEMETRY="$MODEL_TELEMETRY" REPORT_PATH=/tmp/r28-r4-report.json node - <<'NODE'
