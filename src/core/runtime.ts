@@ -1,4 +1,4 @@
-import { InMemoryAuditSink } from "./audit.js";
+import { InMemoryAuditSink, type AuditSink } from "./audit.js";
 import { InMemoryConversationStore, type ConversationStore } from "./conversation.js";
 import { InMemoryConversationStateStore, type ConversationStateStore } from "./conversation-state.js";
 import { DeterministicModelRouter } from "./deterministic-model.js";
@@ -21,6 +21,7 @@ export type RuntimeConfig = {
   sessionStore?: SessionStore;
   conversationStore?: ConversationStore;
   conversationStateStore?: ConversationStateStore;
+  auditSink?: AuditSink;
   usageSink?: UsageSink;
   model?: ModelRouter;
   responder?: ModelResponder;
@@ -34,7 +35,7 @@ export class AgentCoreRuntime {
   readonly conversationState: ConversationStateStore;
   readonly registry = new ToolRegistry();
   readonly policy = new PolicyEngine();
-  readonly audit = new InMemoryAuditSink();
+  readonly audit: AuditSink;
   readonly usage: UsageSink;
   readonly idempotency = new InMemoryIdempotencyStore();
   readonly executor: AgentCoreExecutor;
@@ -48,6 +49,7 @@ export class AgentCoreRuntime {
     this.sessionManager = new SessionManager(this.sessions);
     this.conversation = config.conversationStore ?? new InMemoryConversationStore();
     this.conversationState = config.conversationStateStore ?? new InMemoryConversationStateStore();
+    this.audit = config.auditSink ?? new InMemoryAuditSink();
     this.usage = config.usageSink ?? new InMemoryUsageSink();
 
     if (config.tools) {

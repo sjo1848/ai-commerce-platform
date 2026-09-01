@@ -17,3 +17,10 @@ export class InMemoryAuditSink implements AuditSink {
   readonly events: AuditEvent[] = [];
   record(event: AuditEvent): void { this.events.push(structuredClone(event)); }
 }
+
+/** Structured staging/runtime audit output suitable for Wrangler tail evidence. */
+export class ConsoleAuditSink implements AuditSink {
+  record(event: AuditEvent): void {
+    console.log(JSON.stringify({ kind: "audit_event", ...event }));
+  }
+}
