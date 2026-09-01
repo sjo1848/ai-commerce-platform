@@ -251,7 +251,8 @@ function clarificationContradictsState(
     if (field === "guests") return state.stay.guests !== undefined;
     if (field === "room" || field === "selection") {
       const selectedCount = state.selectedRoomIds?.length ?? (state.selectedRoomId ? 1 : 0);
-      return selectedCount === 1;
+      const requestedCount = state.requestedRoomCount;
+      return selectedCount > 0 && (requestedCount === undefined || selectedCount === requestedCount);
     }
     if (field === "occupancy") return false;
     if (field === "booking") return Boolean(state.activeBookingId);
@@ -301,8 +302,10 @@ function capabilityRequirements(tools: readonly ToolDescriptor[]): string {
   const rules: string[] = [];
   if (ids.has("hms.checkAvailability")) rules.push("hms.checkAvailability: availability/search intent. Critical arguments are dates + guests ONLY.");
   if (ids.has("hms.getQuote")) rules.push("hms.getQuote: price/quote intent. Critical arguments are grounded room + dates.");
-  if (ids.has("hms.createReservation")) rules.push("hms.createReservation: reservation intent. Critical arguments are grounded room + dates ONLY. Guest identity is server-bound; guest count is not a reservation argument. Approval is external.");
+  if (ids.has("hms.createReservation")) rules.push("hms.createReservation: single-room reservation intent. Critical arguments are one grounded room + dates ONLY. Guest identity is server-bound; guest count is not a reservation argument. Approval is external.");
+  if (ids.has("hms.createMultiReservation")) rules.push("hms.createMultiReservation: multi-room reservation intent for a complete grounded selection of two or more rooms. The selected room set and dates are server-grounded by Core; do not put roomIds or dates in model input. Guest identity is server-bound. Approval is external.");
   if (ids.has("hms.cancelReservation")) rules.push("hms.cancelReservation: cancellation intent with grounded bookingId or current owned booking. Approval is external.");
+  if (ids.has("hms.cancelMultiReservation")) rules.push("hms.cancelMultiReservation: whole-group cancellation intent for the current server-grounded active reservation group. Booking IDs are server-owned; approval is external.");
   return rules.join("\n");
 }
 
@@ -357,7 +360,7 @@ export class LLMModelRouter implements ModelRouter {
       "For 'quiero dos habitaciones' or 'reservame dos' without exact rooms, set requestedRoomCount=2 and ask only which rooms/selection. Never choose arbitrary candidates.",
       "For explicit room allocation, use roomOccupancy entries with exactly one roomNumber/roomIndex/roomId plus guests. Never invent missing allocations. If allocations conflict with known total guests, ask only how to repart/distribute occupancy.",
       "A selection-only or correction-only turn that is complete and needs no tool => kind=message, clarificationReason=acknowledgement, missing=[], toolId='', input={}, with the bounded statePatch.",
-      "More than one selected room is conversation state only in R2.4. Never collapse several rooms into one roomId to execute a reservation. Core blocks multi-room side effects until R2.5.",
+      "When more than one room is selected and hms.createMultiReservation is visible, multi-room reservation intent must route to hms.createMultiReservation. Never collapse several rooms into one roomId. Core server-grounds the exact selected room set and dates; external policy owns approval.",
       "Booking grounding is server-owned: use the current active booking from state for cancellation planning, never invent or mutate booking IDs in statePatch.",
       "FIRST identify current intent. THEN apply only requirements for that capability.",
       "Pure greeting with no operational request => kind=message, clarificationReason=greeting, missing=[], toolId='', input={}, statePatch={}.",
@@ -369,17 +372,19 @@ export class LLMModelRouter implements ModelRouter {
       requirements || "(no capabilities)",
       "A new availability query may reuse stored dates or guests. If one piece is supplied now and the rest exists in state, route directly instead of asking for known data.",
       "A quote after an availability list may omit roomId from tool input when statePatch.selectedRoomIndex or selectedRoomId grounds the selection; the server fills roomId and dates from durable state.",
-      "A reservation request NEVER needs guest count. If room and dates are grounded from message/state, route hms.createReservation and let external policy request approval.",
+      "A reservation request NEVER needs guest count. With one grounded room + dates, route hms.createReservation. With a complete grounded set of two or more rooms + dates and hms.createMultiReservation visible, route hms.createMultiReservation. Let external policy request approval.",
       "Interpret ordinary date phrasing. 'del 15 al 17 de enero de 2027' => checkIn=2027-01-15, checkOut=2027-01-17.",
       "Example: state has checkIn=2027-01-15/checkOut=2027-01-17, user says 'somos dos' => statePatch={guests:2}; if availability is the active intent/context, use the stored dates and guests=2 rather than asking dates again.",
       "Example after availabilityRoomIds=[roomA,roomB,roomC]: user says '¿Cuánto sale la primera?' => kind=tool, toolId=hms.getQuote, input={}, statePatch={selectedRoomIndex:1}, clarificationReason=none, missing=[].",
       "Example with exactly two availability candidates 101 and 102: 'Me quedo con las dos' => kind=message, clarificationReason=acknowledgement, statePatch={selectedRoomRelation:'both'}, missing=[].",
       "Example with exactly two candidates and 101 currently selected: 'Mejor la otra' => kind=message, clarificationReason=acknowledgement, statePatch={selectedRoomRelation:'other'}, missing=[]. With three or more candidates, ask which one instead.",
       "Example after availabilityRooms=[{id:roomA,roomNumber:'101'},{id:roomB,roomNumber:'102'},{id:roomC,roomNumber:'103'}]: 'Quiero la 101 y la 102' => kind=message, clarificationReason=acknowledgement, statePatch={selectedRoomNumbers:['101','102']}, missing=[].",
+      "Example with that same state and known dates: 'Quiero reservar la 101 y la 102' => kind=tool, toolId=hms.createMultiReservation, input={}, statePatch={selectedRoomNumbers:['101','102']}, clarificationReason=none, missing=[]. Core resolves both room IDs and dates server-side.",
+      "Example when CURRENT_CONVERSATION_STATE already has known dates and selectedRoomIds=[roomA,roomB]: 'reservá esas dos' => kind=tool, toolId=hms.createMultiReservation, input={}, statePatch={}, clarificationReason=none, missing=[]. Never re-ask dates/guests/selection solely because the request refers to the already-selected pair.",
       "Example with that same state: 'Mejor cambiá la 102 por la 103' => kind=message, clarificationReason=acknowledgement, statePatch={selectedRoomNumbers:['101','103']}, missing=[].",
       "Example: total guests=5, selected 101+102, 'la 101 para dos y la 102 para dos' => kind=message, clarificationReason=ambiguous, missing=['occupancy'], statePatch includes both selections and both explicit allocations; never assign the fifth guest yourself.",
       "Example after availabilityRoomIds=[roomA,roomB,roomC]: 'me quedo con la segunda, reservámela' => kind=tool, toolId=hms.createReservation, input={}, statePatch={selectedRoomIndex:2}, clarificationReason=none, missing=[].",
-      "Example: state already has dates and guests, user says '¿puedo reservar?' => do not ask dates or guests. Ask only for a room/selection if none is grounded; if selectedRoomId exists, route reservation.",
+      "Example: state already has dates and guests, user says '¿puedo reservar?' => do not ask dates or guests. Ask only for a room/selection if none is grounded; if exactly one selected room exists route hms.createReservation; if a complete multi-room selection exists route hms.createMultiReservation when visible.",
       "Example: user says 'para las que te dije ya' when dates exist in state => preserve/use those dates; never ask them again.",
       "For kind=tool: choose one visible tool and grounded business arguments; clarificationReason=none, missing=[]. The server may fill omitted arguments from durable state.",
       "For kind=message: do not answer operational facts. Classify missing/ambiguous/unsupported/greeting/social/help; toolId='', input={}.",
