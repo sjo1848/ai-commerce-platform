@@ -127,6 +127,7 @@ jobs:
           EXPECTED_MODEL="$EXPECTED_MODEL" MODEL_TELEMETRY="$MODEL_TELEMETRY" node - <<'NODE'
           const telemetry = JSON.parse(process.env.MODEL_TELEMETRY);
           if (telemetry.modelInferences < 2) throw new Error(`insufficient real-model evidence: ${telemetry.modelInferences}`);
+          if (telemetry.totalInputTokens <= 0 || telemetry.totalOutputTokens <= 0) throw new Error('missing parsed ConsoleUsageSink token evidence');
           if (telemetry.models.length !== 1 || telemetry.models[0] !== process.env.EXPECTED_MODEL) {
             throw new Error(`model mismatch: ${JSON.stringify(telemetry.models)}`);
           }
@@ -142,9 +143,6 @@ jobs:
           }
           NODE
 
-          grep -q '"event":"agent_core_usage"' /tmp/r28-readiness-tail.log || {
-            echo 'missing ConsoleUsageSink evidence' >&2; exit 1;
-          }
           grep -q 'ACP_R2_8_STAGING_READY_DATA' /tmp/r28-readiness.json
           echo 'ACP_R2_8_STAGING_READY'
 
