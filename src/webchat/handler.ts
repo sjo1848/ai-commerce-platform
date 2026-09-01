@@ -135,6 +135,7 @@ export function createWebchatHandler(runtime: AgentCoreRuntime, config: WebchatH
         if (!consumedApproval) throw new CoreError("FORBIDDEN", "Approval challenge is invalid or expired", 403);
         trustedMeta.humanApproved = true;
         trustedMeta.approvedOperationFingerprint = consumedApproval.operationFingerprint;
+        trustedMeta.recoveryAttempt = consumedApproval.recoveryAttempt;
         stage = "execute_approved_plan";
         return json(await runtime.orchestrator.executeApprovedPlan(consumedApproval.plan, context, trustedMeta));
       }
