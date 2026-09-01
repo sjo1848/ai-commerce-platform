@@ -56,9 +56,22 @@ function knownWorkersAiErrorCode(error: unknown): string | undefined {
   return undefined;
 }
 
+function structuredAiErrorCode(error: unknown): string | undefined {
+  if (!(error instanceof Error) || error.name !== "AiError" || !isRecord(error)) return undefined;
+  const raw = error.internalCode;
+  const code = typeof raw === "number" && Number.isInteger(raw)
+    ? String(raw)
+    : typeof raw === "string" && /^\d{4}$/.test(raw.trim())
+      ? raw.trim()
+      : undefined;
+  return code && /^\d{4}$/.test(code) ? code : undefined;
+}
+
 function boundedErrorName(error: unknown): string {
   const knownCode = knownWorkersAiErrorCode(error);
   if (knownCode) return `CloudflareError${knownCode}`;
+  const aiErrorCode = structuredAiErrorCode(error);
+  if (aiErrorCode) return `CloudflareAiError${aiErrorCode}`;
   if (error instanceof Error && /^[A-Za-z][A-Za-z0-9_.:-]{0,63}$/.test(error.name)) return error.name;
   return "UnknownError";
 }
