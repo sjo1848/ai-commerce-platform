@@ -1,6 +1,6 @@
 import type { ConversationState, ConversationStatePatch } from "./conversation-state.js";
 import { emptyConversationState } from "./conversation-state.js";
-import type { ModelProvider } from "./model-provider.js";
+import { ModelProviderError, type ModelProvider } from "./model-provider.js";
 import { recordModelFallback, recordModelInference } from "./model-telemetry.js";
 import type {
   ExecutionContext,
@@ -297,6 +297,16 @@ function isSocialReason(reason: ClarificationReason): boolean {
   return reason === "greeting" || reason === "social" || reason === "help";
 }
 
+function safeProviderFailureCategory(error: unknown): string | undefined {
+  const candidate = error instanceof ModelProviderError
+    ? error.causeName
+    : error instanceof Error
+      ? error.name
+      : undefined;
+  if (!candidate || !/^[A-Za-z][A-Za-z0-9_.:-]{0,63}$/.test(candidate)) return undefined;
+  return candidate;
+}
+
 function capabilityRequirements(tools: readonly ToolDescriptor[]): string {
   const ids = new Set(tools.map((tool) => tool.id));
   const rules: string[] = [];
@@ -323,8 +333,9 @@ export class LLMModelRouter implements ModelRouter {
     availableTools: readonly ToolDescriptor[],
     conversation: readonly ModelConversationTurn[],
     state: Readonly<ConversationState>,
+    failureCategory?: string,
   ): Promise<ModelRouteResult> {
-    await recordModelFallback(this.usage, context, "agent_core_route", reason);
+    await recordModelFallback(this.usage, context, "agent_core_route", reason, failureCategory);
     return this.fallback.route(message, context, availableTools, conversation, state);
   }
 
@@ -496,8 +507,16 @@ export class LLMModelRouter implements ModelRouter {
       if (hasUnknownTopLevelInput(value.input, tool)) return this.fallbackRoute("unknown_tool_argument", message, context, availableTools, conversation, state);
       if (JSON.stringify(value.input).length > 8_000) return this.fallbackRoute("tool_input_too_large", message, context, availableTools, conversation, state);
       return { kind: "tool", plan: { toolId: tool.id, input: value.input }, statePatch };
-    } catch {
-      return this.fallbackRoute("provider_failure", message, context, availableTools, conversation, state);
+    } catch (error) {
+      return this.fallbackRoute(
+        "provider_failure",
+        message,
+        context,
+        availableTools,
+        conversation,
+        state,
+        safeProviderFailureCategory(error),
+      );
     }
   }
 }
