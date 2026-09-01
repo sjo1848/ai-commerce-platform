@@ -314,7 +314,16 @@ export class HmsServiceBindingAdapter {
               }));
               compensatedBookingIds.push(child.bookingId);
             } catch (compensationError) {
-              if (isOutcomeUnknown(compensationError)) throw compensationError;
+              if (isOutcomeUnknown(compensationError)) {
+                throw Object.assign(
+                  new CoreError(
+                    "OUTCOME_UNKNOWN",
+                    "HMS compensation outcome is unknown; manual reconciliation is required before any create-plan replay",
+                    503,
+                  ),
+                  { automaticRecoveryAllowed: false as const },
+                );
+              }
               survivingBookingIds.push(child.bookingId);
             }
           }
