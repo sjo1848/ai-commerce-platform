@@ -97,6 +97,9 @@ function operationToken(meta: ToolExecutionMeta): string {
   if (!key) throw new CoreError("IDEMPOTENCY_REQUIRED", "Idempotency key required for reservation operation", 400);
   return key;
 }
+function isTrustedRecovery(meta: ToolExecutionMeta): boolean {
+  return Number.isInteger(meta.recoveryAttempt) && Number(meta.recoveryAttempt) > 0;
+}
 async function childCreateOperationToken(rootToken: string, index: number, roomId: string): Promise<string> {
   const payload = new TextEncoder().encode(`r2.5:create\u0000${rootToken}\u0000${index}\u0000${roomId}`);
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", payload));
@@ -250,22 +253,28 @@ export class HmsServiceBindingAdapter {
         const rootToken = operationToken(meta);
         const rpc = rpcContext(context, this.routes);
         const created: CreatedChild[] = [];
+        const recovery = isTrustedRecovery(meta);
         let failedRoomId: string | undefined;
 
         try {
           for (const [index, roomId] of input.roomIds.entries()) {
             failedRoomId = roomId;
 
-            // The outer agent tool verifies the whole approved set immediately
-            // before entering the composite. This second gate closes the race
-            // between children: every room is re-read from HMS immediately before
-            // its own mutation, after any earlier child has already committed.
-            const fresh = unwrap(await this.service.checkAvailability(rpc, {
-              start: input.checkIn,
-              end: input.checkOut,
-            }));
-            if (!fresh.rooms.some((room) => room.id === roomId)) {
-              throw new CoreError("CONFLICT", "Approved room selection changed during reservation execution", 409);
+            // Initial execution closes the race between children by re-reading
+            // exact HMS availability immediately before every mutation. Recovery
+            // is different: our own already-committed child may correctly be
+            // absent from availability, so the authoritative reconciliation is
+            // the exact same downstream create token. HMS idempotency returns a
+            // replay for committed children and transactional create semantics
+            // still reject a genuinely unavailable child that never committed.
+            if (!recovery) {
+              const fresh = unwrap(await this.service.checkAvailability(rpc, {
+                start: input.checkIn,
+                end: input.checkOut,
+              }));
+              if (!fresh.rooms.some((room) => room.id === roomId)) {
+                throw new CoreError("CONFLICT", "Approved room selection changed during reservation execution", 409);
+              }
             }
 
             const token = await childCreateOperationToken(rootToken, index, roomId);
