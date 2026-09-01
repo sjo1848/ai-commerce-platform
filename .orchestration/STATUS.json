@@ -3,10 +3,10 @@
   "runtime_status": "IN_PROGRESS",
   "resume_authorized": true,
   "active_task": "ACP-2.6.9-R2-NATURAL-RECEPTIONIST",
-  "last_completed_task": "ACP-2.6.9-R2.6-MODEL-QUALITY-LATENCY-COST-EVALUATION",
-  "last_completed_head": "4f7741ac01505c77b73460f91737c209166ffcd0",
-  "current_substage": "2.6.9-R2.7_ADVERSARIAL_QA_AND_INDEPENDENT_CRITIC_ACTIVE",
-  "next_action": "FREEZE_R2_7_ADVERSARIAL_CONTRACT_AND_CLOSE_CROSS_STAGE_REGRESSIONS",
+  "last_completed_task": "ACP-2.6.9-R2.7-ADVERSARIAL-QA-AND-INDEPENDENT-CRITIC",
+  "last_completed_head": "c42f1c8354dbba8ae13b442872349430739f3796",
+  "current_substage": "2.6.9-R2.8_REAL_MODEL_RECEPTIONIST_STAGING_E2E_ACTIVE",
+  "next_action": "FREEZE_AND_EXECUTE_R2_8_REAL_MODEL_RECEPTIONIST_STAGING_E2E",
   "stop_reason": null,
   "product_decision": {
     "id": "DEC-002",
@@ -117,14 +117,41 @@
     "evidence": ".orchestration/evidence/ACP-2.6.9-R2.6-MODEL-EVALUATION.md"
   },
   "r2_7": {
+    "status": "TECHNICAL_PASS_CLOSED",
+    "contract": ".orchestration/contracts/ACP-2.6.9-R2.7-ADVERSARIAL-QA.md",
+    "final_substantive_head": "363c1937d17e71a09e513707185a127332a792ec",
+    "final_tests": "216/216_PASS",
+    "initial_red_ci_run": 33467426308,
+    "fresh_qa_red_ci_run": 33467984755,
+    "final_substantive_ci_run": 33468363790,
+    "qa": "PASS_RECLOSED",
+    "qa_head": "e243d7fa216b430bdba9ccac400ee96c12b3e6c0",
+    "qa_ci_run": 33468438376,
+    "pre_critic": "PASS",
+    "pre_critic_review": 5073907311,
+    "independent_critic": "PASS",
+    "independent_critic_review": 5073910176,
+    "closure_head": "fc6fc013496205dd84ea1864e02eba35a7b84fdf",
+    "closure_ci_run": 33468557478,
+    "integration_pr": 52,
+    "integration_head": "c42f1c8354dbba8ae13b442872349430739f3796",
+    "integration_pr_ci_run": 33468630047,
+    "post_merge_ci_run": 33468664436,
+    "provider_failure_multi_room_preserved": true,
+    "natural_para_dos_grounding": true,
+    "duration_guest_ambiguity_closed": true,
+    "open_p0_p1_p2": "0/0/0",
+    "evidence": ".orchestration/evidence/ACP-2.6.9-R2.7-ADVERSARIAL-QA-CLOSURE.md"
+  },
+  "r2_8": {
     "status": "IN_PROGRESS_ACTIVE",
-    "mandatory_cross_stage_attacks": [
-      "PROVIDER_FAILURE_MULTI_ROOM_MUST_PRESERVE_R2_5_ORCHESTRATION",
-      "NATURAL_PARA_DOS_GUEST_COUNT_MUST_NOT_BE_REASKED"
+    "mandatory_quality_probes": [
+      "REAL_MODEL_MULTI_ROOM_FLOW_MUST_IGNORE_STALE_R2_4_PROMPT_ASSUMPTION",
+      "NATURAL_PARA_DOS_MUST_NOT_REASK_GUEST_COUNT",
+      "REAL_MULTI_ROOM_HITL_CREATE_VERIFY_CANCEL_CLEANUP"
     ],
+    "staging_e2e": null,
     "qa": null,
-    "pre_critic": null,
-    "independent_critic": null,
     "open_p0_p1_p2": null
   },
   "r2_sequence": [
@@ -155,8 +182,8 @@
     "human_approval_required_for_mutations": true
   },
   "event": {
-    "id": "ACP-2.6.9-R2.6-TECHNICAL-PASS-CLOSED-R2.7-ACTIVE",
+    "id": "ACP-2.6.9-R2.7-TECHNICAL-PASS-CLOSED-R2.8-ACTIVE",
     "type": "SUBSTAGE_TRANSITION",
-    "seq": 21
+    "seq": 22
   }
 }
