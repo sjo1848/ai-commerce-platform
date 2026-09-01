@@ -115,9 +115,10 @@ test("R2.7 numeric 'habitaciones para 2' is equivalent and fallback asks dates, 
   assert.doesNotMatch(result.message, /cuántas personas/i);
 });
 
-test("R2.7 'habitaciones para dos noches' never invents a guest count from duration", () => {
+test("R2.7 'habitaciones para dos noches' preserves availability intent without inventing guests", () => {
   const scope = { tenantId: "hotel-demo", actorId: "visitor-demo", sessionId: "session-r27-duration" };
   const state = applyUserSemanticTurn(emptyConversationState(), "¿Tenés habitaciones para dos noches?", scope);
   assert.equal(state.stay.guests, undefined);
   assert.equal(state.semanticMemory.stay.guests, undefined);
+  assert.equal(state.semanticMemory.activeIntent?.value, "availability");
 });
