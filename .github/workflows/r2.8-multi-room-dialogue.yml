@@ -50,6 +50,7 @@ jobs:
           set -euo pipefail
           test -n "$CLOUDFLARE_API_TOKEN"
           test -n "$CLOUDFLARE_ACCOUNT_ID"
+          command -v script
           npx wrangler whoami
 
       - name: Deploy exact R2.8.4 head to staging
@@ -104,17 +105,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          : > /tmp/r28-r4-tail.log
-          timeout 180s npx wrangler tail "$WORKER_NAME" \
-            --format=json \
-            --method POST \
-            > /tmp/r28-r4-tail.log 2>&1 &
+          rm -f /tmp/r28-r4-tail.log
+          timeout 180s script -qefc \
+            "npx wrangler tail '$WORKER_NAME' --format=json --method POST" \
+            /tmp/r28-r4-tail.log \
+            >/dev/null 2>&1 &
           TAIL_PID=$!
           trap 'kill "$TAIL_PID" 2>/dev/null || true' EXIT
 
           connected=0
           for attempt in $(seq 1 30); do
-            if grep -Fq 'Connected to ' /tmp/r28-r4-tail.log && grep -Fq 'waiting for logs' /tmp/r28-r4-tail.log; then
+            if [[ -s /tmp/r28-r4-tail.log ]] && grep -Fq 'Connected to ' /tmp/r28-r4-tail.log && grep -Fq 'waiting for logs' /tmp/r28-r4-tail.log; then
               connected=1
               echo "Live tail connection proved on attempt $attempt."
               break
