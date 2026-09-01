@@ -4,7 +4,7 @@
   "resume_authorized": true,
   "active_task": "ACP-2.6.9-R2-NATURAL-RECEPTIONIST",
   "last_completed_task": "ACP-2.6.9-R2.6-MODEL-QUALITY-LATENCY-COST-EVALUATION",
-  "last_completed_head": "4fd636b599cd2a3389ca94e289146cdcc74485ab",
+  "last_completed_head": "4f7741ac01505c77b73460f91737c209166ffcd0",
   "current_substage": "2.6.9-R2.7_ADVERSARIAL_QA_AND_INDEPENDENT_CRITIC_ACTIVE",
   "next_action": "FREEZE_R2_7_ADVERSARIAL_CONTRACT_AND_CLOSE_CROSS_STAGE_REGRESSIONS",
   "stop_reason": null,
@@ -84,7 +84,7 @@
     "evidence": ".orchestration/evidence/ACP-2.6.9-R2.5-MULTI-ROOM-RESERVATION-CLOSURE.md"
   },
   "r2_6": {
-    "status": "TECHNICAL_PASS_CLOSED_PENDING_MERGE",
+    "status": "TECHNICAL_PASS_CLOSED",
     "evaluation_contract": ".orchestration/contracts/ACP-2.6.9-R2.6-MODEL-EVALUATION.md",
     "final_substantive_head": "4fd636b599cd2a3389ca94e289146cdcc74485ab",
     "final_tests": "211/211_PASS",
@@ -109,6 +109,10 @@
     "pre_critic_review": 5073654629,
     "independent_critic": "PASS",
     "independent_critic_review": 5073655778,
+    "integration_pr": 50,
+    "integration_head": "4f7741ac01505c77b73460f91737c209166ffcd0",
+    "final_pr_ci_run": 33465429869,
+    "post_merge_ci_run": 33465499222,
     "open_p0_p1_p2": "0/0/0",
     "evidence": ".orchestration/evidence/ACP-2.6.9-R2.6-MODEL-EVALUATION.md"
   },
