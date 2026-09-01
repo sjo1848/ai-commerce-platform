@@ -1,0 +1,160 @@
+name: R2.6 model evaluation
+
+on:
+  push:
+    branches:
+      - acceptance/r2.6-eval
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-commerce-r2-6-model-eval
+  cancel-in-progress: false
+
+jobs:
+  compare-models:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      WORKER_NAME: ai-commerce-agent-core
+      BASELINE_MODEL: '@cf/meta/llama-3.3-70b-instruct-fp8-fast'
+      CANDIDATE_MODEL: '@cf/openai/gpt-oss-20b'
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install locked toolchain
+        run: npm ci
+
+      - name: Foundation gate
+        run: npm run qa
+
+      - name: Validate R2.6 scripts and Worker config
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check scripts/r2.6-staging-eval.mjs
+          node --check scripts/r2.6-compare-reports.mjs
+          node --check scripts/count-model-telemetry.mjs
+          npx wrangler deploy --dry-run --var "ACP_MODEL_ID:$BASELINE_MODEL"
+          npx wrangler deploy --dry-run --var "ACP_MODEL_ID:$CANDIDATE_MODEL"
+
+      - name: Verify Cloudflare credentials and resolve staging URL
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_API_TOKEN"
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          npx wrangler whoami
+          payload="$(curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain")"
+          subdomain="$(printf '%s' "$payload" | node -e '
+            const fs=require("fs");
+            const p=JSON.parse(fs.readFileSync(0,"utf8"));
+            if (!p?.success || !p?.result?.subdomain) process.exit(2);
+            process.stdout.write(p.result.subdomain);
+          ')"
+          echo "AI_COMMERCE_STAGING_URL=https://$WORKER_NAME.$subdomain.workers.dev" >> "$GITHUB_ENV"
+
+      - name: Deploy baseline model
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler deploy --var "ACP_MODEL_ID:$BASELINE_MODEL"
+          for attempt in $(seq 1 12); do
+            status="$(curl -sS --max-time 10 -o /tmp/r2.6-ready.html -w '%{http_code}' "$AI_COMMERCE_STAGING_URL/" || true)"
+            [[ "$status" == 2* ]] && exit 0
+            sleep 2
+          done
+          exit 1
+
+      - name: Measure baseline model
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > /tmp/r2.6-baseline-tail.log
+          timeout 120s npx wrangler tail "$WORKER_NAME" --format=json --method POST > /tmp/r2.6-baseline-tail.log 2>&1 &
+          TAIL_PID=$!
+          trap 'kill "$TAIL_PID" 2>/dev/null || true' EXIT
+          sleep 3
+          R2_6_EXPECTED_MODEL="$BASELINE_MODEL" node scripts/r2.6-staging-eval.mjs > /tmp/r2.6-baseline-eval.json
+          sleep 3
+          kill "$TAIL_PID" 2>/dev/null || true
+          node scripts/count-model-telemetry.mjs /tmp/r2.6-baseline-tail.log > /tmp/r2.6-baseline-telemetry.json
+          echo '--- R2.6 BASELINE EVAL ---'
+          cat /tmp/r2.6-baseline-eval.json
+          echo '--- R2.6 BASELINE TELEMETRY ---'
+          cat /tmp/r2.6-baseline-telemetry.json
+
+      - name: Deploy candidate model
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler deploy --var "ACP_MODEL_ID:$CANDIDATE_MODEL"
+          for attempt in $(seq 1 12); do
+            status="$(curl -sS --max-time 10 -o /tmp/r2.6-ready.html -w '%{http_code}' "$AI_COMMERCE_STAGING_URL/" || true)"
+            [[ "$status" == 2* ]] && exit 0
+            sleep 2
+          done
+          exit 1
+
+      - name: Measure candidate model
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > /tmp/r2.6-candidate-tail.log
+          timeout 120s npx wrangler tail "$WORKER_NAME" --format=json --method POST > /tmp/r2.6-candidate-tail.log 2>&1 &
+          TAIL_PID=$!
+          trap 'kill "$TAIL_PID" 2>/dev/null || true' EXIT
+          sleep 3
+          set +e
+          R2_6_EXPECTED_MODEL="$CANDIDATE_MODEL" node scripts/r2.6-staging-eval.mjs > /tmp/r2.6-candidate-eval.json
+          EVAL_CODE=$?
+          set -e
+          sleep 3
+          kill "$TAIL_PID" 2>/dev/null || true
+          node scripts/count-model-telemetry.mjs /tmp/r2.6-candidate-tail.log > /tmp/r2.6-candidate-telemetry.json
+          echo "$EVAL_CODE" > /tmp/r2.6-candidate-exit-code.txt
+          echo '--- R2.6 CANDIDATE EVAL ---'
+          cat /tmp/r2.6-candidate-eval.json
+          echo '--- R2.6 CANDIDATE TELEMETRY ---'
+          cat /tmp/r2.6-candidate-telemetry.json
+          echo "candidate evaluator exit code: $EVAL_CODE"
+
+      - name: Apply R2.6 replacement rule
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/r2.6-compare-reports.mjs \
+            /tmp/r2.6-baseline-eval.json \
+            /tmp/r2.6-baseline-telemetry.json \
+            /tmp/r2.6-candidate-eval.json \
+            /tmp/r2.6-candidate-telemetry.json \
+            | tee /tmp/r2.6-comparison.json
+
+      - name: Upload R2.6 evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: r2.6-model-evaluation
+          path: |
+            /tmp/r2.6-baseline-eval.json
+            /tmp/r2.6-baseline-telemetry.json
+            /tmp/r2.6-candidate-eval.json
+            /tmp/r2.6-candidate-telemetry.json
+            /tmp/r2.6-candidate-exit-code.txt
+            /tmp/r2.6-comparison.json
+          retention-days: 30
+
+      - name: Restore authorized baseline model
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler deploy --var "ACP_MODEL_ID:$BASELINE_MODEL"
