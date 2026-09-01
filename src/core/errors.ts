@@ -15,6 +15,7 @@ export type CoreErrorCode =
   | "IDEMPOTENCY_REQUIRED"
   | "IDEMPOTENCY_CONFLICT"
   | "LIMIT_EXCEEDED"
+  | "OUTCOME_UNKNOWN"
   | "TOOL_EXECUTION_FAILED";
 
 export class CoreError extends Error {
