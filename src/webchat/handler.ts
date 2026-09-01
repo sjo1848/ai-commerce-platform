@@ -1,14 +1,17 @@
 import { ApprovalRequiredError, CoreError } from "../core/errors.js";
 import type { Actor, ToolExecutionMeta, ToolPlan } from "../core/types.js";
 import type { AgentCoreRuntime } from "../core/runtime.js";
-import type { ApprovalChallengeInput, ApprovalConsumption, ApprovalStore } from "./approval.js";
-
-const MAX_RECOVERY_ATTEMPTS = 3;
+import {
+  MAX_APPROVAL_RECOVERY_ATTEMPTS,
+  type ApprovalChallengeInput,
+  type ApprovalConsumption,
+  type ApprovalStore,
+} from "./approval.js";
 
 const HTML = `<!doctype html>
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>AI Commerce Webchat</title></head>
 <body><main><h1>Asistente</h1><form id="f"><input id="m" maxlength="2000" placeholder="Ej: somos dos y queremos quedarnos del 10 al 12 de febrero de 2034"><button>Enviar</button></form><pre id="o"></pre></main>
-<script>let sessionId;document.getElementById('f').addEventListener('submit',async(e)=>{e.preventDefault();const message=document.getElementById('m').value;const operationKey=crypto.randomUUID();const send=async(path,approvalToken,recoveryAttempt=0)=>{const r=await fetch(path,{method:'POST',headers:{'content-type':'application/json','Idempotency-Key':operationKey},body:JSON.stringify({message,sessionId,...(approvalToken?{approvalToken}:{}),...(recoveryAttempt?{recoveryAttempt}:{})})});const j=await r.json();sessionId=j.sessionId||sessionId;if(path==='/api/chat'&&r.status===409&&j?.error?.code==='APPROVAL_REQUIRED'&&j?.approvalToken&&confirm(j.approvalSummary||'Esta acción modificará una reserva en HMS. ¿Confirmar?'))return send('/api/approve',j.approvalToken,0);if(path==='/api/approve'&&r.status===503&&j?.error?.code==='OUTCOME_UNKNOWN'&&j?.recoveryApprovalToken&&confirm('HMS no pudo confirmar el resultado. ¿Reintentar exactamente la misma operación?'))return send('/api/approve',j.recoveryApprovalToken,j.recoveryAttempt||0);document.getElementById('o').textContent=JSON.stringify(j,null,2);};await send('/api/chat');});</script></body></html>`;
+<script>let sessionId;document.getElementById('f').addEventListener('submit',async(e)=>{e.preventDefault();const message=document.getElementById('m').value;const operationKey=crypto.randomUUID();const send=async(path,approvalToken)=>{const r=await fetch(path,{method:'POST',headers:{'content-type':'application/json','Idempotency-Key':operationKey},body:JSON.stringify({message,sessionId,...(approvalToken?{approvalToken}:{})})});const j=await r.json();sessionId=j.sessionId||sessionId;if(path==='/api/chat'&&r.status===409&&j?.error?.code==='APPROVAL_REQUIRED'&&j?.approvalToken&&confirm(j.approvalSummary||'Esta acción modificará una reserva en HMS. ¿Confirmar?'))return send('/api/approve',j.approvalToken);if(path==='/api/approve'&&r.status===503&&j?.error?.code==='OUTCOME_UNKNOWN'&&j?.recoveryApprovalToken&&confirm('HMS no pudo confirmar el resultado. ¿Reintentar exactamente la misma operación?'))return send('/api/approve',j.recoveryApprovalToken);document.getElementById('o').textContent=JSON.stringify(j,null,2);};await send('/api/chat');});</script></body></html>`;
 
 function json(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
@@ -22,12 +25,6 @@ function stringList(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).map((item) => item.trim()).slice(0, 10)
     : [];
-}
-
-function recoveryAttempt(value: unknown): number {
-  return Number.isInteger(value) && Number(value) >= 0 && Number(value) <= MAX_RECOVERY_ATTEMPTS
-    ? Number(value)
-    : 0;
 }
 
 function approvalSummaryForPlan(plan: ToolPlan): string {
@@ -77,7 +74,6 @@ export function createWebchatHandler(runtime: AgentCoreRuntime, config: WebchatH
     let activeSessionId: string | undefined;
     let approvalCandidate: ApprovalChallengeInput | undefined;
     let consumedApproval: ApprovalConsumption | undefined;
-    let requestedRecoveryAttempt = 0;
 
     try {
       stage = "parse_request";
@@ -85,7 +81,6 @@ export function createWebchatHandler(runtime: AgentCoreRuntime, config: WebchatH
       if (!contentType.toLowerCase().includes("application/json")) throw new CoreError("BAD_REQUEST", "JSON body required", 415);
       const body = await request.json() as Record<string, unknown>;
       const message = typeof body.message === "string" ? body.message : "";
-      requestedRecoveryAttempt = recoveryAttempt(body.recoveryAttempt);
       const idempotencyKey = request.headers.get("idempotency-key")?.trim() || "";
       if (approvalRoute && (typeof body.sessionId !== "string" || !body.sessionId.trim())) {
         throw new CoreError("BAD_REQUEST", "Approval requires an existing session", 400);
@@ -171,6 +166,7 @@ export function createWebchatHandler(runtime: AgentCoreRuntime, config: WebchatH
             ...approvalCandidate,
             operationFingerprint: error.operationFingerprint,
             plan: error.plan,
+            recoveryAttempt: 0,
           });
           return json({
             error: { code: error.code, message: error.message },
@@ -197,8 +193,8 @@ export function createWebchatHandler(runtime: AgentCoreRuntime, config: WebchatH
         && consumedApproval
         && config.approvalStore
       ) {
-        const nextRecoveryAttempt = requestedRecoveryAttempt + 1;
-        if (nextRecoveryAttempt > MAX_RECOVERY_ATTEMPTS) {
+        const nextRecoveryAttempt = consumedApproval.recoveryAttempt + 1;
+        if (nextRecoveryAttempt > MAX_APPROVAL_RECOVERY_ATTEMPTS) {
           return json({
             error: { code: error.code, message: "HMS mutation outcome remains unknown; manual reconciliation is required" },
             sessionId: activeSessionId,
@@ -211,6 +207,7 @@ export function createWebchatHandler(runtime: AgentCoreRuntime, config: WebchatH
             ...approvalCandidate,
             operationFingerprint: consumedApproval.operationFingerprint,
             plan: consumedApproval.plan,
+            recoveryAttempt: nextRecoveryAttempt,
           });
           return json({
             error: { code: error.code, message: error.message },
