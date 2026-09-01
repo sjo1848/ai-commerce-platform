@@ -22,8 +22,9 @@ function context() {
   };
 }
 
-function mockService({ failCancelBooking } = {}) {
+function mockService({ failCancelBooking, uncertainCancelBooking, uncertainCancelAttempts = 0 } = {}) {
   const calls = [];
+  let uncertainCount = 0;
   return {
     calls,
     service: {
@@ -32,11 +33,15 @@ function mockService({ failCancelBooking } = {}) {
       async createReservation() { throw new Error("not used"); },
       async cancelReservation(ctx, input) {
         calls.push({ method: "cancelReservation", ctx, input });
+        if (input.bookingId === uncertainCancelBooking && uncertainCount < uncertainCancelAttempts) {
+          uncertainCount += 1;
+          throw new Error("transport timeout after dispatch");
+        }
         if (input.bookingId === failCancelBooking) {
           return { ok: false, error: { code: "INTERNAL_ERROR", message: "downstream cancellation failed", traceId: ctx.traceId } };
         }
         const roomId = input.bookingId === bookingA ? roomA : roomB;
-        return { ok: true, data: { source: "hms", truth: "transactional", hotelId: ctx.hotelId, bookingId: input.bookingId, guestId: "guest", roomId, start: "2027-02-10", end: "2027-02-12", status: "CANCELLED", totalCents: 10000, currency: "ARS", replayed: false, traceId: ctx.traceId } };
+        return { ok: true, data: { source: "hms", truth: "transactional", hotelId: ctx.hotelId, bookingId: input.bookingId, guestId: "guest", roomId, start: "2027-02-10", end: "2027-02-12", status: "CANCELLED", totalCents: 10000, currency: "ARS", replayed: uncertainCount > 0, traceId: ctx.traceId } };
       },
     },
   };
@@ -90,6 +95,31 @@ test("R2.5 successful group cancellation uses each original trusted create token
   assert.equal(mock.calls[1].input.operationToken, tokenB);
   assert.notEqual(mock.calls[0].input.operationToken, "cancel-group-success");
   assert.notEqual(mock.calls[1].input.operationToken, "cancel-group-success");
+});
+
+test("R2.5 cancellation reconciles one uncertain response with the exact original create token", async () => {
+  const { adapter, mock } = await setup({ uncertainCancelBooking: bookingA, uncertainCancelAttempts: 1 });
+  const result = await adapter.cancelMultiReservationTool().execute({ bookingIds: [bookingA, bookingB] }, context(), { idempotencyKey: "cancel-group-reconcile" });
+
+  assert.equal(result.outcome, "cancelled");
+  const callsA = mock.calls.filter((call) => call.input.bookingId === bookingA);
+  assert.equal(callsA.length, 2);
+  assert.equal(callsA[0].input.operationToken, tokenA);
+  assert.equal(callsA[1].input.operationToken, tokenA);
+  assert.deepEqual(mock.calls.filter((call) => call.input.bookingId === bookingB).map((call) => call.input.operationToken), [tokenB]);
+});
+
+test("R2.5 repeated cancellation uncertainty returns OUTCOME_UNKNOWN and does not mutate later bookings", async () => {
+  const { adapter, mock } = await setup({ uncertainCancelBooking: bookingA, uncertainCancelAttempts: 2 });
+  await assert.rejects(
+    () => adapter.cancelMultiReservationTool().execute({ bookingIds: [bookingA, bookingB] }, context(), { idempotencyKey: "cancel-group-unknown" }),
+    (error) => error instanceof CoreError && error.code === "OUTCOME_UNKNOWN" && error.status === 503,
+  );
+  const callsA = mock.calls.filter((call) => call.input.bookingId === bookingA);
+  assert.equal(callsA.length, 2);
+  assert.equal(callsA[0].input.operationToken, tokenA);
+  assert.equal(callsA[1].input.operationToken, tokenA);
+  assert.equal(mock.calls.filter((call) => call.input.bookingId === bookingB).length, 0, "later irreversible cancellations must stop after an unresolved prior mutation");
 });
 
 test("R2.5 partial group cancellation keeps only failed booking IDs active and continues deterministic cleanup", async () => {
