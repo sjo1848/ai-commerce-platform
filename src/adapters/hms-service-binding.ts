@@ -113,6 +113,35 @@ function unwrap<T>(result: HmsRpcResult<T>): T {
     default: throw new CoreError("TOOL_EXECUTION_FAILED", "HMS service failed", 502);
   }
 }
+function isOutcomeUnknown(error: unknown): error is CoreError {
+  return error instanceof CoreError && error.code === "OUTCOME_UNKNOWN";
+}
+async function reconcileMutation<T>(
+  operation: () => Promise<HmsRpcResult<T>>,
+): Promise<T> {
+  let first: HmsRpcResult<T>;
+  try {
+    first = await operation();
+  } catch {
+    // A thrown transport/RPC exception is not evidence that HMS rejected the
+    // mutation. Replay exactly once with the same downstream idempotency token:
+    // if HMS committed the first call, the replay must return that authoritative
+    // result; if the first never arrived, the replay safely performs it once.
+    let replay: HmsRpcResult<T>;
+    try {
+      replay = await operation();
+    } catch {
+      throw new CoreError(
+        "OUTCOME_UNKNOWN",
+        "HMS mutation outcome is unknown; retry the exact approved operation with the same idempotency key",
+        503,
+      );
+    }
+    return unwrap(replay);
+  }
+  // Structured HMS errors are authoritative and are never retried here.
+  return unwrap(first);
+}
 
 export class HmsServiceBindingAdapter {
   public constructor(
@@ -172,7 +201,8 @@ export class HmsServiceBindingAdapter {
       execute: async (input, context, meta) => {
         if (!this.reservationOperations) throw new CoreError("FORBIDDEN", "Reservation ownership storage is not configured", 403);
         const token = operationToken(meta);
-        const result = unwrap(await this.service.createReservation(rpcContext(context, this.routes), {
+        const rpc = rpcContext(context, this.routes);
+        const result = await reconcileMutation(() => this.service.createReservation(rpc, {
           operationToken: token, guestId: input.guestId, roomId: input.roomId, start: input.checkIn, end: input.checkOut,
           ...(input.notes !== undefined ? { notes: input.notes } : {}),
         }));
@@ -225,8 +255,21 @@ export class HmsServiceBindingAdapter {
         try {
           for (const [index, roomId] of input.roomIds.entries()) {
             failedRoomId = roomId;
+
+            // The outer agent tool verifies the whole approved set immediately
+            // before entering the composite. This second gate closes the race
+            // between children: every room is re-read from HMS immediately before
+            // its own mutation, after any earlier child has already committed.
+            const fresh = unwrap(await this.service.checkAvailability(rpc, {
+              start: input.checkIn,
+              end: input.checkOut,
+            }));
+            if (!fresh.rooms.some((room) => room.id === roomId)) {
+              throw new CoreError("CONFLICT", "Approved room selection changed during reservation execution", 409);
+            }
+
             const token = await childCreateOperationToken(rootToken, index, roomId);
-            const result = unwrap(await this.service.createReservation(rpc, {
+            const result = await reconcileMutation(() => this.service.createReservation(rpc, {
               operationToken: token,
               guestId: input.guestId,
               roomId,
@@ -245,18 +288,24 @@ export class HmsServiceBindingAdapter {
             });
           }
         } catch (error) {
+          // If HMS may have committed the current child but both exact-token
+          // reconciliation attempts lost their response, do not guess and do not
+          // start compensating around an unresolved mutation. A replay with the
+          // same root key deterministically derives the same child tokens.
+          if (isOutcomeUnknown(error)) throw error;
           if (created.length === 0) throw error;
 
           const compensatedBookingIds: string[] = [];
           const survivingBookingIds: string[] = [];
           for (const child of [...created].reverse()) {
             try {
-              unwrap(await this.service.cancelReservation(rpc, {
+              await reconcileMutation(() => this.service.cancelReservation(rpc, {
                 operationToken: child.operationToken,
                 bookingId: child.bookingId,
               }));
               compensatedBookingIds.push(child.bookingId);
-            } catch {
+            } catch (compensationError) {
+              if (isOutcomeUnknown(compensationError)) throw compensationError;
               survivingBookingIds.push(child.bookingId);
             }
           }
@@ -308,7 +357,8 @@ export class HmsServiceBindingAdapter {
           sessionId: context.session.id, tenantId: context.tenant.id, actorId: context.actor.id, bookingId: input.bookingId,
         });
         if (!originalToken) throw new CoreError("FORBIDDEN", "Reservation is not owned by this trusted session", 403);
-        return unwrap(await this.service.cancelReservation(rpcContext(context, this.routes), { operationToken: originalToken, bookingId: input.bookingId }));
+        const rpc = rpcContext(context, this.routes);
+        return reconcileMutation(() => this.service.cancelReservation(rpc, { operationToken: originalToken, bookingId: input.bookingId }));
       },
     };
   }
@@ -353,13 +403,25 @@ export class HmsServiceBindingAdapter {
         const cancelledBookingIds: string[] = [];
         const failedBookingIds: string[] = [];
         for (const booking of owned) {
+          // Re-read trusted ownership at the last responsible moment as a
+          // concurrency guard. A changed binding is never replaced from prose.
+          const currentToken = await this.reservationOperations.get({
+            sessionId: context.session.id,
+            tenantId: context.tenant.id,
+            actorId: context.actor.id,
+            bookingId: booking.bookingId,
+          });
+          if (!currentToken || currentToken !== booking.operationToken) {
+            throw new CoreError("CONFLICT", "Reservation ownership changed during group cancellation", 409);
+          }
           try {
-            unwrap(await this.service.cancelReservation(rpc, {
+            await reconcileMutation(() => this.service.cancelReservation(rpc, {
               operationToken: booking.operationToken,
               bookingId: booking.bookingId,
             }));
             cancelledBookingIds.push(booking.bookingId);
-          } catch {
+          } catch (error) {
+            if (isOutcomeUnknown(error)) throw error;
             failedBookingIds.push(booking.bookingId);
           }
         }
