@@ -529,34 +529,38 @@ export class ChatOrchestrator {
       if (groundedBookingIds.length === 0) {
         return this.clarification("¿Qué reserva querés cancelar? No tengo una reserva activa identificada en esta sesión.", normalized, context, ["booking"]);
       }
-      if (groundedBookingIds.length === 1) {
+
+      const reference = resolveSpecificBookingReference(normalized, groupState);
+      if (requestsWholeGroupCancellation(normalized)) {
+        if (groundedBookingIds.length === 1) {
+          planToolId = "hms.cancelReservation";
+          planInput = { bookingId: groundedBookingIds[0] };
+        } else {
+          if (!tools.some((tool) => tool.id === "hms.cancelMultiReservation")) {
+            return this.clarification("La cancelación grupal no está habilitada en este runtime. Indicame qué reserva específica querés cancelar.", normalized, context, ["booking"]);
+          }
+          planToolId = "hms.cancelMultiReservation";
+          planInput = { bookingIds: [...groundedBookingIds] };
+        }
+      } else if (reference.kind === "match") {
+        planToolId = "hms.cancelReservation";
+        planInput = { bookingId: reference.bookingId };
+      } else if (reference.kind === "invalid") {
+        return this.clarification("No encuentro esa habitación entre las reservas activas. Indicame cuál querés cancelar.", normalized, context, ["booking"]);
+      } else if (reference.kind === "ambiguous") {
+        return this.clarification("La referencia coincide con más de una reserva. Indicame una habitación específica.", normalized, context, ["booking"]);
+      } else if (groundedBookingIds.length === 1) {
         planToolId = "hms.cancelReservation";
         planInput = { bookingId: groundedBookingIds[0] };
-      } else if (requestsWholeGroupCancellation(normalized)) {
-        if (!tools.some((tool) => tool.id === "hms.cancelMultiReservation")) {
-          return this.clarification("La cancelación grupal no está habilitada en este runtime. Indicame qué reserva específica querés cancelar.", normalized, context, ["booking"]);
-        }
-        planToolId = "hms.cancelMultiReservation";
-        planInput = { bookingIds: [...groundedBookingIds] };
       } else {
-        const reference = resolveSpecificBookingReference(normalized, groupState);
-        if (reference.kind === "match") {
+        const candidate = isRecord(route.plan.input) && typeof route.plan.input.bookingId === "string"
+          ? route.plan.input.bookingId.trim()
+          : "";
+        if (candidate && groundedBookingIds.includes(candidate)) {
           planToolId = "hms.cancelReservation";
-          planInput = { bookingId: reference.bookingId };
-        } else if (reference.kind === "invalid") {
-          return this.clarification("No encuentro esa habitación entre las reservas activas. Indicame cuál querés cancelar.", normalized, context, ["booking"]);
-        } else if (reference.kind === "ambiguous") {
-          return this.clarification("La referencia coincide con más de una reserva. Indicame una habitación específica.", normalized, context, ["booking"]);
+          planInput = { bookingId: candidate };
         } else {
-          const candidate = isRecord(route.plan.input) && typeof route.plan.input.bookingId === "string"
-            ? route.plan.input.bookingId.trim()
-            : "";
-          if (candidate && groundedBookingIds.includes(candidate)) {
-            planToolId = "hms.cancelReservation";
-            planInput = { bookingId: candidate };
-          } else {
-            return this.clarification("Tenés varias reservas activas. ¿Querés cancelar una reserva específica o todas?", normalized, context, ["booking"]);
-          }
+          return this.clarification("Tenés varias reservas activas. ¿Querés cancelar una reserva específica o todas?", normalized, context, ["booking"]);
         }
       }
     }
