@@ -5,6 +5,7 @@ import type { SessionStore } from "../core/session.js";
 import type { ModelConversationTurn, Session, ToolPlan } from "../core/types.js";
 import {
   approvalFingerprint,
+  MAX_APPROVAL_RECOVERY_ATTEMPTS,
   type ApprovalChallenge,
   type ApprovalChallengeInput,
   type ApprovalChallengeIssueInput,
@@ -61,6 +62,7 @@ function isStoredApproval(value: unknown): value is StoredApprovalChallenge {
     && typeof item.fingerprint === "string" && /^[0-9a-f]{64}$/.test(item.fingerprint)
     && typeof item.operationFingerprint === "string" && /^[0-9a-f]{64}$/.test(item.operationFingerprint)
     && isToolPlan(item.plan)
+    && Number.isInteger(item.recoveryAttempt) && Number(item.recoveryAttempt) >= 0 && Number(item.recoveryAttempt) <= MAX_APPROVAL_RECOVERY_ATTEMPTS
     && typeof item.expiresAt === "string" && Number.isFinite(Date.parse(item.expiresAt));
 }
 function parseStoredApproval(raw: string): StoredApprovalChallenge {
@@ -139,7 +141,7 @@ export class SessionDurableObject extends DurableObject<Env> {
       if (Date.parse(approval.expiresAt) <= Date.now()) { this.ctx.storage.kv.delete(key); return new Response(null, { status: 410 }); }
       if (approval.tenantId !== tenantId || approval.actorId !== actorId || approval.fingerprint !== fingerprint) return new Response(null, { status: 409 });
       this.ctx.storage.kv.delete(key);
-      return new Response(JSON.stringify({ operationFingerprint: approval.operationFingerprint, plan: approval.plan }), { status: 200, headers: { "content-type": "application/json; charset=utf-8" } });
+      return new Response(JSON.stringify({ operationFingerprint: approval.operationFingerprint, plan: approval.plan, recoveryAttempt: approval.recoveryAttempt }), { status: 200, headers: { "content-type": "application/json; charset=utf-8" } });
     }
 
     if (url.pathname === "/reservation-operation") {
@@ -206,6 +208,8 @@ export class DurableObjectConversationStore implements ConversationStore {
 export class DurableObjectApprovalStore implements ApprovalStore {
   public constructor(private readonly namespace: DurableObjectNamespace<SessionDurableObject>, private readonly now: () => Date = () => new Date(), private readonly ttlMs = 5 * 60 * 1000) {}
   async issue(input: ApprovalChallengeIssueInput): Promise<ApprovalChallenge> {
+    const recoveryAttempt = input.recoveryAttempt ?? 0;
+    if (!Number.isInteger(recoveryAttempt) || recoveryAttempt < 0 || recoveryAttempt > MAX_APPROVAL_RECOVERY_ATTEMPTS) throw new Error("Invalid approval recovery attempt");
     const token = crypto.randomUUID(); const expiresAt = new Date(this.now().getTime() + this.ttlMs).toISOString();
     const stored: StoredApprovalChallenge = {
       token,
@@ -215,6 +219,7 @@ export class DurableObjectApprovalStore implements ApprovalStore {
       fingerprint: await approvalFingerprint(input),
       operationFingerprint: input.operationFingerprint,
       plan: structuredClone(input.plan),
+      recoveryAttempt,
       expiresAt,
     };
     const response = await this.namespace.getByName(input.sessionId).fetch(new Request(APPROVAL_URL, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(stored) }));
@@ -227,9 +232,11 @@ export class DurableObjectApprovalStore implements ApprovalStore {
     if (!response.ok) throw new Error(`Approval storage consume failed (${response.status})`);
     const payload = await response.json() as Record<string, unknown>;
     const operationFingerprint = typeof payload.operationFingerprint === "string" ? payload.operationFingerprint : "";
+    const recoveryAttempt = Number(payload.recoveryAttempt);
     if (!/^[0-9a-f]{64}$/.test(operationFingerprint)) throw new Error("Approval storage returned an invalid operation fingerprint");
     if (!isToolPlan(payload.plan)) throw new Error("Approval storage returned an invalid tool plan");
-    return { operationFingerprint, plan: payload.plan };
+    if (!Number.isInteger(recoveryAttempt) || recoveryAttempt < 0 || recoveryAttempt > MAX_APPROVAL_RECOVERY_ATTEMPTS) throw new Error("Approval storage returned an invalid recovery attempt");
+    return { operationFingerprint, plan: payload.plan, recoveryAttempt };
   }
 }
 

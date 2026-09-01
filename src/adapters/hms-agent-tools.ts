@@ -38,6 +38,17 @@ const reservationSchema: JsonSchema = {
   required: ["roomId", "checkIn", "checkOut"],
 };
 
+// R2.5 roomIds/checkIn/checkOut are server-grounded from durable conversation
+// state. They stay out of the model-visible schema so the model cannot author the
+// trusted reservation set that the approval fingerprint protects.
+const multiReservationSchema: JsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    notes: { type: ["string", "null"], maxLength: 500 },
+  },
+};
+
 const cancellationSchema: JsonSchema = {
   type: "object",
   additionalProperties: false,
@@ -45,6 +56,14 @@ const cancellationSchema: JsonSchema = {
     bookingId: { type: "string", minLength: 1, description: "ID de una reserva propiedad de la sesión confiable" },
   },
   required: ["bookingId"],
+};
+
+// Group booking IDs are server-grounded from the current reservation-group
+// state. The LLM only chooses the semantic intent; it never supplies the set.
+const multiCancellationSchema: JsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {},
 };
 
 function withSchema<I, O>(tool: ToolDefinition<I, O>, inputSchema: JsonSchema): ToolDefinition<I, O> {
@@ -61,6 +80,13 @@ function trustedGuestId(identity: HmsAgentIdentityConfig, context: ExecutionCont
   return value || undefined;
 }
 
+function assertTrustedGuest(raw: Record<string, unknown>, guestId: string) {
+  if (raw.guestId !== undefined && raw.guestId !== guestId) {
+    return { ok: false as const, message: "Guest identity cannot be selected by the request" };
+  }
+  return undefined;
+}
+
 function createReservationTool(
   adapter: HmsServiceBindingAdapter,
   identity: HmsAgentIdentityConfig,
@@ -75,10 +101,8 @@ function createReservationTool(
       if (!guestId) return { ok: false, message: "Guest identity is not configured for this tenant and actor" };
       if (!input || typeof input !== "object") return { ok: false, message: "Invalid reservation input" };
       const raw = input as Record<string, unknown>;
-      // Any attempt to select a different guest is rejected; canonical input always uses the trusted mapping.
-      if (raw.guestId !== undefined && raw.guestId !== guestId) {
-        return { ok: false, message: "Guest identity cannot be selected by the request" };
-      }
+      const rejected = assertTrustedGuest(raw, guestId);
+      if (rejected) return rejected;
       const canonical = {
         roomId: raw.roomId,
         checkIn: raw.checkIn,
@@ -98,11 +122,62 @@ function createReservationTool(
   };
 }
 
+function createMultiReservationTool(
+  adapter: HmsServiceBindingAdapter,
+  identity: HmsAgentIdentityConfig,
+): ToolDefinition<any, any> {
+  const base = adapter.createMultiReservationTool();
+  const availability = adapter.checkAvailabilityTool();
+  return {
+    ...base,
+    inputSchema: multiReservationSchema,
+    validateInput(input, context) {
+      if (!context) return { ok: false, message: "Trusted execution context is required" };
+      const guestId = trustedGuestId(identity, context);
+      if (!guestId) return { ok: false, message: "Guest identity is not configured for this tenant and actor" };
+      if (!input || typeof input !== "object") return { ok: false, message: "Invalid multi-room reservation input" };
+      const raw = input as Record<string, unknown>;
+      const rejected = assertTrustedGuest(raw, guestId);
+      if (rejected) return rejected;
+      const canonical = {
+        roomIds: raw.roomIds,
+        checkIn: raw.checkIn,
+        checkOut: raw.checkOut,
+        ...(raw.notes !== undefined ? { notes: raw.notes } : {}),
+        guestId,
+      };
+      return base.validateInput(canonical, context);
+    },
+    async execute(input, context, meta) {
+      const expectedGuestId = trustedGuestId(identity, context);
+      if (!expectedGuestId || input.guestId !== expectedGuestId) {
+        throw new CoreError("FORBIDDEN", "Reservation guest identity does not match trusted tenant/actor binding", 403);
+      }
+      // On initial execution, perform an aggregate fresh preflight immediately
+      // before entering the composite. A trusted recovery deliberately skips
+      // this read: already-committed children may be absent because our own
+      // reservation holds them, and the exact downstream child tokens are the
+      // authoritative reconciliation mechanism in that mode.
+      if (!(Number.isInteger(meta.recoveryAttempt) && Number(meta.recoveryAttempt) > 0)) {
+        const fresh = await availability.execute({ checkIn: input.checkIn, checkOut: input.checkOut, guests: 1 }, context, {});
+        const availableIds = new Set(fresh.rooms.map((room) => room.id));
+        const staleRoomIds = input.roomIds.filter((roomId: string) => !availableIds.has(roomId));
+        if (staleRoomIds.length > 0) {
+          throw new CoreError("CONFLICT", `Approved room selection is stale: ${staleRoomIds.join(", ")}`, 409);
+        }
+      }
+      return base.execute(input, context, meta);
+    },
+  };
+}
+
 export function hmsAgentTools(adapter: HmsServiceBindingAdapter, identity: HmsAgentIdentityConfig = {}) {
   return [
     withSchema(adapter.checkAvailabilityTool(), availabilitySchema),
     withSchema(adapter.getQuoteTool(), quoteSchema),
     createReservationTool(adapter, identity),
+    createMultiReservationTool(adapter, identity),
     withSchema(adapter.cancelReservationTool(), cancellationSchema),
+    withSchema(adapter.cancelMultiReservationTool(), multiCancellationSchema),
   ] as const;
 }

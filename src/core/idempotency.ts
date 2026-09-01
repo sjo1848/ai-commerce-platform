@@ -1,6 +1,7 @@
 export type IdempotencyRecord = {
   tenantId: string;
   actorId: string;
+  sessionId: string;
   toolId: string;
   fingerprint: string;
   result: unknown;

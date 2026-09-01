@@ -35,8 +35,44 @@ export type HmsTenantRoutes = Readonly<Record<string, HmsTenantRoute>>;
 type CheckAvailabilityInput = { checkIn: string; checkOut: string; guests: number };
 type QuoteInput = { roomId: string; checkIn: string; checkOut: string };
 type CreateReservationInput = { guestId: string; roomId: string; checkIn: string; checkOut: string; notes?: string | null };
+type CreateMultiReservationInput = { guestId: string; roomIds: string[]; checkIn: string; checkOut: string; notes?: string | null };
 type CancelReservationInput = { bookingId: string };
+type CancelMultiReservationInput = { bookingIds: string[] };
 export type LiveAvailabilityResult = HmsRpcAvailabilityData & { requestedGuests: number; capacityFilterApplied: false };
+export type MultiReservationCreateOutcome = "confirmed" | "compensated" | "compensation_failed";
+export type MultiReservationCreateResult = {
+  source: "hms";
+  truth: "transactional";
+  hotelId: string;
+  outcome: MultiReservationCreateOutcome;
+  bookingIds: string[];
+  createdBookingIds: string[];
+  compensatedBookingIds: string[];
+  failedRoomId?: string;
+  traceId: string;
+};
+export type MultiReservationCancelOutcome = "cancelled" | "partial_failure";
+export type MultiReservationCancelResult = {
+  source: "hms";
+  truth: "transactional";
+  hotelId: string;
+  outcome: MultiReservationCancelOutcome;
+  bookingIds: string[];
+  cancelledBookingIds: string[];
+  failedBookingIds: string[];
+  traceId: string;
+};
+
+type CreatedChild = {
+  roomId: string;
+  bookingId: string;
+  operationToken: string;
+};
+
+type OwnedBooking = {
+  bookingId: string;
+  operationToken: string;
+};
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 function parseStrictIsoDate(value: string): number | null {
@@ -61,6 +97,15 @@ function operationToken(meta: ToolExecutionMeta): string {
   if (!key) throw new CoreError("IDEMPOTENCY_REQUIRED", "Idempotency key required for reservation operation", 400);
   return key;
 }
+function isTrustedRecovery(meta: ToolExecutionMeta): boolean {
+  return Number.isInteger(meta.recoveryAttempt) && Number(meta.recoveryAttempt) > 0;
+}
+async function childCreateOperationToken(rootToken: string, index: number, roomId: string): Promise<string> {
+  const payload = new TextEncoder().encode(`r2.5:create\u0000${rootToken}\u0000${index}\u0000${roomId}`);
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", payload));
+  const hex = Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `r25c_${hex}`;
+}
 function unwrap<T>(result: HmsRpcResult<T>): T {
   if (result.ok) return result.data;
   switch (result.error.code) {
@@ -70,6 +115,35 @@ function unwrap<T>(result: HmsRpcResult<T>): T {
     case "CONFLICT": throw new CoreError("CONFLICT", result.error.message, 409);
     default: throw new CoreError("TOOL_EXECUTION_FAILED", "HMS service failed", 502);
   }
+}
+function isOutcomeUnknown(error: unknown): error is CoreError {
+  return error instanceof CoreError && error.code === "OUTCOME_UNKNOWN";
+}
+async function reconcileMutation<T>(
+  operation: () => Promise<HmsRpcResult<T>>,
+): Promise<T> {
+  let first: HmsRpcResult<T>;
+  try {
+    first = await operation();
+  } catch {
+    // A thrown transport/RPC exception is not evidence that HMS rejected the
+    // mutation. Replay exactly once with the same downstream idempotency token:
+    // if HMS committed the first call, the replay must return that authoritative
+    // result; if the first never arrived, the replay safely performs it once.
+    let replay: HmsRpcResult<T>;
+    try {
+      replay = await operation();
+    } catch {
+      throw new CoreError(
+        "OUTCOME_UNKNOWN",
+        "HMS mutation outcome is unknown; retry the exact approved operation with the same idempotency key",
+        503,
+      );
+    }
+    return unwrap(replay);
+  }
+  // Structured HMS errors are authoritative and are never retried here.
+  return unwrap(first);
 }
 
 export class HmsServiceBindingAdapter {
@@ -130,7 +204,8 @@ export class HmsServiceBindingAdapter {
       execute: async (input, context, meta) => {
         if (!this.reservationOperations) throw new CoreError("FORBIDDEN", "Reservation ownership storage is not configured", 403);
         const token = operationToken(meta);
-        const result = unwrap(await this.service.createReservation(rpcContext(context, this.routes), {
+        const rpc = rpcContext(context, this.routes);
+        const result = await reconcileMutation(() => this.service.createReservation(rpc, {
           operationToken: token, guestId: input.guestId, roomId: input.roomId, start: input.checkIn, end: input.checkOut,
           ...(input.notes !== undefined ? { notes: input.notes } : {}),
         }));
@@ -139,6 +214,144 @@ export class HmsServiceBindingAdapter {
           bookingId: result.bookingId, operationToken: token,
         });
         return result;
+      },
+    };
+  }
+
+  public createMultiReservationTool(): ToolDefinition<CreateMultiReservationInput, MultiReservationCreateResult> {
+    return {
+      id: "hms.createMultiReservation",
+      primitive: "RESERVE",
+      description: "Crea varias reservas HMS como una operación lógica controlada, con tokens hijo server-side y compensación explícita ante fallos parciales.",
+      risk: "write",
+      sideEffect: "reversible",
+      idempotencyMode: "core",
+      requiredPermissions: ["hms.reservation.write"],
+      validateInput(input: unknown): ValidationResult<CreateMultiReservationInput> {
+        if (!input || typeof input !== "object") return { ok: false, message: "Invalid multi-room reservation input" };
+        const value = input as Record<string, unknown>;
+        if (typeof value.guestId !== "string" || !value.guestId.trim()) return { ok: false, message: "guestId is required" };
+        if (!Array.isArray(value.roomIds) || value.roomIds.length < 2 || value.roomIds.length > 10) return { ok: false, message: "roomIds must contain 2 to 10 rooms" };
+        const roomIds = value.roomIds.map((roomId) => typeof roomId === "string" ? roomId.trim() : "");
+        if (roomIds.some((roomId) => !roomId)) return { ok: false, message: "roomIds must contain non-empty strings" };
+        if (new Set(roomIds).size !== roomIds.length) return { ok: false, message: "roomIds must be unique" };
+        if (typeof value.checkIn !== "string" || typeof value.checkOut !== "string" || !validRange(value.checkIn, value.checkOut)) return { ok: false, message: "Invalid date range" };
+        if (value.notes != null && (typeof value.notes !== "string" || value.notes.trim().length > 500)) return { ok: false, message: "notes length is invalid" };
+        return {
+          ok: true,
+          value: {
+            guestId: value.guestId.trim(),
+            roomIds,
+            checkIn: value.checkIn,
+            checkOut: value.checkOut,
+            ...(typeof value.notes === "string" ? { notes: value.notes.trim() || null } : {}),
+          },
+        };
+      },
+      execute: async (input, context, meta) => {
+        if (!this.reservationOperations) throw new CoreError("FORBIDDEN", "Reservation ownership storage is not configured", 403);
+        const rootToken = operationToken(meta);
+        const rpc = rpcContext(context, this.routes);
+        const created: CreatedChild[] = [];
+        const recovery = isTrustedRecovery(meta);
+        let failedRoomId: string | undefined;
+
+        try {
+          for (const [index, roomId] of input.roomIds.entries()) {
+            failedRoomId = roomId;
+
+            // Initial execution closes the race between children by re-reading
+            // exact HMS availability immediately before every mutation. Recovery
+            // is different: our own already-committed child may correctly be
+            // absent from availability, so the authoritative reconciliation is
+            // the exact same downstream create token. HMS idempotency returns a
+            // replay for committed children and transactional create semantics
+            // still reject a genuinely unavailable child that never committed.
+            if (!recovery) {
+              const fresh = unwrap(await this.service.checkAvailability(rpc, {
+                start: input.checkIn,
+                end: input.checkOut,
+              }));
+              if (!fresh.rooms.some((room) => room.id === roomId)) {
+                throw new CoreError("CONFLICT", "Approved room selection changed during reservation execution", 409);
+              }
+            }
+
+            const token = await childCreateOperationToken(rootToken, index, roomId);
+            const result = await reconcileMutation(() => this.service.createReservation(rpc, {
+              operationToken: token,
+              guestId: input.guestId,
+              roomId,
+              start: input.checkIn,
+              end: input.checkOut,
+              ...(input.notes !== undefined ? { notes: input.notes } : {}),
+            }));
+            const child = { roomId, bookingId: result.bookingId, operationToken: token };
+            created.push(child);
+            await this.reservationOperations.bind({
+              sessionId: context.session.id,
+              tenantId: context.tenant.id,
+              actorId: context.actor.id,
+              bookingId: result.bookingId,
+              operationToken: token,
+            });
+          }
+        } catch (error) {
+          // If HMS may have committed the current child but both exact-token
+          // reconciliation attempts lost their response, do not guess and do not
+          // start compensating around an unresolved mutation. A replay with the
+          // same root key deterministically derives the same child tokens.
+          if (isOutcomeUnknown(error)) throw error;
+          if (created.length === 0) throw error;
+
+          const compensatedBookingIds: string[] = [];
+          const survivingBookingIds: string[] = [];
+          for (const child of [...created].reverse()) {
+            try {
+              await reconcileMutation(() => this.service.cancelReservation(rpc, {
+                operationToken: child.operationToken,
+                bookingId: child.bookingId,
+              }));
+              compensatedBookingIds.push(child.bookingId);
+            } catch (compensationError) {
+              if (isOutcomeUnknown(compensationError)) {
+                throw Object.assign(
+                  new CoreError(
+                    "OUTCOME_UNKNOWN",
+                    "HMS compensation outcome is unknown; manual reconciliation is required before any create-plan replay",
+                    503,
+                  ),
+                  { automaticRecoveryAllowed: false as const },
+                );
+              }
+              survivingBookingIds.push(child.bookingId);
+            }
+          }
+          survivingBookingIds.reverse();
+          compensatedBookingIds.reverse();
+          return {
+            source: "hms",
+            truth: "transactional",
+            hotelId: rpc.hotelId,
+            outcome: survivingBookingIds.length === 0 ? "compensated" : "compensation_failed",
+            bookingIds: survivingBookingIds,
+            createdBookingIds: created.map((child) => child.bookingId),
+            compensatedBookingIds,
+            ...(failedRoomId ? { failedRoomId } : {}),
+            traceId: rpc.traceId,
+          };
+        }
+
+        return {
+          source: "hms",
+          truth: "transactional",
+          hotelId: rpc.hotelId,
+          outcome: "confirmed",
+          bookingIds: created.map((child) => child.bookingId),
+          createdBookingIds: created.map((child) => child.bookingId),
+          compensatedBookingIds: [],
+          traceId: rpc.traceId,
+        };
       },
     };
   }
@@ -162,7 +375,85 @@ export class HmsServiceBindingAdapter {
           sessionId: context.session.id, tenantId: context.tenant.id, actorId: context.actor.id, bookingId: input.bookingId,
         });
         if (!originalToken) throw new CoreError("FORBIDDEN", "Reservation is not owned by this trusted session", 403);
-        return unwrap(await this.service.cancelReservation(rpcContext(context, this.routes), { operationToken: originalToken, bookingId: input.bookingId }));
+        const rpc = rpcContext(context, this.routes);
+        return reconcileMutation(() => this.service.cancelReservation(rpc, { operationToken: originalToken, bookingId: input.bookingId }));
+      },
+    };
+  }
+
+  public cancelMultiReservationTool(): ToolDefinition<CancelMultiReservationInput, MultiReservationCancelResult> {
+    return {
+      id: "hms.cancelMultiReservation",
+      primitive: "CANCEL",
+      description: "Cancela varias reservas HMS de un grupo previamente creado, verificando ownership completo antes del primer side effect.",
+      risk: "write",
+      sideEffect: "irreversible",
+      idempotencyMode: "core",
+      requiredPermissions: ["hms.reservation.cancel"],
+      validateInput(input: unknown): ValidationResult<CancelMultiReservationInput> {
+        if (!input || typeof input !== "object") return { ok: false, message: "Invalid multi-room cancellation input" };
+        const value = input as Record<string, unknown>;
+        if (!Array.isArray(value.bookingIds) || value.bookingIds.length < 2 || value.bookingIds.length > 10) return { ok: false, message: "bookingIds must contain 2 to 10 bookings" };
+        const bookingIds = value.bookingIds.map((bookingId) => typeof bookingId === "string" ? bookingId.trim() : "");
+        if (bookingIds.some((bookingId) => !bookingId)) return { ok: false, message: "bookingIds must contain non-empty strings" };
+        if (new Set(bookingIds).size !== bookingIds.length) return { ok: false, message: "bookingIds must be unique" };
+        return { ok: true, value: { bookingIds } };
+      },
+      execute: async (input, context, meta) => {
+        operationToken(meta);
+        if (!this.reservationOperations) throw new CoreError("FORBIDDEN", "Reservation ownership storage is not configured", 403);
+        const rpc = rpcContext(context, this.routes);
+        const owned: OwnedBooking[] = [];
+
+        for (const bookingId of input.bookingIds) {
+          const originalToken = await this.reservationOperations.get({
+            sessionId: context.session.id,
+            tenantId: context.tenant.id,
+            actorId: context.actor.id,
+            bookingId,
+          });
+          if (!originalToken) {
+            throw new CoreError("FORBIDDEN", "One or more reservations are not owned by this trusted session", 403);
+          }
+          owned.push({ bookingId, operationToken: originalToken });
+        }
+
+        const cancelledBookingIds: string[] = [];
+        const failedBookingIds: string[] = [];
+        for (const booking of owned) {
+          // Re-read trusted ownership at the last responsible moment as a
+          // concurrency guard. A changed binding is never replaced from prose.
+          const currentToken = await this.reservationOperations.get({
+            sessionId: context.session.id,
+            tenantId: context.tenant.id,
+            actorId: context.actor.id,
+            bookingId: booking.bookingId,
+          });
+          if (!currentToken || currentToken !== booking.operationToken) {
+            throw new CoreError("CONFLICT", "Reservation ownership changed during group cancellation", 409);
+          }
+          try {
+            await reconcileMutation(() => this.service.cancelReservation(rpc, {
+              operationToken: booking.operationToken,
+              bookingId: booking.bookingId,
+            }));
+            cancelledBookingIds.push(booking.bookingId);
+          } catch (error) {
+            if (isOutcomeUnknown(error)) throw error;
+            failedBookingIds.push(booking.bookingId);
+          }
+        }
+
+        return {
+          source: "hms",
+          truth: "transactional",
+          hotelId: rpc.hotelId,
+          outcome: failedBookingIds.length === 0 ? "cancelled" : "partial_failure",
+          bookingIds: failedBookingIds,
+          cancelledBookingIds,
+          failedBookingIds,
+          traceId: rpc.traceId,
+        };
       },
     };
   }

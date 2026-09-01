@@ -62,6 +62,8 @@ export type ToolExecutionMeta = {
   idempotencyKey?: string;
   humanApproved?: boolean;
   approvedOperationFingerprint?: string;
+  /** Server-owned approval recovery depth. Never model/request-authored. */
+  recoveryAttempt?: number;
 };
 
 export type ToolDefinition<I, O> = {

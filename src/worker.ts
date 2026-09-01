@@ -28,12 +28,21 @@ const tenant = {
   id: "hotel-demo",
   slug: "hotel-demo",
   status: "active" as const,
-  allowedToolIds: ["hms.checkAvailability", "hms.getQuote", "hms.createReservation", "hms.cancelReservation"],
+  allowedToolIds: [
+    "hms.checkAvailability",
+    "hms.getQuote",
+    "hms.createReservation",
+    "hms.createMultiReservation",
+    "hms.cancelReservation",
+    "hms.cancelMultiReservation",
+  ],
   toolPolicies: {
     "hms.checkAvailability": "auto" as const,
     "hms.getQuote": "auto" as const,
     "hms.createReservation": "approval" as const,
+    "hms.createMultiReservation": "approval" as const,
     "hms.cancelReservation": "approval" as const,
+    "hms.cancelMultiReservation": "approval" as const,
   },
 };
 
