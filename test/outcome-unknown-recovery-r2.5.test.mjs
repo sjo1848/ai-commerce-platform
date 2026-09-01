@@ -141,7 +141,6 @@ test("R2.5 recovery depth is server-owned, ignores forged client counters, and e
       message,
       sessionId: pending.sessionId,
       approvalToken: token,
-      // Deliberately forged. The handler/store must ignore request-owned recovery depth.
       recoveryAttempt: 0,
     }, key);
     const body = await response.json();
@@ -168,4 +167,43 @@ test("R2.5 recovery depth is server-owned, ignores forged client counters, and e
   assert.equal(routeCount, 1, "all recovery attempts must execute stored plan without rerouting");
   assert.equal(executions, 4, "one original approved execution plus three recovery executions");
   assert.deepEqual(executedInputs, Array.from({ length: 4 }, () => canonicalPlan.input));
+});
+
+test("Independent Critic P1: manual-reconciliation OUTCOME_UNKNOWN never issues an automatic recovery approval", async () => {
+  let routeCount = 0;
+  let executions = 0;
+  const tool = reservationTool(async () => {
+    executions += 1;
+    throw Object.assign(
+      new CoreError("OUTCOME_UNKNOWN", "HMS compensation outcome is unknown; manual reconciliation is required", 503),
+      { automaticRecoveryAllowed: false },
+    );
+  });
+  const runtime = runtimeWithTool(tool, () => { routeCount += 1; });
+  const handler = createWebchatHandler(runtime, {
+    fixedTenantId: "hotel-demo",
+    fixedActorId: "visitor-demo",
+    approvalStore: new InMemoryApprovalStore(),
+  });
+
+  const message = "reservala";
+  const key = "manual-reconciliation-boundary";
+  const first = await request(handler, "/api/chat", { message }, key);
+  const pending = await first.json();
+  assert.equal(first.status, 409);
+
+  const uncertain = await request(handler, "/api/approve", {
+    message,
+    sessionId: pending.sessionId,
+    approvalToken: pending.approvalToken,
+  }, key);
+  const body = await uncertain.json();
+
+  assert.equal(uncertain.status, 503);
+  assert.equal(body.error.code, "OUTCOME_UNKNOWN");
+  assert.equal(body.manualReconciliationRequired, true);
+  assert.equal(body.recoveryExhausted, true);
+  assert.equal(body.recoveryApprovalToken, undefined);
+  assert.equal(executions, 1);
+  assert.equal(routeCount, 1);
 });
