@@ -27,7 +27,7 @@ function schemaRequired(schema: JsonSchema | undefined, field: string): boolean 
 function explicitNaturalRoomNumbers(message: string): string[] {
   const numbers: string[] = [];
   const seen = new Set<string>();
-  const pattern = /\b(?:habitaci[oó]n(?:es)?|rooms?|la|las)\s*(\d{1,5})(?:\s*(?:,|y)\s*(?:la\s*)?(\d{1,5}))?/gi;
+  const pattern = /\b(?:habitaci[oó]n(?:es)?|rooms?|la|las)\s*(\d{1,5})(?![-\d])(?:\s*(?:,|y)\s*(?:la\s*)?(\d{1,5})(?![-\d]))?/gi;
   for (const match of message.matchAll(pattern)) {
     for (const value of [match[1], match[2]]) {
       if (value && !seen.has(value)) {
