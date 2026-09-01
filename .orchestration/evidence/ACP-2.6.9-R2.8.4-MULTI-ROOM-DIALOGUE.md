@@ -1,177 +1,174 @@
 # ACP 2.6.9-R2.8.4 — Natural Multi-Room Dialogue Evidence
 
-Status: `MULTI_ROOM_DIALOGUE_PASS / PASS`
+Status: `MULTI_ROOM_DIALOGUE_PASS / FINAL CLOSURE PENDING`
 Date: `2026-09-01`
 Scope: natural real-model multi-room dialogue through the unconsumed HITL boundary only. No approval was consumed and no reservation/cancellation mutation executed.
 
-## Gate result
+## Current gate position
 
-R2.8.4 closes **PASS** after a frozen RED → bounded router rework → exact real-model staging GREEN sequence.
+R2.8.4 is not considered integrated yet. The product defect and the later stochastic route flake have both been frozen and repaired, and the latest functional staging run is GREEN. Because an earlier exact-head run exposed flakiness after an apparently successful run, final closure now requires two consecutive post-repair exact-head real-model GREEN runs, followed by PR/core-ci, merge and post-merge `main` CI.
 
-The accepted behavior is:
-- C06 establishes a fresh four-guest stay on the readiness-approved synthetic window;
-- room numbers 101 and 102 are visible from authoritative HMS staging;
-- C07 `Quiero reservar la 101 y la 102.` is interpreted as one exact multi-room reservation intent;
-- the real LLM route reaches `hms.createMultiReservation` and external Policy/HITL returns `APPROVAL_REQUIRED`;
-- the approval token is deliberately **not consumed** in R2.8.4;
-- no single-room collapse occurs;
-- no deterministic route fallback is used on the multi-room path;
-- no HMS create/cancel side effect occurs.
+Accepted behavior remains:
+- C06 establishes four guests + the readiness-approved synthetic stay window;
+- 101 and 102 are authoritative HMS candidates;
+- C07 `Quiero reservar la 101 y la 102.` is one multi-room intent;
+- the real model reaches `hms.createMultiReservation` and Policy/HITL returns `APPROVAL_REQUIRED`;
+- the challenge is not consumed in this block;
+- no single-room collapse, deterministic route fallback or HMS write succeeds.
 
-C08 occupancy clarification was not required by the current canonical state; C07 reached the correct composite HITL boundary directly.
+## RED 1 — stale R2.4 behavior in real staging
 
-## Frozen real-model RED
+Head: `6c96409ccb819140198a8f6136c2c4597aa35bc9`
+Run: `33523155016` — **FAIL**
+Foundation: **218/218 PASS**
+Artifact: `9806560462`
+ZIP SHA-256: `86396e38b6d8b17b141d59820485d9e0efa3ef5785daac582d4ca6a556180290`
 
-Initial diagnostic head:
-`6c96409ccb819140198a8f6136c2c4597aa35bc9`
+Observed:
+1. C06 returned authoritative 101 + 102.
+2. C07 preserved the selection but returned only `Perfecto, lo tengo.`
+3. `Perfecto, reservá esas dos.` still failed to reach HITL.
+4. No mutation occurred.
 
-Workflow:
-- run: `33523155016` — **FAIL**
-- foundation: **218/218 PASS**
-- artifact ID: `9806560462`
-- artifact ZIP SHA-256: `86396e38b6d8b17b141d59820485d9e0efa3ef5785daac582d4ca6a556180290`
+This proved the historical R2.4 limitation was still perceptible in the real model path.
 
-Observed transcript:
-1. C06 passed and returned authoritative 101 + 102 availability.
-2. C07 `Quiero reservar la 101 y la 102.` returned only `Perfecto, lo tengo.`
-3. Historical probe `Perfecto, reservá esas dos.` returned `Decime qué necesitás para la estadía y sigo desde los datos que ya tenemos.`
-4. No HITL challenge was reached and no mutation executed.
+## RED 2 — frozen prompt-contract regression
 
-Verdict: real product failure against the frozen historical-R2.4 probe; the conversation could preserve selection but the real model path did not progress into the already-authorized R2.5 composite capability.
+Commit: `4bc2d933101f1e8112cd8f8e5005c26b02244fdc`
+Run: `33523570624` — **EXPECTED RED**
+Foundation: **218/219 PASS / 1 FAIL**
 
-## Frozen prompt-contract RED
+The single regression proved:
+- no capability-specific rule existed for `hms.createMultiReservation`;
+- stale text still said `Core blocks multi-room side effects until R2.5`.
 
-Regression commit:
-`4bc2d933101f1e8112cd8f8e5005c26b02244fdc`
+## Fix 1 — current composite capability in the LLM planner
 
-Workflow run:
-`33523570624` — **EXPECTED RED**
+Commit: `ccdb424c1ed619c957f6228f030644c6203cb67a`
 
-Foundation result:
-- tests: **218/219 PASS / 1 FAIL**;
-- only failing regression: `R2.8.4 router prompt advertises current composite multi-room capability and removes stale R2.4 blocking text`.
-
-The frozen prompt evidence showed both defects explicitly:
-- no capability-specific rule for `hms.createMultiReservation`;
-- stale instruction: `Core blocks multi-room side effects until R2.5`.
-
-## Bounded fix
-
-Product fix commit:
-`ccdb424c1ed619c957f6228f030644c6203cb67a`
-
-Changed only the planning contract in `src/core/llm-model.ts` plus the frozen regression test:
-- `hms.createReservation` is now explicitly single-room;
-- `hms.createMultiReservation` is explicitly the current multi-room reservation capability;
-- selected room IDs/dates remain server-grounded and are not exposed as model-authoritative inputs;
+Bounded changes in `src/core/llm-model.ts`:
+- single-room and multi-room reservation capabilities are explicit;
+- `Quiero reservar la 101 y la 102` and `reservá esas dos` are explicit planner examples;
+- selected room IDs and dates remain server-grounded;
 - stale R2.4 blocking text was removed;
-- examples now cover `Quiero reservar la 101 y la 102` and `reservá esas dos`;
-- a complete grounded multi-room selection is protected from redundant room/selection clarification.
+- complete multi-room selection is protected from redundant selection clarification.
 
-No HMS adapter, Policy Engine, approval authority, canonical fingerprinting, idempotency, ownership or mutation execution boundary was loosened.
+No HMS adapter, Policy Engine, approval authority, canonical fingerprinting, idempotency, ownership or execution boundary was loosened.
 
-## Exact real-model GREEN
+First GREEN after Fix 1:
+- run `33523772528` — **PASS**
+- foundation **219/219 PASS**
+- C06/C07 path **5/5 PASS**
+- 2 route inferences / 0 route fallbacks
+- `hms.createMultiReservation` → `approval_required`
+- no mutation
+- artifact `9806805221`
+- ZIP SHA-256 `97d5ece5c195c38536f70f79a59d76bc103de49b6292c7048abaeeb6fa53014b`
+- E2E p95 `9,105 ms`.
 
-Fixed head:
-`ccdb424c1ed619c957f6228f030644c6203cb67a`
+That GREEN was not sufficient to close the gate.
 
-Workflow:
-- name: `R2.8 multi-room dialogue`
-- run: `33523772528` / run #3
-- conclusion: **SUCCESS**
-- foundation: **219/219 PASS**
-- Wrangler dry-run/deploy: PASS
-- deployed worker version: `5de48802-783c-4bd9-b0ed-4a85a12b1d44`
-- artifact: `r2.8-multi-room-dialogue-33523772528`
-- artifact ID: `9806805221`
-- artifact ZIP SHA-256: `97d5ece5c195c38536f70f79a59d76bc103de49b6292c7048abaeeb6fa53014b`
+## RED 3 — exact-head stochastic route flake invalidated the first closure
 
-Authorized model observed:
-`@cf/meta/llama-3.3-70b-instruct-fp8-fast`
+Exact-head: `92b6f1f8702508e65d2595fff4784c3924821145`
+Run: `33524057086` — **FAIL**
+Foundation/deploy: PASS
 
-Staging report:
+C06 remained correct. On C07 the real model produced a contradictory tool candidate that Core safely rejected as `invalid_tool_plan_shape`; the conversation degraded before the follow-up wording reached the composite HITL boundary. No mutation occurred.
+
+Verdict: safety was preserved, but product reliability was not good enough. R2.8.4 returned to bounded REWORK instead of accepting a lucky GREEN.
+
+## RED 4 — frozen bounded-repair regression
+
+Regression commit: `a3032bd4f847d6309481820287bdeb991fe48b83`
+Run: `33524360119` — **EXPECTED RED**
+
+The regression simulates the exact failure class: the model chooses `hms.createMultiReservation` while contradicting itself by marking already-grounded room/date fields missing. Expected behavior is one bounded model re-inference before deterministic fallback.
+
+The pre-fix router failed this regression at foundation, as intended.
+
+## Fix 2 — one bounded real-model route repair
+
+Commit: `18a2f7383fa44d79ce9eb840f933557de4b8b7c1`
+
+The router now permits exactly one repair inference only when the first model candidate reaches the `invalid_tool_plan_shape` branch.
+
+Repair properties:
+- same provider/model;
+- label `agent_core_route_repair`;
+- same JSON schema;
+- same current user request and current server-visible conversational state;
+- prior invalid candidate is treated as data, never instructions;
+- no deterministic filling of room IDs, dates or other business facts;
+- repaired output must again pass trusted-field, shape, visible-tool, schema and bounded-input validation;
+- repair failure still falls through to the existing deterministic safe fallback.
+
+This does not weaken Tool Registry, Policy/HITL, canonicalization, idempotency, ownership or HMS authority.
+
+## Post-repair functional GREEN
+
+Head: `18a2f7383fa44d79ce9eb840f933557de4b8b7c1`
+Run: `33524686427` — **SUCCESS**
+Foundation: **220/220 PASS**
+Worker version: `1610da50-5416-4ed3-b755-03b2d9a826d7`
+Artifact: `9807177922`
+ZIP SHA-256: `a6d929ef32d9b2fa501cb8b1a8e49a97e21dc9485ad46adda72dd834a537496e`
+
+Real staging report:
 - `ACP_R2_8_MULTI_ROOM_DIALOGUE_PASS`
-- cases: **5/5 PASS**
-- requests: 2
-- E2E p95: `9,105 ms`
-- reached approval challenge: `true`
+- **5/5 PASS**
+- requests: `2`
+- E2E p95: `8,607 ms`
+- approval challenge reached: `true`
 - approval consumed: `false`
-- HMS mutation requests: `0`
+- HMS mutation requests: `0`.
 
-### C06 — fresh multi-room setup — PASS
+C07 reached `hms.createMultiReservation` → `APPROVAL_REQUIRED` directly with no redundant question and no single-room collapse.
 
-Guest:
-`Hola. Somos cuatro y queremos quedarnos del 1 al 3 de enero de 2030. ¿Qué tenés disponible?`
+### Important repair-proof distinction
 
-Authoritative HMS result included room numbers:
-`101`, `102`, `103`, `203`.
+This GREEN did **not** need the runtime repair path. Telemetry for the session contained two normal `agent_core_route` inferences and zero route fallbacks; there was no `agent_core_route_repair` inference.
 
-Durable requested guests: `4`.
-Window: `2030-01-01` → `2030-01-03`.
+Therefore evidence is intentionally split:
+- deterministic regression RED→GREEN proves the bounded repair path itself;
+- real staging proves the normal C06/C07 path remains correct and reaches composite HITL without fallback.
 
-### C07 — exact 101 + 102 reservation intent — PASS
-
-Guest:
-`Quiero reservar la 101 y la 102.`
-
-Result:
-- HTTP `409`;
-- `APPROVAL_REQUIRED`;
-- exact composite tool in audit: `hms.createMultiReservation`;
-- no `hms.createReservation` collapse;
-- no create side effect;
-- no re-question of dates or guest count.
-
-### C08 — occupancy — not required
-
-The current canonical multi-room plan did not require a separate occupancy clarification. This is permitted by the frozen corpus when the resulting canonical path is unambiguous. R2.8.4 therefore did not invent or add an unnecessary occupancy turn.
-
-## Real-model proof
-
-Telemetry for the exact multi-room session:
-- model route inferences: `2`;
-- route fallbacks: `0`;
-- total model inferences including grounded response: `3`;
-- exact model: `@cf/meta/llama-3.3-70b-instruct-fp8-fast`;
-- total input tokens: `6,744`;
-- total output tokens: `266`;
-- model inference p95: `4,343 ms`;
-- estimated model cost: `$0.00257529`.
-
-This closes the historical R2.4 wording probe with **real-model** evidence rather than deterministic fallback evidence.
+The record must not claim the staging run exercised repair when it did not.
 
 ## Audit / safety proof
 
-Audit for the exact session contained:
+Post-repair staging audit contained only:
 - `hms.checkAvailability` — `allowed`;
 - `hms.checkAvailability` — `succeeded`;
 - `hms.createMultiReservation` — `approval_required`.
 
-It contained no successful/replayed reservation or cancellation mutation.
+No reservation/cancellation mutation had `succeeded` or `replayed` status.
 
 `approvalConsumed: false`
 `hmsMutationRequests: 0`
 
-Therefore R2.8.4 proves dialogue-to-HITL routing only; it does not claim create success.
-
 ## Explicit carry into R2.8.5
 
-The unconsumed challenge currently renders:
+The unconsumed challenge still renders canonical UUIDs:
 `Confirmar reserva de 2 habitaciones (<canonical room UUID>, <canonical room UUID>) del 2030-01-01 al 2030-01-03.`
 
 `approvalSummaryHasUuid: true`.
 
-This is **not accepted as C09 / CREATE_PASS evidence**. C09 requires human-readable room identification when room numbers are available. R2.8.5 must fix/prove a summary such as rooms `101` and `102` before approval is consumed.
-
-The UUID summary does not invalidate C07 because the guest selected rooms naturally as `101` + `102` and was never required to provide UUIDs; it is an explicit HITL UX defect at the next block boundary.
+This is **not accepted as C09 / CREATE_PASS evidence**. R2.8.5 must present server-grounded human-readable room numbers such as `101` and `102` before approval is consumed, while the canonical plan/fingerprint may continue to use UUIDs internally.
 
 ## Quality carry into R2.8.7
 
-R2.8.4 E2E p95 was `9,105 ms`, consistent with the latency concern already observed in R2.8.3. It remains a Product Quality Review item and is not hidden by the successful dialogue gate.
+Observed R2.8.4 E2E p95 values remain high (`9,105 ms` before the exact-head flake and `8,607 ms` after Fix 2). Latency remains an explicit product-quality item.
 
-## Verdict
+## Final closure criterion
 
-`MULTI_ROOM_DIALOGUE_PASS / PASS`
+Before `MULTI_ROOM_DIALOGUE_PASS / CLOSED`:
+1. two consecutive post-repair exact-head real-model runs must be GREEN;
+2. 220/220 foundation must remain GREEN;
+3. deterministic route fallbacks on the exact C06/C07 session must remain zero;
+4. no HMS reservation/cancellation mutation may succeed/replay;
+5. PR exact-head core-ci must pass;
+6. merge must be SHA-pinned;
+7. post-merge `main` core-ci must pass.
 
-Next authorized block after integration and post-merge verification only:
-`R2.8.5 — HITL + create`.
+Until those steps converge, R2.8.5 is **not active**.
