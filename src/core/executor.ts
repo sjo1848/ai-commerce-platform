@@ -66,7 +66,13 @@ export class AgentCoreExecutor {
     if (coreIdempotency && key) {
       const existing = this.idempotency.get(key);
       if (existing) {
-        if (existing.tenantId !== context.tenant.id || existing.actorId !== context.actor.id || existing.toolId !== toolId || existing.fingerprint !== fingerprint) {
+        if (
+          existing.tenantId !== context.tenant.id
+          || existing.actorId !== context.actor.id
+          || existing.sessionId !== context.session.id
+          || existing.toolId !== toolId
+          || existing.fingerprint !== fingerprint
+        ) {
           await this.audit.record({ ...auditBase, status: "failed", detail: "idempotency_conflict" });
           throw new CoreError("IDEMPOTENCY_CONFLICT", "Idempotency key was used for a different operation", 409);
         }
@@ -80,7 +86,14 @@ export class AgentCoreExecutor {
     try {
       const result = await tool.execute(validated.value, context, meta);
       if (coreIdempotency && key) {
-        this.idempotency.put(key, { tenantId: context.tenant.id, actorId: context.actor.id, toolId, fingerprint, result });
+        this.idempotency.put(key, {
+          tenantId: context.tenant.id,
+          actorId: context.actor.id,
+          sessionId: context.session.id,
+          toolId,
+          fingerprint,
+          result,
+        });
       }
       const downstreamReplay = tool.idempotencyMode === "downstream" && isAuthoritativeDownstreamReplay(result);
       await this.audit.record({ ...auditBase, status: downstreamReplay ? "replayed" : "succeeded", ...(downstreamReplay ? { detail: "downstream_authoritative_replay" } : {}) });
