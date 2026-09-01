@@ -165,6 +165,8 @@ Rules:
 - an uncertain compensation is also `OUTCOME_UNKNOWN`; it must never be represented as `compensated` or `compensation_failed` without an authoritative result;
 - Core does not cache an `OUTCOME_UNKNOWN` exception as a completed composite result, so the exact operation remains replayable;
 - webchat recovery must preserve the already-approved exact ToolPlan, original message, root idempotency key and operation fingerprint, issue a fresh single-use recovery challenge, and never reroute the model;
+- recovery depth is trusted server-owned approval state persisted with the challenge; request/model input cannot set, reset or decrement it;
+- at most 3 recovery approval challenges are allowed after the original approved execution; if the outcome remains unknown after the third recovery, automatic recovery stops and manual reconciliation is required;
 - recovery with the same root idempotency key deterministically derives the same child tokens, allowing HMS downstream idempotency to reconcile any mutation that may already have committed.
 
 ## Backward compatibility
@@ -202,7 +204,8 @@ At minimum freeze tests for:
 17. one uncertain create/cancel response is reconciled by exact-token replay;
 18. repeated transport uncertainty returns `OUTCOME_UNKNOWN` and stops later child mutations;
 19. uncertain compensation never produces a guessed lifecycle outcome;
-20. recovery after `OUTCOME_UNKNOWN` executes the same stored ToolPlan with the same root idempotency key and no model reroute.
+20. recovery after `OUTCOME_UNKNOWN` executes the same stored ToolPlan with the same root idempotency key and no model reroute;
+21. forged client recovery counters cannot reset the server-owned recovery depth, and recovery exhausts after the third challenge.
 
 ## Exit gate
 
