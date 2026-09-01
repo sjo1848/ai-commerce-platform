@@ -27,24 +27,62 @@ function rpcError(code, message) {
   return { ok: false, error: { code, message, traceId: "r2.5-create" } };
 }
 
-function mockService({ failCreateRoom, failCancelBooking } = {}) {
+function availabilityData(ctx, input, roomIds) {
+  return {
+    ok: true,
+    data: {
+      source: "hms", truth: "transactional", hotelId: ctx.hotelId,
+      start: input.start, end: input.end, capacityMode: "not_modeled",
+      rooms: roomIds.map((id, index) => ({ id, roomNumber: index === 0 ? "101" : "102", roomType: "DOUBLE", status: "AVAILABLE", priceCents: 10000, currency: "ARS" })),
+      traceId: ctx.traceId,
+    },
+  };
+}
+
+function mockService({
+  failCreateRoom,
+  failCancelBooking,
+  unavailableRoomOnAvailabilityCall,
+  uncertainCreateRoom,
+  uncertainCreateAttempts = 0,
+  uncertainCancelBooking,
+  uncertainCancelAttempts = 0,
+} = {}) {
   const calls = [];
+  let availabilityCall = 0;
+  let uncertainCreateCount = 0;
+  let uncertainCancelCount = 0;
   return {
     calls,
     service: {
-      async checkAvailability() { throw new Error("not used"); },
+      async checkAvailability(ctx, input) {
+        availabilityCall += 1;
+        calls.push({ method: "checkAvailability", ctx, input, availabilityCall });
+        const roomIds = unavailableRoomOnAvailabilityCall?.call === availabilityCall
+          ? [roomA, roomB].filter((id) => id !== unavailableRoomOnAvailabilityCall.roomId)
+          : [roomA, roomB];
+        return availabilityData(ctx, input, roomIds);
+      },
       async getQuote() { throw new Error("not used"); },
       async createReservation(ctx, input) {
         calls.push({ method: "createReservation", ctx, input });
+        if (input.roomId === uncertainCreateRoom && uncertainCreateCount < uncertainCreateAttempts) {
+          uncertainCreateCount += 1;
+          throw new Error("transport timeout after dispatch");
+        }
         if (input.roomId === failCreateRoom) return rpcError("CONFLICT", `room ${input.roomId} unavailable`);
         const bookingId = input.roomId === roomA ? bookingA : bookingB;
-        return { ok: true, data: { source: "hms", truth: "transactional", hotelId: ctx.hotelId, bookingId, guestId: input.guestId, roomId: input.roomId, start: input.start, end: input.end, status: "CONFIRMED", totalCents: 10000, currency: "ARS", replayed: false, traceId: ctx.traceId } };
+        return { ok: true, data: { source: "hms", truth: "transactional", hotelId: ctx.hotelId, bookingId, guestId: input.guestId, roomId: input.roomId, start: input.start, end: input.end, status: "CONFIRMED", totalCents: 10000, currency: "ARS", replayed: uncertainCreateCount > 0, traceId: ctx.traceId } };
       },
       async cancelReservation(ctx, input) {
         calls.push({ method: "cancelReservation", ctx, input });
+        if (input.bookingId === uncertainCancelBooking && uncertainCancelCount < uncertainCancelAttempts) {
+          uncertainCancelCount += 1;
+          throw new Error("transport timeout after dispatch");
+        }
         if (input.bookingId === failCancelBooking) return rpcError("INTERNAL_ERROR", `cannot cancel ${input.bookingId}`);
         const roomId = input.bookingId === bookingA ? roomA : roomB;
-        return { ok: true, data: { source: "hms", truth: "transactional", hotelId: ctx.hotelId, bookingId: input.bookingId, guestId, roomId, start: "2027-02-10", end: "2027-02-12", status: "CANCELLED", totalCents: 10000, currency: "ARS", replayed: false, traceId: ctx.traceId } };
+        return { ok: true, data: { source: "hms", truth: "transactional", hotelId: ctx.hotelId, bookingId: input.bookingId, guestId, roomId, start: "2027-02-10", end: "2027-02-12", status: "CANCELLED", totalCents: 10000, currency: "ARS", replayed: uncertainCancelCount > 0, traceId: ctx.traceId } };
       },
     },
   };
@@ -114,6 +152,7 @@ test("R2.5 composite create derives distinct child tokens server-side and binds 
   assert.match(creates[1].input.operationToken, /^r25c_[0-9a-f]{64}$/);
   assert.equal(creates[0].input.guestId, guestId);
   assert.equal(creates[1].input.guestId, guestId);
+  assert.equal(mock.calls.filter((call) => call.method === "checkAvailability").length, 2, "every child must get a last-moment HMS availability read");
 
   assert.equal(await ownership.get({ sessionId: "session-r2.5", tenantId: "hotel-demo", actorId: "visitor-demo", bookingId: bookingA }), creates[0].input.operationToken);
   assert.equal(await ownership.get({ sessionId: "session-r2.5", tenantId: "hotel-demo", actorId: "visitor-demo", bookingId: bookingB }), creates[1].input.operationToken);
@@ -127,6 +166,44 @@ test("R2.5 child operation tokens are deterministic for the exact root plan", as
   const firstTokens = first.mock.calls.filter((call) => call.method === "createReservation").map((call) => call.input.operationToken);
   const secondTokens = second.mock.calls.filter((call) => call.method === "createReservation").map((call) => call.input.operationToken);
   assert.deepEqual(firstTokens, secondTokens);
+});
+
+test("R2.5 revalidates the next room after the prior child commits and compensates instead of racing stale inventory", async () => {
+  const { adapter, mock } = setup({ unavailableRoomOnAvailabilityCall: { call: 2, roomId: roomB } });
+  const result = await adapter.createMultiReservationTool().execute(validInput, context(), { idempotencyKey: "child-race" });
+
+  assert.equal(result.outcome, "compensated");
+  assert.equal(result.failedRoomId, roomB);
+  assert.deepEqual(result.createdBookingIds, [bookingA]);
+  assert.deepEqual(result.compensatedBookingIds, [bookingA]);
+  assert.equal(mock.calls.filter((call) => call.method === "checkAvailability").length, 2);
+  assert.deepEqual(mock.calls.filter((call) => call.method === "createReservation").map((call) => call.input.roomId), [roomA]);
+  assert.deepEqual(mock.calls.filter((call) => call.method === "cancelReservation").map((call) => call.input.bookingId), [bookingA]);
+});
+
+test("R2.5 a single uncertain child response reconciles by exact-token replay and continues", async () => {
+  const { adapter, mock } = setup({ uncertainCreateRoom: roomB, uncertainCreateAttempts: 1 });
+  const result = await adapter.createMultiReservationTool().execute(validInput, context(), { idempotencyKey: "uncertain-recovers" });
+
+  assert.equal(result.outcome, "confirmed");
+  const callsB = mock.calls.filter((call) => call.method === "createReservation" && call.input.roomId === roomB);
+  assert.equal(callsB.length, 2);
+  assert.equal(callsB[0].input.operationToken, callsB[1].input.operationToken, "reconciliation must replay the exact downstream idempotency token");
+  assert.deepEqual(result.bookingIds, [bookingA, bookingB]);
+});
+
+test("R2.5 repeated transport uncertainty becomes OUTCOME_UNKNOWN and stops without speculative compensation", async () => {
+  const { adapter, mock, ownership } = setup({ uncertainCreateRoom: roomB, uncertainCreateAttempts: 2 });
+  await assert.rejects(
+    () => adapter.createMultiReservationTool().execute(validInput, context(), { idempotencyKey: "uncertain-stays-unknown" }),
+    (error) => error instanceof CoreError && error.code === "OUTCOME_UNKNOWN" && error.status === 503,
+  );
+
+  const creates = mock.calls.filter((call) => call.method === "createReservation");
+  assert.equal(creates.filter((call) => call.input.roomId === roomA).length, 1);
+  assert.equal(creates.filter((call) => call.input.roomId === roomB).length, 2);
+  assert.equal(mock.calls.filter((call) => call.method === "cancelReservation").length, 0, "an unresolved child must not trigger compensation around an unknown mutation");
+  assert.ok(await ownership.get({ sessionId: "session-r2.5", tenantId: "hotel-demo", actorId: "visitor-demo", bookingId: bookingA }), "known prior child remains server-owned for exact replay/recovery");
 });
 
 test("R2.5 failure after one child compensates the successful child with its original token", async () => {
@@ -158,6 +235,21 @@ test("R2.5 compensation failure is explicit and preserves the surviving active b
   assert.deepEqual(result.bookingIds, [bookingA]);
   assert.equal(result.failedRoomId, roomB);
   assert.equal(mock.calls.filter((call) => call.method === "cancelReservation").length, 1);
+});
+
+test("R2.5 uncertain compensation also fails as OUTCOME_UNKNOWN instead of inventing a surviving/cancelled state", async () => {
+  const { adapter, mock } = setup({
+    failCreateRoom: roomB,
+    uncertainCancelBooking: bookingA,
+    uncertainCancelAttempts: 2,
+  });
+  await assert.rejects(
+    () => adapter.createMultiReservationTool().execute(validInput, context(), { idempotencyKey: "uncertain-compensation" }),
+    (error) => error instanceof CoreError && error.code === "OUTCOME_UNKNOWN",
+  );
+  const cancels = mock.calls.filter((call) => call.method === "cancelReservation" && call.input.bookingId === bookingA);
+  assert.equal(cancels.length, 2);
+  assert.equal(cancels[0].input.operationToken, cancels[1].input.operationToken);
 });
 
 test("R2.5 failure before the first child does not attempt compensation", async () => {
