@@ -13,6 +13,7 @@ export type UsageEvent = {
   latencyMs?: number;
   logId?: string;
   fallbackReason?: string;
+  failureCategory?: string;
 };
 
 export interface UsageSink { record(event: UsageEvent): void | Promise<void>; }
