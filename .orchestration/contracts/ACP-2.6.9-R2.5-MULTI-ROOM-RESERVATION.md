@@ -124,18 +124,24 @@ Approval consumption executes that stored plan without another model routing pas
 
 Server-owned booking grounding is extended to support a group:
 - canonical `activeBookingIds[]`;
+- authoritative internal `activeBookings[]` entries preserving `bookingId ↔ roomId ↔ roomNumber` whenever known;
 - legacy `activeBookingId` only as compatibility alias when exactly one active booking remains;
 - `bookingStatus` remains a compact group/lifecycle status;
 - `bookingStateRevision` protects group state from stale/concurrent rollback.
 
-The model may see bounded current booking references needed for cancellation planning but cannot persist, clear or replace them through `statePatch`.
+The internal booking↔room mapping is server-owned evidence. It is stored only in the hidden reservation-group state, is excluded from model-visible conversation history, and cannot be authored, cleared or replaced through model `statePatch`.
 
-Tool results, not model prose, update `activeBookingIds[]`.
+Tool results plus the exact approved room order, not model prose, create and update the booking↔room mapping. Successful single/group cancellation removes the corresponding mapping immediately.
 
 ## One vs all cancellation
 
 - explicit single-booking cancellation continues through `hms.cancelReservation` and removes only that booking from the canonical active group;
-- clear all/group cancellation routes `hms.cancelMultiReservation` with server-grounded `activeBookingIds[]`;
+- clear all/group cancellation routes `hms.cancelMultiReservation` with server-grounded `activeBookingIds[]` when several active bookings remain;
+- explicit room-number references such as `cancelá la habitación 101` are resolved server-side against the active booking↔room mapping before any model-proposed booking ID is considered;
+- bounded ordinals such as `la primera` / `la segunda` are resolved server-side in the current canonical active-group order;
+- an explicit unknown, stale or ambiguous room/ordinal reference fails closed to clarification and produces no approval or side effect;
+- the shortcut `there is exactly one active booking, therefore cancel it` is valid only for a generic cancellation request with no contradictory explicit room/ordinal reference;
+- a stale explicit room reference can never silently retarget the only remaining booking;
 - ambiguous cancellation requests ask whether the guest means one booking/room or the whole group; no arbitrary scope selection.
 
 ## Grounding invariants
@@ -147,6 +153,9 @@ Tool results, not model prose, update `activeBookingIds[]`.
 - dates come from durable semantic state and override model-proposed dates;
 - trusted guest identity is server-injected;
 - booking IDs for group cancellation come from server-owned booking state;
+- booking↔room grounding for specific cancellation comes from server-owned execution evidence, never from model inference;
+- an explicit user room/ordinal reference has precedence over a model-proposed booking ID and over the single-remaining-booking fallback;
+- unknown/stale explicit references are clarification-only and must not mutate the remaining group;
 - model/user cannot inject trusted metadata, recovery depth or child tokens.
 
 ## Partial-failure semantics
@@ -216,7 +225,11 @@ At minimum freeze tests for:
 19. uncertain compensation never produces a guessed lifecycle outcome;
 20. recovery after `OUTCOME_UNKNOWN` executes the same stored ToolPlan with the same root idempotency key and no model reroute;
 21. forged client recovery counters cannot reset the server-owned recovery depth, and recovery exhausts after the third challenge;
-22. realistic recovery succeeds when this operation's already-committed children have disappeared from availability, by replaying the exact child tokens without recovery availability preflight.
+22. realistic recovery succeeds when this operation's already-committed children have disappeared from availability, by replaying the exact child tokens without recovery availability preflight;
+23. `cancelá la habitación 101` resolves from server-owned booking↔room grounding even when the model proposes an unknown/forged booking ID;
+24. bounded ordinal cancellation (`la primera`) resolves server-side without model booking authority;
+25. an unknown room such as `999` clarifies with no approval and no side effect;
+26. after room `101` was cancelled, repeating an explicit `cancelá la habitación 101` cannot retarget the only remaining booking.
 
 ## Exit gate
 
