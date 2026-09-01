@@ -1,0 +1,188 @@
+name: R2.8 multi-room dialogue
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/acp-2.6.9-r2.8.4-multi-room-dialogue
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-commerce-staging
+  cancel-in-progress: false
+
+jobs:
+  dialogue:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      WORKER_NAME: ai-commerce-agent-core
+      EXPECTED_MODEL: '@cf/meta/llama-3.3-70b-instruct-fp8-fast'
+      R28_START: '2030-01-01'
+      R28_END: '2030-01-03'
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install locked toolchain
+        run: npm ci
+
+      - name: Foundation gate
+        run: npm run qa
+
+      - name: Validate R2.8.4 harness
+        run: |
+          node --check scripts/r2.8-multi-room-dialogue.mjs
+          node --check scripts/count-model-telemetry.mjs
+          node --check scripts/count-audit-events.mjs
+
+      - name: Verify Cloudflare credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_API_TOKEN"
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          npx wrangler whoami
+
+      - name: Deploy exact R2.8.4 head to staging
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler deploy --dry-run
+          npx wrangler deploy | tee /tmp/r28-r4-deploy.log
+
+      - name: Resolve workers.dev URL
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain")"
+          subdomain="$(printf '%s' "$payload" | node -e '
+            const fs=require("fs");
+            const p=JSON.parse(fs.readFileSync(0,"utf8"));
+            if (!p?.success || !p?.result?.subdomain) process.exit(2);
+            process.stdout.write(p.result.subdomain);
+          ')"
+          echo "AI_COMMERCE_STAGING_URL=https://$WORKER_NAME.$subdomain.workers.dev" >> "$GITHUB_ENV"
+
+      - name: Wait for exact staging deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 12); do
+            status="$(curl -sS --max-time 10 -o /tmp/r28-r4-root.html -w '%{http_code}' "$AI_COMMERCE_STAGING_URL/" || true)"
+            if [[ "$status" == 2* ]]; then
+              echo "Agent Core ready on attempt $attempt ($status)."
+              exit 0
+            fi
+            sleep 2
+          done
+          cat /tmp/r28-r4-root.html >&2 || true
+          exit 1
+
+      - name: Real-model natural multi-room dialogue
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > /tmp/r28-r4-tail.log
+          timeout 180s npx wrangler tail "$WORKER_NAME" --format=json --method POST > /tmp/r28-r4-tail.log 2>&1 &
+          TAIL_PID=$!
+          trap 'kill "$TAIL_PID" 2>/dev/null || true' EXIT
+          sleep 4
+
+          set +e
+          node scripts/r2.8-multi-room-dialogue.mjs > /tmp/r28-r4-report.json 2>&1
+          DIALOGUE_CODE=$?
+          set -e
+          sleep 4
+          kill "$TAIL_PID" 2>/dev/null || true
+
+          echo '--- multi-room dialogue report ---'
+          cat /tmp/r28-r4-report.json || true
+          echo '--- tail diagnostics ---'
+          cat /tmp/r28-r4-tail.log || true
+
+          MODEL_TELEMETRY="$(node scripts/count-model-telemetry.mjs /tmp/r28-r4-tail.log)"
+          AUDIT_TELEMETRY="$(node scripts/count-audit-events.mjs /tmp/r28-r4-tail.log)"
+          echo "$MODEL_TELEMETRY" > /tmp/r28-r4-model-telemetry.json
+          echo "$AUDIT_TELEMETRY" > /tmp/r28-r4-audit-telemetry.json
+          echo "MODEL_TELEMETRY=$MODEL_TELEMETRY"
+          echo "AUDIT_TELEMETRY=$AUDIT_TELEMETRY"
+
+          if [[ "$DIALOGUE_CODE" -ne 0 ]]; then exit "$DIALOGUE_CODE"; fi
+
+          EXPECTED_MODEL="$EXPECTED_MODEL" MODEL_TELEMETRY="$MODEL_TELEMETRY" REPORT_PATH=/tmp/r28-r4-report.json node - <<'NODE'
+          const fs = require('fs');
+          const telemetry = JSON.parse(process.env.MODEL_TELEMETRY);
+          const report = JSON.parse(fs.readFileSync(process.env.REPORT_PATH, 'utf8'));
+          const sessionId = report.multiRoomSessionId;
+          if (!sessionId) throw new Error('missing multi-room session id');
+          if (telemetry.models.length !== 1 || telemetry.models[0] !== process.env.EXPECTED_MODEL) {
+            throw new Error(`model mismatch: ${JSON.stringify(telemetry.models)}`);
+          }
+          const routeInferences = telemetry.inferences.filter((item) => item.sessionId === sessionId && item.label === 'agent_core_route');
+          const routeFallbacks = telemetry.fallbacks.filter((item) => item.sessionId === sessionId && item.label === 'agent_core_route');
+          if (routeInferences.length < 2) throw new Error(`insufficient real-model route evidence for multi-room session: ${routeInferences.length}`);
+          if (routeFallbacks.length > 0) {
+            throw new Error(`historical R2.4 probe depended on deterministic route fallback: ${JSON.stringify(routeFallbacks)}`);
+          }
+          if (telemetry.totalInputTokens <= 0 || telemetry.totalOutputTokens <= 0) throw new Error('missing token evidence');
+          console.log(JSON.stringify({
+            event: 'ACP_R2_8_4_MODEL_ROUTE_PROOF',
+            sessionId,
+            routeInferences: routeInferences.length,
+            routeFallbacks: routeFallbacks.length,
+            model: telemetry.models[0],
+          }));
+          NODE
+
+          AUDIT_TELEMETRY="$AUDIT_TELEMETRY" REPORT_PATH=/tmp/r28-r4-report.json node - <<'NODE'
+          const fs = require('fs');
+          const audit = JSON.parse(process.env.AUDIT_TELEMETRY);
+          const report = JSON.parse(fs.readFileSync(process.env.REPORT_PATH, 'utf8'));
+          const sessionId = report.multiRoomSessionId;
+          const events = audit.events.filter((event) => event.sessionId === sessionId);
+          if (!events.some((event) => event.toolId === 'hms.checkAvailability' && event.status === 'succeeded')) {
+            throw new Error('missing authoritative C06 availability audit');
+          }
+          if (!events.some((event) => event.toolId === 'hms.createMultiReservation' && event.status === 'approval_required')) {
+            throw new Error(`multi-room dialogue did not reach composite R2.5 HITL boundary: ${JSON.stringify(events)}`);
+          }
+          if (events.some((event) => event.toolId === 'hms.createReservation' && ['approval_required', 'succeeded', 'replayed'].includes(event.status))) {
+            throw new Error('multi-room intent collapsed into single-room reservation path');
+          }
+          if (events.some((event) => /createReservation|createMultiReservation|cancelReservation|cancelMultiReservation/.test(String(event.toolId)) && ['succeeded', 'replayed'].includes(event.status))) {
+            throw new Error('R2.8.4 executed a mutation; only unconsumed HITL is allowed');
+          }
+          console.log(JSON.stringify({
+            event: 'ACP_R2_8_4_COMPOSITE_AUDIT_PROOF',
+            sessionId,
+            compositeApprovalRequired: true,
+            mutationSucceeded: false,
+          }));
+          NODE
+
+          grep -q 'ACP_R2_8_MULTI_ROOM_DIALOGUE_PASS' /tmp/r28-r4-report.json
+          echo 'ACP_R2_8_4_MULTI_ROOM_DIALOGUE_PASS'
+
+      - name: Preserve R2.8.4 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r2.8-multi-room-dialogue-${{ github.run_id }}
+          path: |
+            /tmp/r28-r4-deploy.log
+            /tmp/r28-r4-report.json
+            /tmp/r28-r4-tail.log
+            /tmp/r28-r4-model-telemetry.json
+            /tmp/r28-r4-audit-telemetry.json
+          if-no-files-found: warn
+          retention-days: 14
