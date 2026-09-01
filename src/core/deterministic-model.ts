@@ -90,7 +90,7 @@ export class DeterministicModelRouter implements ModelRouter {
       return { kind: "tool", plan: { toolId: tool.id, input: { bookingId } } };
     }
 
-    const reservationIntent = /\b(reservar|reserva|confirmar\s+reserva)\b/i.test(message);
+    const reservationIntent = /\b(?:reservar|reserva|reservame|reserváme|reservamela|reservámela|reservanos|reservános|confirmar\s+reserva)\b/i.test(message);
     if (reservationIntent) {
       const selectedRoomIds = state?.selectedRoomIds ?? [];
       const multiRoom = selectedRoomIds.length > 1 || (state?.requestedRoomCount ?? 0) > 1;
