@@ -55,10 +55,11 @@ Execution:
 1. Require a trusted root idempotency key.
 2. Derive deterministic child create tokens server-side; model/user cannot provide them.
 3. Create rooms sequentially so failure boundaries are deterministic and auditable.
-4. Bind each successful booking to its original child create token before proceeding.
-5. If a child create or ownership bind fails, stop creating further rooms.
-6. Attempt compensation for every prior successful child using its original trusted create token.
-7. Return a structured authoritative outcome; never claim atomicity.
+4. Immediately before each child create, re-read transactional HMS availability for the exact approved dates and require that exact child room to remain available.
+5. Bind each successful booking to its original child create token before proceeding.
+6. If a child create, fresh availability gate or ownership bind fails, stop creating further rooms.
+7. Attempt compensation for every prior successful child using its original trusted create token when the current failure is definitive.
+8. Return a structured authoritative outcome; never claim atomicity.
 
 Allowed outcomes:
 - `confirmed`: every child confirmed; all booking IDs become current active group bookings.
@@ -79,6 +80,7 @@ Policy:
 Execution:
 - ownership is verified independently for every booking before any downstream cancellation starts;
 - if any booking is not owned by the trusted session/tenant/actor, fail closed before the first cancellation;
+- trusted ownership/token binding is re-read immediately before each irreversible child cancellation;
 - cancellations execute deterministically;
 - partial downstream cancellation failure is reported explicitly because cancellation cannot be safely compensated by silently re-creating reservations.
 
@@ -150,6 +152,21 @@ Required evidence for failure tests:
 - group cancellation verifies ownership for every booking before first mutation;
 - cancellation partial failure leaves only failed booking IDs active.
 
+## Timeout / uncertain-result semantics
+
+A thrown RPC/transport exception after dispatch is not proof that HMS rejected a mutation. R2.5 therefore distinguishes authoritative failures from uncertain transport outcomes.
+
+Rules:
+- a structured HMS error response is authoritative and is not retried by this reconciliation layer;
+- when a mutating HMS RPC throws before a result is observed, replay it exactly once with the same downstream idempotency token;
+- a definitive replay result becomes authoritative and normal execution may continue;
+- if the exact-token replay also throws, raise `OUTCOME_UNKNOWN` with HTTP 503;
+- after `OUTCOME_UNKNOWN`, do not start later child mutations and do not speculate that the uncertain mutation succeeded or failed;
+- an uncertain compensation is also `OUTCOME_UNKNOWN`; it must never be represented as `compensated` or `compensation_failed` without an authoritative result;
+- Core does not cache an `OUTCOME_UNKNOWN` exception as a completed composite result, so the exact operation remains replayable;
+- webchat recovery must preserve the already-approved exact ToolPlan, original message, root idempotency key and operation fingerprint, issue a fresh single-use recovery challenge, and never reroute the model;
+- recovery with the same root idempotency key deterministically derives the same child tokens, allowing HMS downstream idempotency to reconcile any mutation that may already have committed.
+
 ## Backward compatibility
 
 R2.5 must not regress:
@@ -180,7 +197,12 @@ At minimum freeze tests for:
 12. single-booking cancel from a group removes only that booking;
 13. forged booking IDs / guest identity / operationToken / approval metadata fail closed;
 14. stale state cannot resurrect cancelled group bookings;
-15. R2.4 165-test baseline plus all prior security regressions remain green.
+15. R2.4 165-test baseline plus all prior security regressions remain green;
+16. room availability is revalidated immediately before every child create, not only once before the group;
+17. one uncertain create/cancel response is reconciled by exact-token replay;
+18. repeated transport uncertainty returns `OUTCOME_UNKNOWN` and stops later child mutations;
+19. uncertain compensation never produces a guessed lifecycle outcome;
+20. recovery after `OUTCOME_UNKNOWN` executes the same stored ToolPlan with the same root idempotency key and no model reroute.
 
 ## Exit gate
 
