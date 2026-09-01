@@ -2,6 +2,11 @@ import type { StructuredModelResult } from "./model-provider.js";
 import type { ExecutionContext } from "./types.js";
 import type { UsageSink } from "./usage.js";
 
+function boundedFailureCategory(value: string | undefined): string | undefined {
+  if (!value || !/^[A-Za-z][A-Za-z0-9_.:-]{0,63}$/.test(value)) return undefined;
+  return value;
+}
+
 export async function recordModelInference(
   usage: UsageSink | undefined,
   context: ExecutionContext,
@@ -30,8 +35,10 @@ export async function recordModelFallback(
   context: ExecutionContext,
   label: string,
   reason: string,
+  failureCategory?: string,
 ): Promise<void> {
   if (!usage) return;
+  const bounded = boundedFailureCategory(failureCategory);
   await usage.record({
     timestamp: context.now,
     tenantId: context.tenant.id,
@@ -41,5 +48,6 @@ export async function recordModelFallback(
     estimatedCostUsd: 0,
     label,
     fallbackReason: reason,
+    ...(bounded ? { failureCategory: bounded } : {}),
   });
 }
