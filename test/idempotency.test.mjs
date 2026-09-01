@@ -74,3 +74,16 @@ test("same client idempotency key is isolated between tenants", async () => {
   assert.equal(b.tenantId, "hotel-b");
   assert.equal(calls, 2);
 });
+
+test("same actor cannot replay a Core-idempotent result into another session", async () => {
+  const { executor, ctx, getCalls } = await setup();
+  const otherSession = { ...ctx, session: { ...ctx.session, id: crypto.randomUUID() } };
+
+  await executor.execute("test.write", { x: 1 }, ctx, { idempotencyKey: "cross-session-key" });
+  await assert.rejects(
+    () => executor.execute("test.write", { x: 1 }, otherSession, { idempotencyKey: "cross-session-key" }),
+    (e) => e instanceof CoreError && e.code === "IDEMPOTENCY_CONFLICT",
+    "approval/ownership are session-bound, so a cached side-effect result must not migrate across sessions",
+  );
+  assert.equal(getCalls(), 1, "the conflicting second session must not execute a duplicate side effect");
+});
