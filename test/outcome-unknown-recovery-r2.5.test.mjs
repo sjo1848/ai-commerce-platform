@@ -21,11 +21,8 @@ function request(handler, path, body, key) {
   }));
 }
 
-test("R2.5 OUTCOME_UNKNOWN reissues only the exact approved plan and same idempotency operation can recover without rerouting", async () => {
-  let routeCount = 0;
-  let executions = 0;
-  const executedInputs = [];
-  const tool = {
+function reservationTool(execute) {
+  return {
     id: "hms.createReservation",
     primitive: "RESERVE",
     description: "test reservation",
@@ -40,29 +37,41 @@ test("R2.5 OUTCOME_UNKNOWN reissues only the exact approved plan and same idempo
       required: ["roomId", "checkIn", "checkOut"],
     },
     validateInput(input) { return { ok: true, value: structuredClone(input) }; },
-    async execute(input) {
-      executions += 1;
-      executedInputs.push(structuredClone(input));
-      if (executions === 1) {
-        throw new CoreError("OUTCOME_UNKNOWN", "HMS mutation outcome is unknown", 503);
-      }
-      return { bookingId: "booking-recovered", status: "CONFIRMED" };
-    },
+    execute,
   };
-  const canonicalPlan = {
-    toolId: "hms.createReservation",
-    input: { roomId: "room-101", checkIn: "2027-02-10", checkOut: "2027-02-12" },
-  };
-  const runtime = new AgentCoreRuntime({
+}
+
+const canonicalPlan = {
+  toolId: "hms.createReservation",
+  input: { roomId: "room-101", checkIn: "2027-02-10", checkOut: "2027-02-12" },
+};
+
+function runtimeWithTool(tool, onRoute) {
+  return new AgentCoreRuntime({
     tenants: [tenant],
     tools: [tool],
     model: {
       async route() {
-        routeCount += 1;
+        onRoute();
         return { kind: "tool", plan: structuredClone(canonicalPlan) };
       },
     },
   });
+}
+
+test("R2.5 OUTCOME_UNKNOWN reissues only the exact approved plan and same idempotency operation can recover without rerouting", async () => {
+  let routeCount = 0;
+  let executions = 0;
+  const executedInputs = [];
+  const tool = reservationTool(async (input) => {
+    executions += 1;
+    executedInputs.push(structuredClone(input));
+    if (executions === 1) {
+      throw new CoreError("OUTCOME_UNKNOWN", "HMS mutation outcome is unknown", 503);
+    }
+    return { bookingId: "booking-recovered", status: "CONFIRMED" };
+  });
+  const runtime = runtimeWithTool(tool, () => { routeCount += 1; });
   const handler = createWebchatHandler(runtime, {
     fixedTenantId: "hotel-demo",
     fixedActorId: "visitor-demo",
@@ -86,6 +95,7 @@ test("R2.5 OUTCOME_UNKNOWN reissues only the exact approved plan and same idempo
   assert.equal(uncertain.status, 503);
   assert.equal(uncertainBody.error.code, "OUTCOME_UNKNOWN");
   assert.ok(uncertainBody.recoveryApprovalToken);
+  assert.equal(uncertainBody.recoveryAttempt, 1);
   assert.equal(executions, 1);
   assert.equal(routeCount, 1, "unknown outcome recovery must not invoke the model again");
 
@@ -100,4 +110,62 @@ test("R2.5 OUTCOME_UNKNOWN reissues only the exact approved plan and same idempo
   assert.equal(executions, 2);
   assert.equal(routeCount, 1);
   assert.deepEqual(executedInputs, [canonicalPlan.input, canonicalPlan.input]);
+});
+
+test("R2.5 recovery depth is server-owned, ignores forged client counters, and exhausts after three recovery challenges", async () => {
+  let routeCount = 0;
+  let executions = 0;
+  const executedInputs = [];
+  const tool = reservationTool(async (input) => {
+    executions += 1;
+    executedInputs.push(structuredClone(input));
+    throw new CoreError("OUTCOME_UNKNOWN", "HMS mutation outcome is unknown", 503);
+  });
+  const runtime = runtimeWithTool(tool, () => { routeCount += 1; });
+  const handler = createWebchatHandler(runtime, {
+    fixedTenantId: "hotel-demo",
+    fixedActorId: "visitor-demo",
+    approvalStore: new InMemoryApprovalStore(),
+  });
+
+  const message = "reservala";
+  const key = "unknown-recovery-exhaustion";
+  const first = await request(handler, "/api/chat", { message }, key);
+  const pending = await first.json();
+  assert.equal(first.status, 409);
+  assert.equal(routeCount, 1);
+
+  let token = pending.approvalToken;
+  for (let expectedAttempt = 1; expectedAttempt <= 3; expectedAttempt += 1) {
+    const response = await request(handler, "/api/approve", {
+      message,
+      sessionId: pending.sessionId,
+      approvalToken: token,
+      // Deliberately forged. The handler/store must ignore request-owned recovery depth.
+      recoveryAttempt: 0,
+    }, key);
+    const body = await response.json();
+    assert.equal(response.status, 503);
+    assert.equal(body.error.code, "OUTCOME_UNKNOWN");
+    assert.equal(body.recoveryAttempt, expectedAttempt);
+    assert.ok(body.recoveryApprovalToken);
+    assert.equal(body.recoveryExhausted, undefined);
+    token = body.recoveryApprovalToken;
+  }
+
+  const exhausted = await request(handler, "/api/approve", {
+    message,
+    sessionId: pending.sessionId,
+    approvalToken: token,
+    recoveryAttempt: 0,
+  }, key);
+  const exhaustedBody = await exhausted.json();
+  assert.equal(exhausted.status, 503);
+  assert.equal(exhaustedBody.error.code, "OUTCOME_UNKNOWN");
+  assert.equal(exhaustedBody.recoveryExhausted, true);
+  assert.equal(exhaustedBody.recoveryApprovalToken, undefined);
+  assert.match(exhaustedBody.error.message, /manual reconciliation/i);
+  assert.equal(routeCount, 1, "all recovery attempts must execute stored plan without rerouting");
+  assert.equal(executions, 4, "one original approved execution plus three recovery executions");
+  assert.deepEqual(executedInputs, Array.from({ length: 4 }, () => canonicalPlan.input));
 });
