@@ -1,0 +1,165 @@
+name: R2.8 read-only conversation
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/acp-2.6.9-r2.8.3-readonly-conversation
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-commerce-staging
+  cancel-in-progress: false
+
+jobs:
+  conversation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      WORKER_NAME: ai-commerce-agent-core
+      EXPECTED_MODEL: '@cf/meta/llama-3.3-70b-instruct-fp8-fast'
+      R28_START: '2030-01-01'
+      R28_END: '2030-01-03'
+      R28_CORRECTED_START: '2030-01-02'
+      R28_CORRECTED_END: '2030-01-04'
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install locked toolchain
+        run: npm ci
+
+      - name: Foundation gate
+        run: npm run qa
+
+      - name: Validate R2.8.3 harness
+        run: |
+          node --check scripts/r2.8-readonly-conversation.mjs
+          node --check scripts/count-model-telemetry.mjs
+          node --check scripts/count-audit-events.mjs
+
+      - name: Verify Cloudflare credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_API_TOKEN"
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          npx wrangler whoami
+
+      - name: Deploy exact R2.8.3 head to staging
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler deploy --dry-run
+          npx wrangler deploy | tee /tmp/r28-r3-deploy.log
+
+      - name: Resolve workers.dev URL
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain")"
+          subdomain="$(printf '%s' "$payload" | node -e '
+            const fs=require("fs");
+            const p=JSON.parse(fs.readFileSync(0,"utf8"));
+            if (!p?.success || !p?.result?.subdomain) process.exit(2);
+            process.stdout.write(p.result.subdomain);
+          ')"
+          echo "AI_COMMERCE_STAGING_URL=https://$WORKER_NAME.$subdomain.workers.dev" >> "$GITHUB_ENV"
+
+      - name: Wait for exact staging deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 12); do
+            status="$(curl -sS --max-time 10 -o /tmp/r28-r3-root.html -w '%{http_code}' "$AI_COMMERCE_STAGING_URL/" || true)"
+            if [[ "$status" == 2* ]]; then
+              echo "Agent Core ready on attempt $attempt ($status)."
+              exit 0
+            fi
+            sleep 2
+          done
+          cat /tmp/r28-r3-root.html >&2 || true
+          exit 1
+
+      - name: Real-model natural read-only conversation
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > /tmp/r28-r3-tail.log
+          timeout 180s npx wrangler tail "$WORKER_NAME" --format=json --method POST > /tmp/r28-r3-tail.log 2>&1 &
+          TAIL_PID=$!
+          trap 'kill "$TAIL_PID" 2>/dev/null || true' EXIT
+          sleep 4
+
+          set +e
+          node scripts/r2.8-readonly-conversation.mjs > /tmp/r28-r3-report.json 2>&1
+          CONVERSATION_CODE=$?
+          set -e
+          sleep 4
+          kill "$TAIL_PID" 2>/dev/null || true
+
+          echo '--- conversation report ---'
+          cat /tmp/r28-r3-report.json || true
+          echo '--- tail diagnostics ---'
+          cat /tmp/r28-r3-tail.log || true
+
+          MODEL_TELEMETRY="$(node scripts/count-model-telemetry.mjs /tmp/r28-r3-tail.log)"
+          AUDIT_TELEMETRY="$(node scripts/count-audit-events.mjs /tmp/r28-r3-tail.log)"
+          echo "$MODEL_TELEMETRY" > /tmp/r28-r3-model-telemetry.json
+          echo "$AUDIT_TELEMETRY" > /tmp/r28-r3-audit-telemetry.json
+          echo "MODEL_TELEMETRY=$MODEL_TELEMETRY"
+          echo "AUDIT_TELEMETRY=$AUDIT_TELEMETRY"
+
+          if [[ "$CONVERSATION_CODE" -ne 0 ]]; then exit "$CONVERSATION_CODE"; fi
+
+          EXPECTED_MODEL="$EXPECTED_MODEL" MODEL_TELEMETRY="$MODEL_TELEMETRY" node - <<'NODE'
+          const telemetry = JSON.parse(process.env.MODEL_TELEMETRY);
+          if (telemetry.modelInferences < 5) throw new Error(`insufficient real-model evidence: ${telemetry.modelInferences}`);
+          if (telemetry.totalInputTokens <= 0 || telemetry.totalOutputTokens <= 0) throw new Error('missing token evidence');
+          if (telemetry.models.length !== 1 || telemetry.models[0] !== process.env.EXPECTED_MODEL) {
+            throw new Error(`model mismatch: ${JSON.stringify(telemetry.models)}`);
+          }
+          console.log(JSON.stringify({
+            event: 'ACP_R2_8_3_MODEL_OBSERVABILITY',
+            modelInferences: telemetry.modelInferences,
+            modelFallbacks: telemetry.modelFallbacks,
+            fallbackRatio: telemetry.modelInferences ? telemetry.modelFallbacks / telemetry.modelInferences : 0,
+            fallbackReasons: telemetry.fallbackReasons,
+          }));
+          NODE
+
+          AUDIT_TELEMETRY="$AUDIT_TELEMETRY" node - <<'NODE'
+          const audit = JSON.parse(process.env.AUDIT_TELEMETRY);
+          if (!audit.events.some((e) => e.toolId === 'hms.checkAvailability' && e.status === 'succeeded')) {
+            throw new Error('missing authoritative availability audit');
+          }
+          if (audit.events.some((e) => /createReservation|cancelReservation|createMultiReservation|cancelMultiReservation/.test(String(e.toolId)))) {
+            throw new Error('R2.8.3 emitted mutation-tool audit event');
+          }
+          NODE
+
+          grep -q 'ACP_R2_8_CONVERSATION_PASS' /tmp/r28-r3-report.json
+          echo 'ACP_R2_8_3_CONVERSATION_PASS'
+
+      - name: Preserve R2.8.3 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r2.8-readonly-conversation-${{ github.run_id }}
+          path: |
+            /tmp/r28-r3-deploy.log
+            /tmp/r28-r3-report.json
+            /tmp/r28-r3-tail.log
+            /tmp/r28-r3-model-telemetry.json
+            /tmp/r28-r3-audit-telemetry.json
+          if-no-files-found: warn
+          retention-days: 14
