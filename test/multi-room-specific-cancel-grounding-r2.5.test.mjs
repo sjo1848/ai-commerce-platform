@@ -168,6 +168,19 @@ async function createGroup(env) {
   assert.equal(approved.status, 200);
 }
 
+async function approveCancellation(env, message, key) {
+  const pendingResponse = await request(env.handler, "/api/chat", { message, sessionId: env.sessionId }, key);
+  const pending = await pendingResponse.json();
+  assert.equal(pendingResponse.status, 409);
+  assert.equal(pending.error.code, "APPROVAL_REQUIRED");
+  const approved = await request(env.handler, "/api/approve", {
+    message,
+    sessionId: env.sessionId,
+    approvalToken: pending.approvalToken,
+  }, key);
+  return { pending, approved, body: await approved.json() };
+}
+
 test("QA P2: specific room cancellation is grounded server-side without trusting model booking mapping", async () => {
   const env = await setup();
   await createGroup(env);
@@ -181,4 +194,59 @@ test("QA P2: specific room cancellation is grounded server-side without trusting
   assert.match(body.approvalSummary, new RegExp(bookingA));
   assert.doesNotMatch(body.approvalSummary, new RegExp(bookingB));
   assert.equal(env.hms.calls.filter((call) => call.method === "cancelReservation").length, 0, "approval must still precede the side effect");
+});
+
+test("QA reclosure: ordinal cancellation resolves server-side without model booking authority", async () => {
+  const env = await setup();
+  await createGroup(env);
+
+  const response = await request(env.handler, "/api/chat", {
+    message: "cancelá la primera",
+    sessionId: env.sessionId,
+  }, "cancel-first-room");
+  const body = await response.json();
+
+  assert.equal(response.status, 409);
+  assert.equal(body.error.code, "APPROVAL_REQUIRED");
+  assert.match(body.approvalSummary, new RegExp(bookingA));
+  assert.doesNotMatch(body.approvalSummary, new RegExp(bookingB));
+  assert.equal(env.hms.calls.filter((call) => call.method === "cancelReservation").length, 0);
+});
+
+test("QA reclosure: unknown room reference clarifies and never trusts forged model booking", async () => {
+  const env = await setup();
+  await createGroup(env);
+
+  const cancelsBefore = env.hms.calls.filter((call) => call.method === "cancelReservation").length;
+  const response = await request(env.handler, "/api/chat", {
+    message: "cancelá la habitación 999",
+    sessionId: env.sessionId,
+  }, "cancel-unknown-room");
+  const body = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(body.approvalToken, undefined);
+  assert.match(body.message, /no encuentro|indicame|reserva/i);
+  assert.equal(env.hms.calls.filter((call) => call.method === "cancelReservation").length, cancelsBefore);
+});
+
+test("QA P1: stale cancelled room reference cannot silently target the only remaining booking", async () => {
+  const env = await setup();
+  await createGroup(env);
+
+  const first = await approveCancellation(env, "cancelá la habitación 101", "cancel-101-once");
+  assert.equal(first.approved.status, 200);
+  assert.equal(first.body.data.bookingId, bookingA);
+
+  const cancelsBefore = env.hms.calls.filter((call) => call.method === "cancelReservation").length;
+  const response = await request(env.handler, "/api/chat", {
+    message: "cancelá la habitación 101",
+    sessionId: env.sessionId,
+  }, "cancel-101-again");
+  const body = await response.json();
+
+  assert.equal(response.status, 200, "stale explicit room reference must clarify even when exactly one other booking remains");
+  assert.equal(body.approvalToken, undefined);
+  assert.match(body.message, /no encuentro|indicame|reserva/i);
+  assert.equal(env.hms.calls.filter((call) => call.method === "cancelReservation").length, cancelsBefore, "remaining room 102 must not become the implicit target");
 });
