@@ -92,8 +92,36 @@ export class DeterministicModelRouter implements ModelRouter {
 
     const reservationIntent = /\b(reservar|reserva|confirmar\s+reserva)\b/i.test(message);
     if (reservationIntent) {
-      if ((state?.selectedRoomIds?.length ?? 0) > 1 || (state?.requestedRoomCount ?? 0) > 1) {
-        return { kind: "message", purpose: "unsupported", message: "Tengo registrada la selección de varias habitaciones. La reserva conjunta todavía no se ejecuta en esta etapa." };
+      const selectedRoomIds = state?.selectedRoomIds ?? [];
+      const multiRoom = selectedRoomIds.length > 1 || (state?.requestedRoomCount ?? 0) > 1;
+      if (multiRoom) {
+        if (selectedRoomIds.length < 2) {
+          return {
+            kind: "message",
+            purpose: "clarification",
+            missing: ["selection"],
+            message: "¿Qué habitaciones querés elegir?",
+          };
+        }
+        if (dates.length < 2) {
+          return {
+            kind: "message",
+            purpose: "clarification",
+            missing: ["dates"],
+            message: "¿Para qué fechas sería?",
+          };
+        }
+        const multiTool = availableTools.find((candidate) => candidate.id === "hms.createMultiReservation");
+        if (!multiTool) {
+          return { kind: "message", purpose: "unsupported", message: "La reserva conjunta no está habilitada para este negocio." };
+        }
+        return {
+          kind: "tool",
+          plan: {
+            toolId: multiTool.id,
+            input: { roomIds: [...selectedRoomIds], checkIn: dates[0], checkOut: dates[1] },
+          },
+        };
       }
       const tool = availableTools.find((candidate) => candidate.id === "hms.createReservation");
       if (!tool) return { kind: "message", purpose: "unsupported", message: "La creación de reservas no está habilitada para este negocio." };
