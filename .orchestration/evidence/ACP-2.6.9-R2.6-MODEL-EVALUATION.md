@@ -1,6 +1,6 @@
 # ACP 2.6.9-R2.6 — Model Quality / Latency / Cost Evaluation
 
-Status: `TECHNICAL_PASS / CLOSED` (subject to merge + post-merge regression)
+Status: `TECHNICAL_PASS / CLOSED`
 
 ## Frozen contract
 
@@ -12,9 +12,11 @@ R2.6 evaluates the HMS receptionist model path without changing the deterministi
 
 `4fd636b599cd2a3389ca94e289146cdcc74485ab`
 
-PR: #49 — `feat(2.6.9-R2.6): evaluate model quality, latency and cost`
+Integration PR: #50 — `feat(2.6.9-R2.6): evaluate model quality, latency and cost`.
 
-Exact-head core CI: `33464908885` — PASS.
+Legacy draft PR #49 contains the completed review submissions and was superseded only because the connector could not transition the draft flag through its GraphQL wrapper; no scope/code divergence was introduced.
+
+Exact substantive core CI: `33464908885` — PASS.
 
 Final suite: `211/211 PASS`, including typecheck, unit/regression tests, staging E2E syntax and Wrangler dry-run.
 
@@ -82,17 +84,26 @@ QA verdict: `PASS / RECLOSED`.
 
 ## Pre-Critic
 
-PR review `5073654629`: `PASS`.
+Legacy PR #49 review `5073654629`: `PASS`.
 
 Verified frozen contract, exact-head CI, strengthened real-model evidence, baseline restoration and the resolved QA findings.
 
 ## Independent Critic
 
-PR review `5073655778`: `PASS`.
+Legacy PR #49 review `5073655778`: `PASS`.
 
 Independent falsification focused on model identity, safety/grounding, quality-gate integrity and restoration after candidate evaluation.
 
 Open R2.6 findings: `P0/P1/P2 = 0/0/0`.
+
+## Integration and post-merge regression
+
+- Integration PR: #50.
+- Merge commit: `4f7741ac01505c77b73460f91737c209166ffcd0`.
+- Final PR-head core CI: `33465429869` / #453 — PASS.
+- Post-merge `main` core CI: `33465499222` / #454 — PASS, `211/211` tests plus typecheck, staging E2E syntax and Wrangler dry-run.
+- Post-merge status convergence commit: `104248e1b3b4db39a7d379bc0f1d910b80a2eed3`.
+- Status convergence CI: `33466120240` / #455 — PASS.
 
 ## Mandatory R2.7 attacks
 
@@ -103,4 +114,4 @@ The following are explicitly carried into R2.7 as adversarial cross-stage cases,
 
 ## Exit
 
-R2.6 is technically complete once PR #49 is merged and post-merge `main` CI passes. The next substage is `2.6.9-R2.7 — Adversarial QA + Independent Critic`. Human Product Acceptance remains `REWORK`; R2.9 is the only human decision gate and Phase 3 / Alquileres stays blocked until explicit `ACCEPT`.
+R2.6 is `TECHNICAL_PASS / CLOSED`. `2.6.9-R2.7 — Adversarial QA + Independent Critic` is the active substage. Human Product Acceptance remains `REWORK`; R2.9 is the only human decision gate and Phase 3 / Alquileres stays blocked until explicit `ACCEPT`.
