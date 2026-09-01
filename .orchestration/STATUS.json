@@ -3,10 +3,10 @@
   "runtime_status": "IN_PROGRESS",
   "resume_authorized": true,
   "active_task": "ACP-2.6.9-R2-NATURAL-RECEPTIONIST",
-  "last_completed_task": "ACP-2.6.9-R2.4-MULTI-ROOM-CONVERSATION-MODEL",
-  "last_completed_head": "bb4b0ec42058fb7292091d3b8ec09e4b3650f6eb",
-  "current_substage": "2.6.9-R2.5_MULTI_ROOM_RESERVATION_ORCHESTRATION_ACTIVE",
-  "next_action": "DEFINE_AND_IMPLEMENT_R2_5_MULTI_ROOM_RESERVATION_ORCHESTRATION",
+  "last_completed_task": "ACP-2.6.9-R2.5-MULTI-ROOM-RESERVATION-ORCHESTRATION",
+  "last_completed_head": "a2eed3617f5f77c35c653d72c91fbdfcb1eded9a",
+  "current_substage": "2.6.9-R2.6_MODEL_QUALITY_LATENCY_COST_EVALUATION_ACTIVE",
+  "next_action": "DEFINE_R2_6_EVALUATION_CONTRACT_AND_BASELINE",
   "stop_reason": null,
   "product_decision": {
     "id": "DEC-002",
@@ -64,12 +64,30 @@
     "evidence": ".orchestration/evidence/ACP-2.6.9-R2.4-MULTI-ROOM-CONVERSATION.md"
   },
   "r2_5": {
+    "status": "TECHNICAL_PASS_CLOSED",
+    "contract": ".orchestration/contracts/ACP-2.6.9-R2.5-MULTI-ROOM-RESERVATION.md",
+    "critic_amendment": ".orchestration/contracts/ACP-2.6.9-R2.5-INDEPENDENT-CRITIC-AMENDMENT.md",
+    "final_artifact_head": "63e61e153222c77f44061840178d258c52a7875f",
+    "final_tests": "202/202_PASS",
+    "qa": "PASS_RECLOSED_AFTER_INDEPENDENT_CRITIC_REWORK",
+    "pre_critic": "PASS_RECLOSED",
+    "independent_critic": "PASS",
+    "final_critic_head": "aa43456d4e964e3450f3f445273f73be0798da5e",
+    "final_critic_ci_run": 33461563342,
+    "integration_pr": 48,
+    "integration_head": "a2eed3617f5f77c35c653d72c91fbdfcb1eded9a",
+    "post_merge_ci_run": 33461710845,
+    "multi_room_execution": true,
+    "session_scoped_core_idempotency": true,
+    "manual_reconciliation_for_uncertain_compensation": true,
+    "open_p0_p1_p2": "0/0/0",
+    "evidence": ".orchestration/evidence/ACP-2.6.9-R2.5-MULTI-ROOM-RESERVATION-CLOSURE.md"
+  },
+  "r2_6": {
     "status": "IN_PROGRESS_ACTIVE",
-    "multi_room_execution": false,
-    "qa": null,
-    "pre_critic": null,
-    "independent_critic": null,
-    "open_p0_p1_p2": "UNKNOWN_UNTIL_IMPLEMENTATION_QA"
+    "evaluation_contract": null,
+    "baseline": null,
+    "model_comparison": null
   },
   "r2_sequence": [
     "2.6.9-R2.1_RECEPTIONIST_PRODUCT_CONTRACT_AND_ACCEPTANCE_CORPUS",
@@ -99,8 +117,8 @@
     "human_approval_required_for_mutations": true
   },
   "event": {
-    "id": "ACP-2.6.9-R2.4-TECHNICAL-PASS-CLOSED-R2.5-ACTIVE",
+    "id": "ACP-2.6.9-R2.5-TECHNICAL-PASS-CLOSED-R2.6-ACTIVE",
     "type": "SUBSTAGE_TRANSITION",
-    "seq": 19
+    "seq": 20
   }
 }
