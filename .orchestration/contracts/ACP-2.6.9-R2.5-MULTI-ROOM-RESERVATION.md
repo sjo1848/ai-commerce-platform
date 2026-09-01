@@ -120,6 +120,18 @@ The approval token remains bound to:
 
 Approval consumption executes that stored plan without another model routing pass.
 
+## Core idempotency scope
+
+Core-idempotent side-effect results are part of the trusted operational boundary and must use the same scope as approval and ownership.
+
+Invariants:
+- a completed Core-idempotent result may replay only for the exact trusted `tenantId + actorId + sessionId + toolId + canonical input fingerprint` that produced it;
+- reusing the same client idempotency key in another session, even for the same tenant, actor, tool and payload, returns `IDEMPOTENCY_CONFLICT`;
+- a cross-session conflict must not execute a second side effect and must not migrate cached booking IDs, group outcomes or reservation grounding into the new session;
+- the idempotency key remains tenant-prefixed rather than session-prefixed so cross-session reuse is detected as a conflict instead of silently becoming a second operation;
+- downstream child idempotency tokens remain deterministically derived from the trusted root key and are never model/request-authored;
+- approval, Core idempotency and reservation ownership therefore converge on the same session boundary.
+
 ## Conversation state
 
 Server-owned booking grounding is extended to support a group:
@@ -229,7 +241,8 @@ At minimum freeze tests for:
 23. `cancelá la habitación 101` resolves from server-owned booking↔room grounding even when the model proposes an unknown/forged booking ID;
 24. bounded ordinal cancellation (`la primera`) resolves server-side without model booking authority;
 25. an unknown room such as `999` clarifies with no approval and no side effect;
-26. after room `101` was cancelled, repeating an explicit `cancelá la habitación 101` cannot retarget the only remaining booking.
+26. after room `101` was cancelled, repeating an explicit `cancelá la habitación 101` cannot retarget the only remaining booking;
+27. same tenant + actor + tool + payload + client idempotency key from a different session returns `IDEMPOTENCY_CONFLICT`, does not replay the prior result into that session, and does not execute a second side effect.
 
 ## Exit gate
 
