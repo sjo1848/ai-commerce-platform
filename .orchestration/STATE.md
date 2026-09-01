@@ -2,65 +2,72 @@
 
 Phase: `ACP INTEGRATION — PHASE 2.6`
 Task: `ACP-2.6.9-R2-NATURAL-RECEPTIONIST`
-Status: `IN PROGRESS — R2.4 TECHNICAL_PASS / CLOSED`
-Current sub-stage: `2.6.9-R2.5 — MULTI-ROOM RESERVATION ORCHESTRATION — ACTIVE`
-Last closed sub-stage: `2.6.9-R2.4 — MULTI-ROOM CONVERSATION MODEL — TECHNICAL_PASS / CLOSED`
+Status: `IN PROGRESS — R2.5 TECHNICAL_PASS / CLOSED`
+Current sub-stage: `2.6.9-R2.6 — MODEL QUALITY / LATENCY / COST EVALUATION — ACTIVE`
+Last closed sub-stage: `2.6.9-R2.5 — MULTI-ROOM RESERVATION ORCHESTRATION — TECHNICAL_PASS / CLOSED`
 
 ## Why R2 remains open
-Human Product Acceptance remains `REWORK` until the final natural-receptionist staging gate. R2.1 through R2.4 are technically closed; R2.5 now addresses controlled multi-room reservation/cancellation execution while preserving the existing human-approval boundary.
+Human Product Acceptance remains `REWORK` until the final natural-receptionist staging gate. R2.1 through R2.5 are technically closed. R2.6 now evaluates whether the current model/provider path delivers adequate receptionist quality, latency and cost before the final adversarial/staging/product gates.
 
 Canonical R2 contract:
 `.orchestration/contracts/ACP-2.6.9-R2-NATURAL-RECEPTIONIST.md`
 
-R2.4 closure evidence:
-`.orchestration/evidence/ACP-2.6.9-R2.4-MULTI-ROOM-CONVERSATION.md`
+R2.5 closure evidence:
+`.orchestration/evidence/ACP-2.6.9-R2.5-MULTI-ROOM-RESERVATION-CLOSURE.md`
 
 ## R2 execution sequence
 1. `2.6.9-R2.1` — Receptionist Product Contract + Acceptance Corpus — **TECHNICAL_PASS / CLOSED**
 2. `2.6.9-R2.2` — Natural Receptionist Dialogue Layer — **TECHNICAL_PASS / CLOSED**
 3. `2.6.9-R2.3` — Durable Semantic Memory v2 — **TECHNICAL_PASS / CLOSED**
 4. `2.6.9-R2.4` — Multi-Room Conversation Model — **TECHNICAL_PASS / CLOSED**
-5. `2.6.9-R2.5` — Multi-Room Reservation Orchestration — **ACTIVE**
-6. `2.6.9-R2.6` — Model Quality / Latency / Cost Evaluation
+5. `2.6.9-R2.5` — Multi-Room Reservation Orchestration — **TECHNICAL_PASS / CLOSED**
+6. `2.6.9-R2.6` — Model Quality / Latency / Cost Evaluation — **ACTIVE**
 7. `2.6.9-R2.7` — Adversarial QA + Independent Critic
 8. `2.6.9-R2.8` — Real-Model Receptionist Staging E2E
 9. `2.6.9-R2.9` — Human Product Acceptance — Natural Receptionist
 
-## R2.4 final closure
+## R2.5 final closure
 Final substantive Artifact A:
-`c78cc2d1480f0baeb6525f5bfdb51d1bd7ea6229`
+`63e61e153222c77f44061840178d258c52a7875f`
 
 Verification:
-- critic rework workflow `33419842184` — **165/165 PASS**;
-- QA reclosure — **PASS**;
-- Pre-Critic reclosure — **PASS**;
-- Independent Controller Critic comment `5482058912` — **PASS**;
-- final PR-head core-ci `33420205641` — **PASS**;
+- final substantive core-ci `33461399664` / run #434 — **202/202 PASS**;
+- QA V2 — **PASS / RECLOSED AFTER INDEPENDENT CRITIC REWORK**;
+- Pre-Critic — **PASS / RECLOSED**;
+- Independent Critic — **PASS**;
+- final critic evidence head `aa43456d4e964e3450f3f445273f73be0798da5e`;
+- exact-head critic core-ci `33461563342` / run #438 — **PASS**;
 - open P0/P1/P2 = `0/0/0`;
-- PR #46 squash-merged at `bb4b0ec42058fb7292091d3b8ec09e4b3650f6eb`;
-- post-merge main core-ci `33420280296` — **PASS**.
+- PR #48 merged at `a2eed3617f5f77c35c653d72c91fbdfcb1eded9a`;
+- post-merge main core-ci `33461710845` / run #439 — **202/202 PASS**;
+- post-merge typecheck, staging E2 syntax and Wrangler dry-run — **PASS**.
 
-Closed R2.4 invariants:
-- HMS candidate IDs remain the authoritative room grounding;
-- exact IDs/numbers/ordinals plus `las dos` / `la otra` resolve only through bounded server-side rules;
-- invalid or ambiguous room/occupancy references require clarification and cannot execute tools using stale grounding;
-- room-selection state has its own revision/merge protection;
-- stay changes invalidate stale room grounding;
-- multi-room side effects were not introduced in R2.4;
-- single-room Policy/HITL/approval/idempotency/ownership invariants remain green.
+Closed R2.5 invariants:
+- multi-room create scope is derived from server-owned room/date state and revalidated before mutation;
+- multi-room and cancellation writes require exact human confirmation and stored-plan fingerprint binding;
+- Core idempotency is scoped to tenant + actor + session + tool + canonical input fingerprint;
+- downstream child operation tokens and reservation ownership remain server-owned;
+- partial create failure uses explicit compensation semantics and never pretends atomicity;
+- group cancellation verifies ownership before irreversible side effects and preserves failed bookings after partial failure;
+- specific cancellation references resolve from server-owned booking↔room grounding;
+- negated or exclusion language cannot broaden cancellation scope; unsupported subset scope clarifies;
+- primary mutation uncertainty has bounded exact-plan recovery;
+- uncertain compensation is manual-reconciliation-only and cannot issue an automatic recovery approval;
+- LLM/model authority remains limited to interpretation/planning/composition; trusted identity, approval, operation tokens, ownership and HMS truth remain server-side.
 
-## R2.5 active scope
-`2.6.9-R2.5 — Multi-Room Reservation Orchestration` is now the only active R2 substage.
+## R2.6 active scope
+`2.6.9-R2.6 — Model Quality / Latency / Cost Evaluation` is now the only active R2 substage.
 
-Its job is to add controlled execution for several rooms while preserving:
-- one exact human confirmation summary before mutation;
-- exact-plan approval binding;
-- idempotency and ownership per executed operation;
-- explicit partial-failure and compensation semantics;
-- cancellation of one room/booking versus the whole group;
-- no model authority over approval, trusted identity, operation tokens or HMS truth.
+Its job is to evaluate the currently authorized model/provider path against the R2 receptionist corpus and determine whether a different already-affordable model is justified, measuring at minimum:
+- natural receptionist quality;
+- routing/tool-plan correctness;
+- grounded response correctness;
+- latency;
+- input/output tokens and estimated cost;
+- fallback frequency/reasons;
+- operational reliability under the existing deterministic safety boundary.
 
-No multi-room execution is considered accepted until R2.5 itself passes QA, Pre-Critic, Independent Critic and post-merge regressions.
+R2.6 does not authorize production, payments, paid expansion, WhatsApp as a requirement, broader autonomous writes or a second vertical.
 
 ## Gate to Fase 3
 Fase 3 — Alquileres remains blocked until `2.6.9-R2.9` receives explicit human `ACCEPT`.
