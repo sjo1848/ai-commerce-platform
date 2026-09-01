@@ -51,15 +51,24 @@ Policy:
 - human approval required;
 - composite orchestration uses Core idempotency at group level.
 
-Execution:
+Initial execution:
 1. Require a trusted root idempotency key.
 2. Derive deterministic child create tokens server-side; model/user cannot provide them.
 3. Create rooms sequentially so failure boundaries are deterministic and auditable.
-4. Immediately before each child create, re-read transactional HMS availability for the exact approved dates and require that exact child room to remain available.
-5. Bind each successful booking to its original child create token before proceeding.
-6. If a child create, fresh availability gate or ownership bind fails, stop creating further rooms.
-7. Attempt compensation for every prior successful child using its original trusted create token when the current failure is definitive.
-8. Return a structured authoritative outcome; never claim atomicity.
+4. Perform a fresh aggregate HMS availability preflight before the composite starts.
+5. Immediately before each child create, re-read transactional HMS availability for the exact approved dates and require that exact child room to remain available.
+6. Bind each successful booking to its original child create token before proceeding.
+7. If a child create, fresh availability gate or ownership bind fails, stop creating further rooms.
+8. Attempt compensation for every prior successful child using its original trusted create token when the current failure is definitive.
+9. Return a structured authoritative outcome; never claim atomicity.
+
+Trusted recovery execution after `OUTCOME_UNKNOWN` is deliberately different:
+- do **not** repeat aggregate or per-child availability preflights;
+- replay the exact stored ToolPlan with the same root idempotency key and therefore the same deterministic child tokens;
+- an already-committed child may correctly be absent from availability because this same operation now occupies the room, so availability is not authoritative for distinguishing self-commit from third-party conflict during recovery;
+- HMS downstream idempotency is authoritative for an already-committed child and must return its replayed result;
+- a child that never committed still goes through HMS transactional create semantics and may definitively conflict if the room became unavailable;
+- recovery mode is entered only from trusted server-owned approval state (`recoveryAttempt > 0`), never from model/request input.
 
 Allowed outcomes:
 - `confirmed`: every child confirmed; all booking IDs become current active group bookings.
@@ -133,12 +142,12 @@ Tool results, not model prose, update `activeBookingIds[]`.
 
 - `hms.createMultiReservation.roomIds` are always overwritten from canonical R2.4 selected rooms before validation/fingerprinting;
 - multi-room creation requires at least 2 selected canonical rooms;
-- selected rooms must remain within current HMS availability candidates;
+- selected rooms must remain within current HMS availability candidates before approval and on initial execution;
 - unresolved R2.4 room/occupancy issues block execution before approval;
 - dates come from durable semantic state and override model-proposed dates;
 - trusted guest identity is server-injected;
 - booking IDs for group cancellation come from server-owned booking state;
-- model/user cannot inject trusted metadata or child tokens.
+- model/user cannot inject trusted metadata, recovery depth or child tokens.
 
 ## Partial-failure semantics
 
@@ -167,7 +176,8 @@ Rules:
 - webchat recovery must preserve the already-approved exact ToolPlan, original message, root idempotency key and operation fingerprint, issue a fresh single-use recovery challenge, and never reroute the model;
 - recovery depth is trusted server-owned approval state persisted with the challenge; request/model input cannot set, reset or decrement it;
 - at most 3 recovery approval challenges are allowed after the original approved execution; if the outcome remains unknown after the third recovery, automatic recovery stops and manual reconciliation is required;
-- recovery with the same root idempotency key deterministically derives the same child tokens, allowing HMS downstream idempotency to reconcile any mutation that may already have committed.
+- recovery with the same root idempotency key deterministically derives the same child tokens, allowing HMS downstream idempotency to reconcile any mutation that may already have committed;
+- recovery availability checks must not run before exact-token child replay, because this operation's own successful-but-unobserved commits may have removed those rooms from availability; exact-token downstream replay plus transactional create/conflict semantics are the authority in recovery mode.
 
 ## Backward compatibility
 
@@ -200,12 +210,13 @@ At minimum freeze tests for:
 13. forged booking IDs / guest identity / operationToken / approval metadata fail closed;
 14. stale state cannot resurrect cancelled group bookings;
 15. R2.4 165-test baseline plus all prior security regressions remain green;
-16. room availability is revalidated immediately before every child create, not only once before the group;
+16. initial execution revalidates room availability immediately before every child create, not only once before the group;
 17. one uncertain create/cancel response is reconciled by exact-token replay;
 18. repeated transport uncertainty returns `OUTCOME_UNKNOWN` and stops later child mutations;
 19. uncertain compensation never produces a guessed lifecycle outcome;
 20. recovery after `OUTCOME_UNKNOWN` executes the same stored ToolPlan with the same root idempotency key and no model reroute;
-21. forged client recovery counters cannot reset the server-owned recovery depth, and recovery exhausts after the third challenge.
+21. forged client recovery counters cannot reset the server-owned recovery depth, and recovery exhausts after the third challenge;
+22. realistic recovery succeeds when this operation's already-committed children have disappeared from availability, by replaying the exact child tokens without recovery availability preflight.
 
 ## Exit gate
 
