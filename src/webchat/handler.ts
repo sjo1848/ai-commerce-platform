@@ -1,12 +1,12 @@
 import { ApprovalRequiredError, CoreError } from "../core/errors.js";
 import type { Actor, ToolExecutionMeta, ToolPlan } from "../core/types.js";
 import type { AgentCoreRuntime } from "../core/runtime.js";
-import type { ApprovalChallengeInput, ApprovalStore } from "./approval.js";
+import type { ApprovalChallengeInput, ApprovalConsumption, ApprovalStore } from "./approval.js";
 
 const HTML = `<!doctype html>
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>AI Commerce Webchat</title></head>
 <body><main><h1>Asistente</h1><form id="f"><input id="m" maxlength="2000" placeholder="Ej: somos dos y queremos quedarnos del 10 al 12 de febrero de 2034"><button>Enviar</button></form><pre id="o"></pre></main>
-<script>let sessionId;document.getElementById('f').addEventListener('submit',async(e)=>{e.preventDefault();const message=document.getElementById('m').value;const operationKey=crypto.randomUUID();const send=async(path,approvalToken)=>{const r=await fetch(path,{method:'POST',headers:{'content-type':'application/json','Idempotency-Key':operationKey},body:JSON.stringify({message,sessionId,...(approvalToken?{approvalToken}:{})})});const j=await r.json();sessionId=j.sessionId||sessionId;if(path==='/api/chat'&&r.status===409&&j?.error?.code==='APPROVAL_REQUIRED'&&j?.approvalToken&&confirm(j.approvalSummary||'Esta acción modificará una reserva en HMS. ¿Confirmar?'))return send('/api/approve',j.approvalToken);document.getElementById('o').textContent=JSON.stringify(j,null,2);};await send('/api/chat');});</script></body></html>`;
+<script>let sessionId;document.getElementById('f').addEventListener('submit',async(e)=>{e.preventDefault();const message=document.getElementById('m').value;const operationKey=crypto.randomUUID();const send=async(path,approvalToken)=>{const r=await fetch(path,{method:'POST',headers:{'content-type':'application/json','Idempotency-Key':operationKey},body:JSON.stringify({message,sessionId,...(approvalToken?{approvalToken}:{})})});const j=await r.json();sessionId=j.sessionId||sessionId;if(path==='/api/chat'&&r.status===409&&j?.error?.code==='APPROVAL_REQUIRED'&&j?.approvalToken&&confirm(j.approvalSummary||'Esta acción modificará una reserva en HMS. ¿Confirmar?'))return send('/api/approve',j.approvalToken);if(path==='/api/approve'&&r.status===503&&j?.error?.code==='OUTCOME_UNKNOWN'&&j?.recoveryApprovalToken&&confirm('HMS no pudo confirmar el resultado. ¿Reintentar exactamente la misma operación?'))return send('/api/approve',j.recoveryApprovalToken);document.getElementById('o').textContent=JSON.stringify(j,null,2);};await send('/api/chat');});</script></body></html>`;
 
 function json(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
@@ -68,6 +68,7 @@ export function createWebchatHandler(runtime: AgentCoreRuntime, config: WebchatH
     let stage = "request";
     let activeSessionId: string | undefined;
     let approvalCandidate: ApprovalChallengeInput | undefined;
+    let consumedApproval: ApprovalConsumption | undefined;
 
     try {
       stage = "parse_request";
@@ -122,15 +123,15 @@ export function createWebchatHandler(runtime: AgentCoreRuntime, config: WebchatH
       if (approvalRoute) {
         stage = "consume_approval";
         if (!config.approvalStore) throw new CoreError("FORBIDDEN", "Approval flow is not enabled", 403);
-        const approved = await config.approvalStore.consume({
+        consumedApproval = await config.approvalStore.consume({
           ...approvalCandidate,
           token: (body.approvalToken as string).trim(),
-        });
-        if (!approved) throw new CoreError("FORBIDDEN", "Approval challenge is invalid or expired", 403);
+        }) ?? undefined;
+        if (!consumedApproval) throw new CoreError("FORBIDDEN", "Approval challenge is invalid or expired", 403);
         trustedMeta.humanApproved = true;
-        trustedMeta.approvedOperationFingerprint = approved.operationFingerprint;
+        trustedMeta.approvedOperationFingerprint = consumedApproval.operationFingerprint;
         stage = "execute_approved_plan";
-        return json(await runtime.orchestrator.executeApprovedPlan(approved.plan, context, trustedMeta));
+        return json(await runtime.orchestrator.executeApprovedPlan(consumedApproval.plan, context, trustedMeta));
       }
 
       stage = "orchestrator";
@@ -173,6 +174,38 @@ export function createWebchatHandler(runtime: AgentCoreRuntime, config: WebchatH
             event: "approval_challenge_issue_failed",
             requestId,
             errorName: approvalError instanceof Error ? approvalError.name : "UnknownError",
+          }));
+          return json({ error: { code: "INTERNAL_ERROR", message: "Internal error" } }, 500);
+        }
+      }
+
+      if (
+        error instanceof CoreError
+        && error.code === "OUTCOME_UNKNOWN"
+        && approvalRoute
+        && approvalCandidate
+        && consumedApproval
+        && config.approvalStore
+      ) {
+        try {
+          stage = "issue_recovery_approval";
+          const recovery = await config.approvalStore.issue({
+            ...approvalCandidate,
+            operationFingerprint: consumedApproval.operationFingerprint,
+            plan: consumedApproval.plan,
+          });
+          return json({
+            error: { code: error.code, message: error.message },
+            sessionId: activeSessionId,
+            recoveryApprovalToken: recovery.token,
+            recoveryApprovalExpiresAt: recovery.expiresAt,
+            approvalSummary: approvalSummaryForPlan(consumedApproval.plan),
+          }, error.status);
+        } catch (recoveryError) {
+          console.error(JSON.stringify({
+            event: "approval_recovery_issue_failed",
+            requestId,
+            errorName: recoveryError instanceof Error ? recoveryError.name : "UnknownError",
           }));
           return json({ error: { code: "INTERNAL_ERROR", message: "Internal error" } }, 500);
         }
