@@ -122,6 +122,52 @@ test("Workers AI provider preserves only a structured AiError internal code, nev
   );
 });
 
+test("Workers AI provider falls back to a bounded AiError HTTP category when internal code is unavailable", async () => {
+  const ai = {
+    async run() {
+      const error = new Error("private upstream detail token=do-not-log");
+      error.name = "AiError";
+      error.httpCode = 429;
+      error.description = "private capacity diagnostic token=do-not-log";
+      throw error;
+    },
+  };
+  const provider = new WorkersAiModelProvider(ai);
+  await assert.rejects(
+    provider.completeStructured(request),
+    (error) => {
+      assert.equal(error?.name, "ModelProviderError");
+      assert.equal(error?.causeName, "CloudflareAiHttp429");
+      assert.equal(error?.message, "Workers AI inference failed");
+      assert.doesNotMatch(error?.message ?? "", /token=|private|capacity diagnostic/i);
+      return true;
+    },
+  );
+});
+
+test("Workers AI provider maps the public daily-allocation AiError wording without exposing provider text", async () => {
+  const ai = {
+    async run() {
+      const error = new Error("AiError");
+      error.name = "AiError";
+      error.httpCode = 429;
+      error.description = "You have used up your daily free allocation of 10,000 neurons. token=do-not-log";
+      throw error;
+    },
+  };
+  const provider = new WorkersAiModelProvider(ai);
+  await assert.rejects(
+    provider.completeStructured(request),
+    (error) => {
+      assert.equal(error?.name, "ModelProviderError");
+      assert.equal(error?.causeName, "CloudflareError3036");
+      assert.equal(error?.message, "Workers AI inference failed");
+      assert.doesNotMatch(error?.message ?? "", /token=|daily free allocation|neurons/i);
+      return true;
+    },
+  );
+});
+
 test("invalid timeout configuration fails at construction", () => {
   const ai = { async run() { return { response: { ok: true } }; } };
   assert.throws(() => new WorkersAiModelProvider(ai, { timeoutMs: 100 }), /timeout must be between/i);
