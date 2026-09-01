@@ -19,6 +19,7 @@ import {
 import {
   ConversationBackedReservationGroupStateStore,
   RESERVATION_GROUP_STATE_TOOL_ID,
+  type ReservationGroupBooking,
   type ReservationGroupState,
   type ReservationGroupStateStore,
 } from "./reservation-group-state.js";
@@ -186,10 +187,76 @@ function bookingIdsFromData(data: unknown): string[] {
   return stringList(data.bookingIds);
 }
 
+function createdBookingIdsFromData(data: unknown): string[] {
+  if (!isRecord(data)) return [];
+  return stringList(data.createdBookingIds);
+}
+
 function bookingIdFromData(data: unknown): string | undefined {
   if (!isRecord(data) || typeof data.bookingId !== "string") return undefined;
   const value = data.bookingId.trim();
   return value || undefined;
+}
+
+function roomIdFromData(data: unknown): string | undefined {
+  if (!isRecord(data) || typeof data.roomId !== "string") return undefined;
+  const value = data.roomId.trim();
+  return value || undefined;
+}
+
+function roomNumberForRoomId(state: Readonly<ConversationState>, roomId: string): string | undefined {
+  const room = state.availabilityRooms?.find((candidate) => candidate.id === roomId);
+  return room?.roomNumber?.trim() || undefined;
+}
+
+function sameBookingGrounding(left: readonly ReservationGroupBooking[], right: readonly ReservationGroupBooking[]): boolean {
+  return left.length === right.length && left.every((booking, index) => {
+    const other = right[index];
+    return Boolean(other)
+      && booking.bookingId === other.bookingId
+      && booking.roomId === other.roomId
+      && booking.roomNumber === other.roomNumber;
+  });
+}
+
+type SpecificBookingResolution =
+  | { kind: "none" }
+  | { kind: "match"; bookingId: string }
+  | { kind: "invalid" }
+  | { kind: "ambiguous" };
+
+function resolveSpecificBookingReference(message: string, group: Readonly<ReservationGroupState>): SpecificBookingResolution {
+  if (group.activeBookings.length === 0) return { kind: "none" };
+  const text = normalizeText(message);
+  const roomMatches = group.activeBookings.filter((booking) => {
+    const roomNumber = booking.roomNumber?.trim();
+    if (!roomNumber) return false;
+    const escaped = roomNumber.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`(?:^|[^0-9])${escaped}(?:[^0-9]|$)`).test(text);
+  });
+  if (roomMatches.length === 1) return { kind: "match", bookingId: roomMatches[0].bookingId };
+  if (roomMatches.length > 1) return { kind: "ambiguous" };
+
+  const ordinalWords = [
+    /\b(?:primera|primero|primer)\b/,
+    /\b(?:segunda|segundo)\b/,
+    /\b(?:tercera|tercero|tercer)\b/,
+    /\b(?:cuarta|cuarto)\b/,
+    /\b(?:quinta|quinto)\b/,
+  ];
+  const ordinalIndexes = ordinalWords
+    .map((pattern, index) => pattern.test(text) ? index : -1)
+    .filter((index) => index >= 0);
+  if (ordinalIndexes.length === 1) {
+    const booking = group.activeBookings[ordinalIndexes[0]];
+    return booking ? { kind: "match", bookingId: booking.bookingId } : { kind: "invalid" };
+  }
+  if (ordinalIndexes.length > 1) return { kind: "ambiguous" };
+
+  const explicitRoom = text.match(/\b(?:habitacion|room|pieza)\s*(?:n(?:ro)?\.?\s*)?(\d{1,6})\b/)
+    ?? text.match(/\b(?:la|el)\s+(\d{1,4})\b/);
+  if (explicitRoom) return { kind: "invalid" };
+  return { kind: "none" };
 }
 
 export class ChatOrchestrator {
@@ -214,32 +281,65 @@ export class ChatOrchestrator {
   private async persistGroupOutcome(plan: ToolPlan, data: unknown, context: ExecutionContext): Promise<void> {
     const current = await this.reservationGroupState.get(context.session.id);
     let activeBookingIds = [...current.activeBookingIds];
+    let activeBookings = current.activeBookings.map((booking) => ({ ...booking }));
     let status: ReservationGroupState["status"] | undefined = current.status;
 
     if (plan.toolId === "hms.createMultiReservation") {
       activeBookingIds = bookingIdsFromData(data);
+      const createdBookingIds = createdBookingIdsFromData(data);
+      const input = isRecord(plan.input) ? plan.input : {};
+      const roomIds = stringList(input.roomIds);
+      const conversationState = await this.conversationState.get(context.session.id);
+      const createdGrounding = createdBookingIds.map((bookingId, index): ReservationGroupBooking => {
+        const roomId = roomIds[index];
+        const roomNumber = roomId ? roomNumberForRoomId(conversationState, roomId) : undefined;
+        return {
+          bookingId,
+          ...(roomId ? { roomId } : {}),
+          ...(roomNumber ? { roomNumber } : {}),
+        };
+      });
+      const createdById = new Map(createdGrounding.map((booking) => [booking.bookingId, booking]));
+      const currentById = new Map(current.activeBookings.map((booking) => [booking.bookingId, booking]));
+      activeBookings = activeBookingIds.map((bookingId) => createdById.get(bookingId) ?? currentById.get(bookingId) ?? { bookingId });
       if (isRecord(data) && data.outcome === "confirmed") status = "confirmed";
       else if (isRecord(data) && data.outcome === "compensation_failed") status = "compensation_failed";
       else status = undefined;
     } else if (plan.toolId === "hms.cancelMultiReservation") {
       activeBookingIds = bookingIdsFromData(data);
+      activeBookings = current.activeBookings.filter((booking) => activeBookingIds.includes(booking.bookingId));
       status = activeBookingIds.length ? "partial_failure" : undefined;
     } else if (plan.toolId === "hms.cancelReservation") {
       const cancelled = isRecord(plan.input) && typeof plan.input.bookingId === "string" ? plan.input.bookingId.trim() : undefined;
-      if (cancelled) activeBookingIds = activeBookingIds.filter((bookingId) => bookingId !== cancelled);
+      if (cancelled) {
+        activeBookingIds = activeBookingIds.filter((bookingId) => bookingId !== cancelled);
+        activeBookings = activeBookings.filter((booking) => booking.bookingId !== cancelled);
+      }
       status = activeBookingIds.length ? current.status : undefined;
     } else if (plan.toolId === "hms.createReservation" && activeBookingIds.length === 0) {
       const bookingId = bookingIdFromData(data);
-      if (bookingId) activeBookingIds = [bookingId];
+      if (bookingId) {
+        const conversationState = await this.conversationState.get(context.session.id);
+        const roomId = roomIdFromData(data) ?? (isRecord(plan.input) && typeof plan.input.roomId === "string" ? plan.input.roomId.trim() : "");
+        const roomNumber = roomId ? roomNumberForRoomId(conversationState, roomId) : undefined;
+        activeBookingIds = [bookingId];
+        activeBookings = [{
+          bookingId,
+          ...(roomId ? { roomId } : {}),
+          ...(roomNumber ? { roomNumber } : {}),
+        }];
+      }
     } else {
       return;
     }
 
     const changed = activeBookingIds.length !== current.activeBookingIds.length
       || activeBookingIds.some((value, index) => value !== current.activeBookingIds[index])
+      || !sameBookingGrounding(activeBookings, current.activeBookings)
       || status !== current.status;
     await this.reservationGroupState.put(context.session.id, {
       activeBookingIds,
+      activeBookings,
       revision: current.revision + (changed ? 1 : 0),
       ...(status ? { status } : {}),
     });
@@ -434,14 +534,24 @@ export class ChatOrchestrator {
         planToolId = "hms.cancelMultiReservation";
         planInput = { bookingIds: [...groundedBookingIds] };
       } else {
-        const candidate = isRecord(route.plan.input) && typeof route.plan.input.bookingId === "string"
-          ? route.plan.input.bookingId.trim()
-          : "";
-        if (candidate && groundedBookingIds.includes(candidate)) {
+        const reference = resolveSpecificBookingReference(normalized, groupState);
+        if (reference.kind === "match") {
           planToolId = "hms.cancelReservation";
-          planInput = { bookingId: candidate };
+          planInput = { bookingId: reference.bookingId };
+        } else if (reference.kind === "invalid") {
+          return this.clarification("No encuentro esa habitación entre las reservas activas. Indicame cuál querés cancelar.", normalized, context, ["booking"]);
+        } else if (reference.kind === "ambiguous") {
+          return this.clarification("La referencia coincide con más de una reserva. Indicame una habitación específica.", normalized, context, ["booking"]);
         } else {
-          return this.clarification("Tenés varias reservas activas. ¿Querés cancelar una reserva específica o todas?", normalized, context, ["booking"]);
+          const candidate = isRecord(route.plan.input) && typeof route.plan.input.bookingId === "string"
+            ? route.plan.input.bookingId.trim()
+            : "";
+          if (candidate && groundedBookingIds.includes(candidate)) {
+            planToolId = "hms.cancelReservation";
+            planInput = { bookingId: candidate };
+          } else {
+            return this.clarification("Tenés varias reservas activas. ¿Querés cancelar una reserva específica o todas?", normalized, context, ["booking"]);
+          }
         }
       }
     }
