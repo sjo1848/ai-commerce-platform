@@ -105,71 +105,75 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -f /tmp/r28-r4-tail.log
-          timeout 180s script -qefc \
-            "npx wrangler tail '$WORKER_NAME' --format=json --method POST" \
-            /tmp/r28-r4-tail.log \
-            >/dev/null 2>&1 &
-          TAIL_PID=$!
-          trap 'kill "$TAIL_PID" 2>/dev/null || true' EXIT
 
-          connected=0
-          for attempt in $(seq 1 30); do
-            if [[ -s /tmp/r28-r4-tail.log ]] && grep -Fq 'Connected to ' /tmp/r28-r4-tail.log && grep -Fq 'waiting for logs' /tmp/r28-r4-tail.log; then
-              connected=1
-              echo "Live tail connection proved on attempt $attempt."
-              break
-            fi
-            if ! kill -0 "$TAIL_PID" 2>/dev/null; then
-              echo "R2.8.4 OBSERVABILITY_INVALID: wrangler tail exited before connection readiness" >&2
-              cat /tmp/r28-r4-tail.log >&2 || true
-              exit 1
-            fi
-            sleep 1
-          done
-          if [[ "$connected" -ne 1 ]]; then
-            echo "R2.8.4 OBSERVABILITY_INVALID: wrangler tail never reported connection readiness" >&2
-            cat /tmp/r28-r4-tail.log >&2 || true
-            exit 1
-          fi
-
+          # Phase A: prove that a foreground Wrangler tail really receives an event.
           probe_path="/__r28-tail-probe?run=${GITHUB_RUN_ID}"
-          probe_status="$(curl -sS --max-time 10 -X POST \
-            -o /tmp/r28-r4-tail-probe.txt \
-            -w '%{http_code}' \
-            "$AI_COMMERCE_STAGING_URL$probe_path" || true)"
-          if [[ "$probe_status" != "404" ]]; then
-            echo "R2.8.4 OBSERVABILITY_INVALID: attachment probe expected 404, got $probe_status" >&2
+          rm -f /tmp/r28-r4-probe-tail.log /tmp/r28-r4-tail-probe.txt /tmp/r28-r4-probe-status.txt
+          (
+            sleep 4
+            status="$(curl -sS --max-time 10 -X POST \
+              -o /tmp/r28-r4-tail-probe.txt \
+              -w '%{http_code}' \
+              "$AI_COMMERCE_STAGING_URL$probe_path" || true)"
+            printf '%s' "$status" > /tmp/r28-r4-probe-status.txt
+          ) &
+          PROBE_PID=$!
+
+          set +e
+          timeout 15s script -qefc \
+            "npx wrangler tail '$WORKER_NAME' --format=json --method POST" \
+            /tmp/r28-r4-probe-tail.log
+          PROBE_TAIL_CODE=$?
+          set -e
+          wait "$PROBE_PID"
+
+          if [[ ! -f /tmp/r28-r4-probe-status.txt || "$(cat /tmp/r28-r4-probe-status.txt)" != "404" ]]; then
+            echo "R2.8.4 OBSERVABILITY_INVALID: foreground attachment probe did not return expected 404" >&2
             cat /tmp/r28-r4-tail-probe.txt >&2 || true
             exit 1
           fi
+          if [[ "$PROBE_TAIL_CODE" -ne 0 && "$PROBE_TAIL_CODE" -ne 124 ]]; then
+            echo "R2.8.4 OBSERVABILITY_INVALID: foreground wrangler tail exited unexpectedly ($PROBE_TAIL_CODE)" >&2
+            cat /tmp/r28-r4-probe-tail.log >&2 || true
+            exit 1
+          fi
+          if ! grep -Fq "$probe_path" /tmp/r28-r4-probe-tail.log; then
+            echo "R2.8.4 OBSERVABILITY_INVALID: foreground wrangler tail did not capture the non-LLM POST probe" >&2
+            cat /tmp/r28-r4-probe-tail.log >&2 || true
+            exit 1
+          fi
+          echo "Foreground live-tail transport proved before any model inference."
 
-          attached=0
-          for attempt in $(seq 1 20); do
-            if grep -Fq "$probe_path" /tmp/r28-r4-tail.log; then
-              attached=1
-              echo "Live tail attachment proved on attempt $attempt."
-              break
-            fi
-            if ! kill -0 "$TAIL_PID" 2>/dev/null; then
-              echo "R2.8.4 OBSERVABILITY_INVALID: wrangler tail exited before attachment proof" >&2
-              cat /tmp/r28-r4-tail.log >&2 || true
-              exit 1
-            fi
-            sleep 1
-          done
-          if [[ "$attached" -ne 1 ]]; then
-            echo "R2.8.4 OBSERVABILITY_INVALID: connected live tail did not capture the non-LLM POST probe" >&2
+          # Phase B: with the transport proved, capture the complete real-model corpus.
+          rm -f /tmp/r28-r4-tail.log /tmp/r28-r4-report.json /tmp/r28-r4-dialogue-code.txt
+          (
+            sleep 4
+            set +e
+            node scripts/r2.8-multi-room-dialogue.mjs > /tmp/r28-r4-report.json 2>&1
+            code=$?
+            set -e
+            printf '%s' "$code" > /tmp/r28-r4-dialogue-code.txt
+          ) &
+          DIALOGUE_PID=$!
+
+          set +e
+          timeout 35s script -qefc \
+            "npx wrangler tail '$WORKER_NAME' --format=json --method POST" \
+            /tmp/r28-r4-tail.log
+          DIALOGUE_TAIL_CODE=$?
+          set -e
+          wait "$DIALOGUE_PID"
+
+          if [[ "$DIALOGUE_TAIL_CODE" -ne 0 && "$DIALOGUE_TAIL_CODE" -ne 124 ]]; then
+            echo "R2.8.4 OBSERVABILITY_INVALID: corpus wrangler tail exited unexpectedly ($DIALOGUE_TAIL_CODE)" >&2
             cat /tmp/r28-r4-tail.log >&2 || true
             exit 1
           fi
-
-          set +e
-          node scripts/r2.8-multi-room-dialogue.mjs > /tmp/r28-r4-report.json 2>&1
-          DIALOGUE_CODE=$?
-          set -e
-          sleep 4
-          kill "$TAIL_PID" 2>/dev/null || true
+          if [[ ! -f /tmp/r28-r4-dialogue-code.txt ]]; then
+            echo "R2.8.4 harness failed to preserve dialogue exit code" >&2
+            exit 1
+          fi
+          DIALOGUE_CODE="$(cat /tmp/r28-r4-dialogue-code.txt)"
 
           echo '--- multi-room dialogue report ---'
           cat /tmp/r28-r4-report.json || true
@@ -187,7 +191,7 @@ jobs:
           const model = JSON.parse(process.env.MODEL_TELEMETRY);
           const audit = JSON.parse(process.env.AUDIT_TELEMETRY);
           if (model.modelInferences === 0 && model.modelFallbacks === 0 && audit.auditEvents === 0) {
-            throw new Error('R2.8.4 OBSERVABILITY_INVALID: connected tail captured probe but no model or audit runtime evidence');
+            throw new Error('R2.8.4 OBSERVABILITY_INVALID: proved foreground tail captured no model or audit runtime evidence');
           }
           NODE
 
@@ -254,9 +258,10 @@ jobs:
           name: r2.8-multi-room-dialogue-${{ github.run_id }}
           path: |
             /tmp/r28-r4-deploy.log
-            /tmp/r28-r4-report.json
-            /tmp/r28-r4-tail.log
+            /tmp/r28-r4-probe-tail.log
             /tmp/r28-r4-tail-probe.txt
+            /tmp/r28-r4-tail.log
+            /tmp/r28-r4-report.json
             /tmp/r28-r4-model-telemetry.json
             /tmp/r28-r4-audit-telemetry.json
           if-no-files-found: warn
