@@ -58,6 +58,18 @@ jobs:
           set -euo pipefail
           npx wrangler deploy --dry-run
           npx wrangler deploy | tee /tmp/r28-r4-deploy.log
+          version_id="$(node - <<'NODE'
+          const fs = require('fs');
+          const text = fs.readFileSync('/tmp/r28-r4-deploy.log', 'utf8');
+          const matches = [...text.matchAll(/Current Version ID:\s*([0-9a-f-]{36})/gi)];
+          const value = matches.at(-1)?.[1];
+          if (!value) process.exit(2);
+          process.stdout.write(value);
+          NODE
+          )"
+          test -n "$version_id"
+          echo "R28_VERSION_ID=$version_id" >> "$GITHUB_ENV"
+          echo "Exact staging Version ID: $version_id"
 
       - name: Resolve workers.dev URL
         shell: bash
@@ -92,11 +104,48 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          test -n "$R28_VERSION_ID"
           : > /tmp/r28-r4-tail.log
-          timeout 180s npx wrangler tail "$WORKER_NAME" --format=json --method POST > /tmp/r28-r4-tail.log 2>&1 &
+          timeout 180s npx wrangler tail "$WORKER_NAME" \
+            --format=json \
+            --method POST \
+            --sampling-rate 1 \
+            --version-id "$R28_VERSION_ID" \
+            > /tmp/r28-r4-tail.log 2>&1 &
           TAIL_PID=$!
           trap 'kill "$TAIL_PID" 2>/dev/null || true' EXIT
           sleep 4
+
+          probe_path="/__r28-tail-probe?run=${GITHUB_RUN_ID}"
+          probe_status="$(curl -sS --max-time 10 -X POST \
+            -o /tmp/r28-r4-tail-probe.txt \
+            -w '%{http_code}' \
+            "$AI_COMMERCE_STAGING_URL$probe_path" || true)"
+          if [[ "$probe_status" != "404" ]]; then
+            echo "R2.8.4 OBSERVABILITY_INVALID: attachment probe expected 404, got $probe_status" >&2
+            cat /tmp/r28-r4-tail-probe.txt >&2 || true
+            exit 1
+          fi
+
+          attached=0
+          for attempt in $(seq 1 12); do
+            if grep -Fq "$probe_path" /tmp/r28-r4-tail.log; then
+              attached=1
+              echo "Exact-version tail attachment proved on attempt $attempt."
+              break
+            fi
+            if ! kill -0 "$TAIL_PID" 2>/dev/null; then
+              echo "R2.8.4 OBSERVABILITY_INVALID: wrangler tail exited before attachment proof" >&2
+              cat /tmp/r28-r4-tail.log >&2 || true
+              exit 1
+            fi
+            sleep 1
+          done
+          if [[ "$attached" -ne 1 ]]; then
+            echo "R2.8.4 OBSERVABILITY_INVALID: exact-version tail did not capture the non-LLM POST probe" >&2
+            cat /tmp/r28-r4-tail.log >&2 || true
+            exit 1
+          fi
 
           set +e
           node scripts/r2.8-multi-room-dialogue.mjs > /tmp/r28-r4-report.json 2>&1
@@ -121,7 +170,7 @@ jobs:
           const model = JSON.parse(process.env.MODEL_TELEMETRY);
           const audit = JSON.parse(process.env.AUDIT_TELEMETRY);
           if (model.modelInferences === 0 && model.modelFallbacks === 0 && audit.auditEvents === 0) {
-            throw new Error('R2.8.4 OBSERVABILITY_INVALID: wrangler tail captured no model or audit runtime evidence');
+            throw new Error('R2.8.4 OBSERVABILITY_INVALID: attached exact-version tail captured no model or audit runtime evidence');
           }
           NODE
 
@@ -190,6 +239,7 @@ jobs:
             /tmp/r28-r4-deploy.log
             /tmp/r28-r4-report.json
             /tmp/r28-r4-tail.log
+            /tmp/r28-r4-tail-probe.txt
             /tmp/r28-r4-model-telemetry.json
             /tmp/r28-r4-audit-telemetry.json
           if-no-files-found: warn
