@@ -189,6 +189,22 @@ export function createWebchatHandler(runtime: AgentCoreRuntime, config: WebchatH
       if (
         error instanceof CoreError
         && error.code === "OUTCOME_UNKNOWN"
+        && (error as CoreError & { automaticRecoveryAllowed?: boolean }).automaticRecoveryAllowed === false
+        && approvalRoute
+        && approvalCandidate
+        && consumedApproval
+      ) {
+        return json({
+          error: { code: error.code, message: error.message },
+          sessionId: activeSessionId,
+          recoveryExhausted: true,
+          manualReconciliationRequired: true,
+        }, error.status);
+      }
+
+      if (
+        error instanceof CoreError
+        && error.code === "OUTCOME_UNKNOWN"
         && approvalRoute
         && approvalCandidate
         && consumedApproval
