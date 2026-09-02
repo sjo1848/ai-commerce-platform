@@ -24,9 +24,8 @@ const multiReservationTool = {
   risk: "write",
 };
 
-test("R2.8.4 fresh Codex P2: negated room reference is excluded from corrected final selection", async () => {
-  const router = new DeterministicModelRouter();
-  const state = {
+function state() {
+  return {
     stay: { checkIn: "2030-01-01", checkOut: "2030-01-03", guests: 2 },
     availabilityRoomIds: [roomId101, roomId102],
     availabilityRooms: [
@@ -35,17 +34,36 @@ test("R2.8.4 fresh Codex P2: negated room reference is excluded from corrected f
     ],
     selectedRoomIds: [],
   };
+}
 
+test("R2.8.4 fresh Codex P2: negated room reference is excluded from corrected final selection", async () => {
+  const router = new DeterministicModelRouter();
   const result = await router.route(
     "No la 101; quiero reservar la 102.",
     {},
     [reservationTool, multiReservationTool],
     [],
-    state,
+    state(),
   );
 
   assert.equal(result.kind, "tool");
   assert.equal(result.plan.toolId, "hms.createReservation");
   assert.equal(result.plan.input.roomId, roomId102);
   assert.deepEqual(result.statePatch?.selectedRoomIds, [roomId102]);
+});
+
+test("R2.8.4 fresh Codex P2: inline negation excludes the immediately following room mention", async () => {
+  const router = new DeterministicModelRouter();
+  const result = await router.route(
+    "Quiero reservar la 101 y no la 102.",
+    {},
+    [reservationTool, multiReservationTool],
+    [],
+    state(),
+  );
+
+  assert.equal(result.kind, "tool");
+  assert.equal(result.plan.toolId, "hms.createReservation");
+  assert.equal(result.plan.input.roomId, roomId101);
+  assert.deepEqual(result.statePatch?.selectedRoomIds, [roomId101]);
 });
