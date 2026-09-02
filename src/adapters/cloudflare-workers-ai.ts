@@ -8,6 +8,7 @@ export interface WorkersAiBinding {
 export const DEFAULT_WORKERS_AI_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 export const R2_6_CANDIDATE_MODEL = "@cf/openai/gpt-oss-20b";
 const DEFAULT_TIMEOUT_MS = 8_000;
+const KNOWN_WORKERS_AI_ERROR_CODES = new Set(["3007", "3036", "3040"]);
 
 export const WORKERS_AI_PRICING_USD_PER_MILLION: Readonly<Record<string, Readonly<{ input: number; output: number }>>> = {
   [DEFAULT_WORKERS_AI_MODEL]: { input: 0.293, output: 2.253 },
@@ -38,6 +39,65 @@ function normalizedTimeout(value: number | undefined): number {
     throw new Error("Workers AI timeout must be between 250ms and 30000ms");
   }
   return Math.floor(timeout);
+}
+
+function knownWorkersAiErrorCode(error: unknown): string | undefined {
+  if (isRecord(error)) {
+    for (const field of ["code", "internalCode", "errorCode"]) {
+      const raw = error[field];
+      const code = typeof raw === "number" && Number.isInteger(raw) ? String(raw) : typeof raw === "string" ? raw.trim() : undefined;
+      if (code && KNOWN_WORKERS_AI_ERROR_CODES.has(code)) return code;
+    }
+  }
+  if (error instanceof Error) {
+    const match = error.message.match(/\b(3007|3036|3040)\b/);
+    if (match?.[1] && KNOWN_WORKERS_AI_ERROR_CODES.has(match[1])) return match[1];
+  }
+  return undefined;
+}
+
+function structuredAiErrorCode(error: unknown): string | undefined {
+  if (!(error instanceof Error) || error.name !== "AiError" || !isRecord(error)) return undefined;
+  const raw = error.internalCode;
+  const code = typeof raw === "number" && Number.isInteger(raw)
+    ? String(raw)
+    : typeof raw === "string" && /^\d{4}$/.test(raw.trim())
+      ? raw.trim()
+      : undefined;
+  return code && /^\d{4}$/.test(code) ? code : undefined;
+}
+
+function publicWorkersAiErrorCodeByText(error: unknown): string | undefined {
+  if (!(error instanceof Error) || error.name !== "AiError") return undefined;
+  const description = isRecord(error) && typeof error.description === "string" ? error.description : undefined;
+  for (const value of [error.message, description]) {
+    if (typeof value === "string" && /used up your daily free allocation/i.test(value)) return "3036";
+  }
+  return undefined;
+}
+
+function structuredAiErrorHttpCode(error: unknown): string | undefined {
+  if (!(error instanceof Error) || error.name !== "AiError" || !isRecord(error)) return undefined;
+  const raw = error.httpCode;
+  const code = typeof raw === "number" && Number.isInteger(raw)
+    ? raw
+    : typeof raw === "string" && /^\d{3}$/.test(raw.trim())
+      ? Number(raw.trim())
+      : undefined;
+  return code !== undefined && code >= 400 && code <= 599 ? String(code) : undefined;
+}
+
+function boundedErrorName(error: unknown): string {
+  const knownCode = knownWorkersAiErrorCode(error);
+  if (knownCode) return `CloudflareError${knownCode}`;
+  const aiErrorCode = structuredAiErrorCode(error);
+  if (aiErrorCode) return `CloudflareAiError${aiErrorCode}`;
+  const publicCode = publicWorkersAiErrorCodeByText(error);
+  if (publicCode) return `CloudflareError${publicCode}`;
+  const aiHttpCode = structuredAiErrorHttpCode(error);
+  if (aiHttpCode) return `CloudflareAiHttp${aiHttpCode}`;
+  if (error instanceof Error && /^[A-Za-z][A-Za-z0-9_.:-]{0,63}$/.test(error.name)) return error.name;
+  return "UnknownError";
 }
 
 export class WorkersAiModelProvider implements ModelProvider {
@@ -108,12 +168,12 @@ export class WorkersAiModelProvider implements ModelProvider {
       const raw = await this.runBounded(request);
 
       if (!isRecord(raw) || !("response" in raw)) {
-        throw new ModelProviderError("Workers AI returned an invalid structured response");
+        throw new ModelProviderError("Workers AI returned an invalid structured response", "InvalidStructuredResponse");
       }
       let value: unknown = raw.response;
       if (typeof value === "string") {
         try { value = JSON.parse(value) as unknown; }
-        catch { throw new ModelProviderError("Workers AI returned non-JSON structured output"); }
+        catch { throw new ModelProviderError("Workers AI returned non-JSON structured output", "NonJsonStructuredOutput"); }
       }
 
       const usage = isRecord(raw.usage) ? raw.usage : {};
@@ -139,7 +199,7 @@ export class WorkersAiModelProvider implements ModelProvider {
       };
     } catch (error) {
       if (error instanceof ModelProviderError) throw error;
-      throw new ModelProviderError("Workers AI inference failed", error instanceof Error ? error.name : "UnknownError");
+      throw new ModelProviderError("Workers AI inference failed", boundedErrorName(error));
     }
   }
 }

@@ -24,6 +24,54 @@ function schemaRequired(schema: JsonSchema | undefined, field: string): boolean 
   return Array.isArray(schema.required) ? schema.required.includes(field) : false;
 }
 
+function explicitNaturalRoomNumbers(message: string): string[] {
+  const numbers: string[] = [];
+  const seen = new Set<string>();
+  const pattern = /\b(?:habitaci[oó]n(?:es)?|rooms?|la|las)\s*(\d{1,5})(?![-\d])(?:\s*(?:,|y)\s*(?:la\s*)?(\d{1,5})(?![-\d]))?/gi;
+  for (const match of message.matchAll(pattern)) {
+    for (const value of [match[1], match[2]]) {
+      if (value && !seen.has(value)) {
+        seen.add(value);
+        numbers.push(value);
+      }
+    }
+  }
+  return numbers;
+}
+
+function groundedNaturalRoomSelection(
+  message: string,
+  state: Readonly<ConversationState> | undefined,
+): { explicit: boolean; roomIds: string[]; unresolved: boolean } {
+  const roomNumbers = explicitNaturalRoomNumbers(message);
+  if (roomNumbers.length === 0) return { explicit: false, roomIds: [], unresolved: false };
+
+  const byNumber = new Map<string, string>();
+  const ambiguous = new Set<string>();
+  for (const room of state?.availabilityRooms ?? []) {
+    if (!room.roomNumber) continue;
+    const prior = byNumber.get(room.roomNumber);
+    if (prior && prior !== room.id) ambiguous.add(room.roomNumber);
+    else byNumber.set(room.roomNumber, room.id);
+  }
+
+  const roomIds: string[] = [];
+  const seenIds = new Set<string>();
+  let unresolved = false;
+  for (const roomNumber of roomNumbers) {
+    const id = ambiguous.has(roomNumber) ? undefined : byNumber.get(roomNumber);
+    if (!id) {
+      unresolved = true;
+      continue;
+    }
+    if (!seenIds.has(id)) {
+      seenIds.add(id);
+      roomIds.push(id);
+    }
+  }
+  return { explicit: true, roomIds, unresolved };
+}
+
 function isPureGreeting(message: string): boolean {
   return /^\s*(hola|buen(?:os)?\s+d[ií]as|buenas\s+tardes|buenas\s+noches|buenas)\s*[!.¡¿?]*\s*$/i.test(message);
 }
@@ -92,7 +140,16 @@ export class DeterministicModelRouter implements ModelRouter {
 
     const reservationIntent = /\b(?:reservar|reserva|reservame|reserváme|reservamela|reservámela|reservanos|reservános|confirmar\s+reserva)\b/i.test(message);
     if (reservationIntent) {
-      const selectedRoomIds = state?.selectedRoomIds ?? [];
+      const naturalSelection = groundedNaturalRoomSelection(message, state);
+      if (naturalSelection.explicit && naturalSelection.unresolved) {
+        return {
+          kind: "message",
+          purpose: "clarification",
+          missing: ["selection"],
+          message: "No puedo identificar con seguridad todas las habitaciones que nombraste. Decime cuáles querés elegir.",
+        };
+      }
+      const selectedRoomIds = naturalSelection.explicit ? naturalSelection.roomIds : (state?.selectedRoomIds ?? []);
       const multiRoom = selectedRoomIds.length > 1 || (state?.requestedRoomCount ?? 0) > 1;
       if (multiRoom) {
         if (selectedRoomIds.length < 2) {
@@ -121,11 +178,12 @@ export class DeterministicModelRouter implements ModelRouter {
             toolId: multiTool.id,
             input: { roomIds: [...selectedRoomIds], checkIn: dates[0], checkOut: dates[1] },
           },
+          ...(naturalSelection.explicit ? { statePatch: { selectedRoomIds: [...selectedRoomIds] } } : {}),
         };
       }
       const tool = availableTools.find((candidate) => candidate.id === "hms.createReservation");
       if (!tool) return { kind: "message", purpose: "unsupported", message: "La creación de reservas no está habilitada para este negocio." };
-      const roomId = extractLabeledId(message, ["habitaci[oó]n", "room"]) ?? state?.selectedRoomId;
+      const roomId = naturalSelection.roomIds[0] ?? extractLabeledId(message, ["habitaci[oó]n", "room"]) ?? state?.selectedRoomId;
       const guestId = extractLabeledId(message, ["hu[eé]sped", "guest"]);
       const guestRequired = schemaRequired(tool.inputSchema, "guestId") ?? true;
       if (dates.length < 2 || !roomId || (guestRequired && !guestId)) {
@@ -140,7 +198,11 @@ export class DeterministicModelRouter implements ModelRouter {
           message: guestRequired ? "Para reservar necesito identificar habitación, huésped y fechas." : "Para reservar necesito identificar la habitación y las fechas.",
         };
       }
-      return { kind: "tool", plan: { toolId: tool.id, input: { roomId, ...(guestRequired && guestId ? { guestId } : {}), checkIn: dates[0], checkOut: dates[1] } } };
+      return {
+        kind: "tool",
+        plan: { toolId: tool.id, input: { roomId, ...(guestRequired && guestId ? { guestId } : {}), checkIn: dates[0], checkOut: dates[1] } },
+        ...(naturalSelection.explicit ? { statePatch: { selectedRoomIds: [roomId] } } : {}),
+      };
     }
 
     const explicitRoomId = extractRoomId(message);
