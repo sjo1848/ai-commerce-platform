@@ -53,6 +53,7 @@ function explicitNaturalRoomNumbers(message: string): {
     "i",
   );
   const articleRoomCountTail = /^\s*(?:habitaci[oó]n(?:es)?|rooms?)\b/i;
+  const articleOrdinalRoomCountTail = /^\s*(?:(?:primer|segund|tercer|cuart|quint|sext|s[eé]ptim|octav|noven|d[eé]cim|[uú]ltim)(?:a|as|o|os)|first|second|third|last)\s+(?:habitaci[oó]n(?:es)?|rooms?)\b/i;
   const articleQuantityTail = /^\s*(?:habitaci[oó]n(?:es)?|rooms?|personas?|hu[eé]spedes?|pax|adultos?|niñ[oa]s?|menores?|noches?|d[ií]as?|horas?|minutos?|a\.?m\.?|p\.?m\.?|hs?\.?|a(?:ñ|n)os?|mes(?:es)?|camas?|plazas?|de\s+la\s+(?:mañana|tarde|noche|madrugada)|de\s+(?:enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre))\b/i;
   const articleTimeTail = /^\s*:\s*[0-5]\d\b/;
 
@@ -88,8 +89,9 @@ function explicitNaturalRoomNumbers(message: string): {
     const matchEnd = matchIndex + match[0].length;
     const tail = message.slice(matchEnd);
     const values = match[1]?.match(/\d{1,5}/g) ?? [];
-    if (articlePrefixed && (articleQuantityTail.test(tail) || articleTimeTail.test(tail))) {
-      if (articleRoomCountTail.test(tail)) {
+    const ordinalRoomCount = articleOrdinalRoomCountTail.test(tail);
+    if (articlePrefixed && (articleQuantityTail.test(tail) || articleTimeTail.test(tail) || ordinalRoomCount)) {
+      if (articleRoomCountTail.test(tail) || ordinalRoomCount) {
         explicitRoomQuantity = true;
         if (values.length === 1) requestedRoomCount = Number(values[0]);
       }
