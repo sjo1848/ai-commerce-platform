@@ -345,6 +345,7 @@ export class LLMModelRouter implements ModelRouter {
     message: string,
     context: ExecutionContext,
     availableTools: readonly ToolDescriptor[],
+    onProviderFailure?: (failureCategory: string | undefined) => void,
   ): Promise<ModelRouteResult | undefined> {
     let repairResult;
     try {
@@ -364,7 +365,8 @@ export class LLMModelRouter implements ModelRouter {
         temperature: 0,
         label: "agent_core_route_repair",
       });
-    } catch {
+    } catch (error) {
+      onProviderFailure?.(safeProviderFailureCategory(error));
       return undefined;
     }
 
@@ -498,9 +500,25 @@ export class LLMModelRouter implements ModelRouter {
       }
 
       if (value.kind !== "tool" || typeof value.toolId !== "string" || !isRecord(value.input) || clarification.reason !== "none" || clarification.missing.length !== 0) {
-        const repaired = await this.repairContradictoryToolRoute(value, system, message, context, availableTools);
+        let repairFailureCategory: string | undefined;
+        const repaired = await this.repairContradictoryToolRoute(
+          value,
+          system,
+          message,
+          context,
+          availableTools,
+          (category) => { repairFailureCategory = category; },
+        );
         if (repaired) return repaired;
-        return this.fallbackRoute("invalid_tool_plan_shape", message, context, availableTools, conversation, state);
+        return this.fallbackRoute(
+          "invalid_tool_plan_shape",
+          message,
+          context,
+          availableTools,
+          conversation,
+          state,
+          repairFailureCategory,
+        );
       }
       const tool = availableTools.find((candidate) => candidate.id === value.toolId);
       if (!tool) return this.fallbackRoute("non_visible_tool", message, context, availableTools, conversation, state);
