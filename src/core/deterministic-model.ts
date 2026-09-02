@@ -60,8 +60,19 @@ function explicitNaturalRoomNumbers(message: string): {
   const articleOrdinalRoomCountTail = /^\s*(?:(?:primer|segund|tercer|cuart|quint|sext|s[eé]ptim|octav|noven|d[eé]cim|[uú]ltim)(?:a|as|o|os)|first|second|third|last)\s+(?:habitaci[oó]n(?:es)?|rooms?)\b/i;
   const articleQuantityTail = /^\s*(?:habitaci[oó]n(?:es)?|rooms?|personas?|hu[eé]spedes?|pax|adultos?|niñ[oa]s?|menores?|noches?|d[ií]as?|horas?|minutos?|a\.?m\.?|p\.?m\.?|hs?\.?|a(?:ñ|n)os?|mes(?:es)?|camas?|plazas?|de\s+la\s+(?:mañana|tarde|noche|madrugada)|de\s+(?:enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre))\b/i;
   const articleTimeTail = /^\s*:\s*[0-5]\d\b/;
+  const bareRoomCountPattern = /\b(\d{1,2})\s+(?:habitaci[oó]n(?:es)?|rooms?)\b/gi;
 
   partial = roomRangePattern.test(message);
+  const bareRoomCounts = Array.from(message.matchAll(bareRoomCountPattern), (match) => Number(match[1]));
+  if (bareRoomCounts.length > 0) {
+    explicitRoomQuantity = true;
+    const uniqueCounts = [...new Set(bareRoomCounts)];
+    if (uniqueCounts.length === 1 && uniqueCounts[0] !== undefined && uniqueCounts[0] >= 1 && uniqueCounts[0] <= 10) {
+      requestedRoomCount = uniqueCounts[0];
+    } else {
+      partial = true;
+    }
+  }
 
   const isExcludedMention = (index: number): boolean => {
     const prefix = message.slice(0, index);
