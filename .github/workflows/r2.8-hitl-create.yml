@@ -15,6 +15,7 @@ concurrency:
 
 jobs:
   create:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[run-r2.8.5]')
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
