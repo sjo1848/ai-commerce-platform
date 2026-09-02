@@ -223,3 +223,31 @@ test("R2.8.4 fresh Codex P2: corpus tail bound covers the full four-request dial
   assert.ok(match, "Phase B must keep a bounded wrangler tail");
   assert.ok(Number(match[1]) >= 130, `Phase B tail timeout too short: ${match[1]}s`);
 });
+
+test("R2.8.4 second fresh Codex P2: article-prefixed guest count is not parsed as another room", async () => {
+  const router = new DeterministicModelRouter();
+  const roomId4 = "11000000-0000-0000-0000-000000000004";
+  const state = {
+    stay: { checkIn: "2030-01-01", checkOut: "2030-01-03", guests: 4 },
+    availabilityRoomIds: [roomId, roomId102, roomId4],
+    availabilityRooms: [
+      { id: roomId, roomNumber: "101" },
+      { id: roomId102, roomNumber: "102" },
+      { id: roomId4, roomNumber: "4" },
+    ],
+    selectedRoomIds: [],
+  };
+
+  const result = await router.route(
+    "Quiero reservar la 101 y la 102 para las 4 personas.",
+    {},
+    [reservationTool26, multiReservationTool],
+    [],
+    state,
+  );
+
+  assert.equal(result.kind, "tool");
+  assert.equal(result.plan.toolId, "hms.createMultiReservation");
+  assert.deepEqual(result.plan.input.roomIds, [roomId, roomId102]);
+  assert.deepEqual(result.statePatch?.selectedRoomIds, [roomId, roomId102]);
+});
