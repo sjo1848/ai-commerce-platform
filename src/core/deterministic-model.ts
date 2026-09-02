@@ -24,26 +24,28 @@ function schemaRequired(schema: JsonSchema | undefined, field: string): boolean 
   return Array.isArray(schema.required) ? schema.required.includes(field) : false;
 }
 
-function explicitNaturalRoomNumbers(message: string): string[] {
+function explicitNaturalRoomNumbers(message: string): { numbers: string[]; overflow: boolean } {
   const numbers: string[] = [];
   const seen = new Set<string>();
-  const pattern = /\b(?:habitaci[oó]n(?:es)?|rooms?|la|las)\s*(\d{1,5})(?![-\d])(?:\s*(?:,|y)\s*(?:la\s*)?(\d{1,5})(?![-\d]))?/gi;
+  const pattern = /\b(?:habitaci[oó]n(?:es)?|rooms?|la|las)\s*((?:\d{1,5}(?![-\d]))(?:\s*(?:,|y|e)\s*(?:(?:habitaci[oó]n(?:es)?|rooms?|la|las)\s*)?\d{1,5}(?![-\d]))*)/gi;
   for (const match of message.matchAll(pattern)) {
-    for (const value of [match[1], match[2]]) {
-      if (value && !seen.has(value)) {
+    const values = match[1]?.match(/\d{1,5}/g) ?? [];
+    for (const value of values) {
+      if (!seen.has(value)) {
         seen.add(value);
         numbers.push(value);
       }
     }
   }
-  return numbers;
+  return { numbers, overflow: numbers.length > 10 };
 }
 
 function groundedNaturalRoomSelection(
   message: string,
   state: Readonly<ConversationState> | undefined,
 ): { explicit: boolean; roomIds: string[]; unresolved: boolean } {
-  const roomNumbers = explicitNaturalRoomNumbers(message);
+  const naturalNumbers = explicitNaturalRoomNumbers(message);
+  const roomNumbers = naturalNumbers.numbers;
   if (roomNumbers.length === 0) return { explicit: false, roomIds: [], unresolved: false };
 
   const byNumber = new Map<string, string>();
@@ -57,7 +59,7 @@ function groundedNaturalRoomSelection(
 
   const roomIds: string[] = [];
   const seenIds = new Set<string>();
-  let unresolved = false;
+  let unresolved = naturalNumbers.overflow;
   for (const roomNumber of roomNumbers) {
     const id = ambiguous.has(roomNumber) ? undefined : byNumber.get(roomNumber);
     if (!id) {
