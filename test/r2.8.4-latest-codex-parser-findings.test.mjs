@@ -5,6 +5,7 @@ import { DeterministicModelRouter } from "../dist/core/deterministic-model.js";
 const roomId2 = "11000000-0000-0000-0000-000000000002";
 const roomId101 = "11000000-0000-0000-0000-000000000101";
 const roomId102 = "11000000-0000-0000-0000-000000000102";
+const roomId103 = "11000000-0000-0000-0000-000000000103";
 
 const reservationTool = {
   id: "hms.createReservation",
@@ -70,4 +71,23 @@ test("R2.8.4 latest Codex P2: negated reservation clause excludes rejected room"
   assert.equal(result.plan.toolId, "hms.createReservation");
   assert.equal(result.plan.input.roomId, roomId102);
   assert.deepEqual(result.statePatch?.selectedRoomIds, [roomId102]);
+});
+
+test("R2.8.4 newest Codex P2: room range cannot silently route only its endpoints", async () => {
+  const router = new DeterministicModelRouter();
+  const result = await router.route(
+    "Quiero reservar de la 101 a la 103.",
+    {},
+    tools,
+    [],
+    state([
+      { id: roomId101, roomNumber: "101" },
+      { id: roomId102, roomNumber: "102" },
+      { id: roomId103, roomNumber: "103" },
+    ]),
+  );
+
+  assert.equal(result.kind, "message");
+  assert.equal(result.purpose, "clarification");
+  assert.ok(result.missing?.includes("selection"));
 });
