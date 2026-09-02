@@ -61,6 +61,21 @@ function approvalRequired(item) {
     && typeof item?.body?.approvalToken === "string"
     && Boolean(item.body.approvalToken);
 }
+function sameSet(left, right) {
+  if (left.length !== right.length) return false;
+  const rightSet = new Set(right);
+  return left.every((value) => rightSet.has(value));
+}
+function approvalTargetMatchesExpectedRooms(item, expectedApprovalRoomIds, expectedApprovalRoomNumbers) {
+  if (!approvalRequired(item)) return false;
+  const summary = String(item?.body?.approvalSummary ?? "");
+  const uuidTargets = [...summary.matchAll(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi)].map((match) => match[0]);
+  if (uuidTargets.length > 0) return sameSet(uuidTargets, expectedApprovalRoomIds);
+
+  const roomSegment = summary.match(/habitaci[oó]n(?:es)?\s*(?:\(|:)?(.+?)\s+del\s+\d{4}-\d{2}-\d{2}/i)?.[1] ?? "";
+  const numberTargets = roomSegment.match(/\b\d{1,5}\b/g) ?? [];
+  return sameSet(numberTargets, expectedApprovalRoomNumbers);
+}
 function hasMutationResult(item) {
   const raw = JSON.stringify(item?.body ?? {});
   return /"(?:bookingId|createdBookingIds|cancelledBookingIds|failedBookingIds)"\s*:/i.test(raw);
@@ -75,6 +90,10 @@ const setup = await chat(
 const sessionId = setup.body?.sessionId;
 const rooms = Array.isArray(setup.body?.data?.rooms) ? setup.body.data.rooms : [];
 const roomNumbers = rooms.map((room) => String(room?.roomNumber ?? "")).filter(Boolean);
+const expectedApprovalRoomNumbers = ["101", "102"];
+const expectedApprovalRoomIds = expectedApprovalRoomNumbers
+  .map((roomNumber) => rooms.find((room) => String(room?.roomNumber ?? "") === roomNumber)?.id)
+  .filter((value) => typeof value === "string" && value.length > 0);
 record(
   "C06",
   is2xx(setup)
@@ -86,6 +105,7 @@ record(
     && setup.body?.data?.requestedGuests === 4
     && roomNumbers.includes("101")
     && roomNumbers.includes("102")
+    && expectedApprovalRoomIds.length === 2
     && !hasInternalLeak(userFacing(setup))
     && !hasUuid(userFacing(setup))
     && !inventedPayment(userFacing(setup)),
@@ -142,30 +162,35 @@ if (!boundary) {
   boundary = approvalRequired(probe) ? probe : null;
 }
 
+const approvalTargetsExpectedRooms = Boolean(boundary)
+  && approvalTargetMatchesExpectedRooms(boundary, expectedApprovalRoomIds, expectedApprovalRoomNumbers);
 record(
   "C07",
   c07LanguageSafe
     && (is2xx(selection) || approvalRequired(selection))
     && Boolean(boundary)
+    && approvalTargetsExpectedRooms
     && !hasMutationResult(selection)
     && !hasMutationResult(occupancy)
     && !hasMutationResult(probe),
-  "natural 101+102 intent remains multi-room and reaches unconsumed HITL boundary",
+  "natural 101+102 intent remains multi-room and reaches the exact expected unconsumed HITL boundary",
   {
     assistant: selectionText,
     selectionStatus: selection.status,
     reachedApprovalAt: boundary?.caseId ?? null,
     approvalSummary: boundary?.body?.approvalSummary ?? null,
     approvalSummaryHasUuid: hasUuid(boundary?.body?.approvalSummary ?? ""),
+    approvalTargetsExpectedRooms,
+    expectedApprovalRoomNumbers,
     latencyMs: selection.latencyMs,
   },
 );
 
 record(
   "R2.8.4-HISTORICAL-PROBE",
-  Boolean(boundary) && !staleUnsupported(userFacing(boundary)),
-  "real conversational path progresses beyond stale R2.4 assumptions to an approval boundary",
-  { boundaryCaseId: boundary?.caseId ?? null, boundaryStatus: boundary?.status ?? null },
+  Boolean(boundary) && approvalTargetsExpectedRooms && !staleUnsupported(userFacing(boundary)),
+  "real conversational path progresses beyond stale R2.4 assumptions to the exact 101+102 approval boundary",
+  { boundaryCaseId: boundary?.caseId ?? null, boundaryStatus: boundary?.status ?? null, approvalTargetsExpectedRooms },
 );
 
 const mutationSignals = transcript.filter(hasMutationResult);
@@ -191,6 +216,7 @@ const report = {
     requests: requestSeq,
     p95LatencyMs: p95,
     reachedApprovalChallenge: Boolean(boundary),
+    approvalTargetsExpectedRooms,
     approvalConsumed: false,
     hmsMutationRequests: 0,
   },
