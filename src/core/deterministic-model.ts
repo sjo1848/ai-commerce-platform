@@ -47,11 +47,12 @@ function explicitNaturalRoomNumbers(message: string): {
     "gi",
   );
   const residualRoomContinuation = new RegExp(
-    `^\\s*(?:(?:[,;/+]|(?:y|e|o|u|and|or)\\b)\\s*)+(?:(?:habitaci[oó]n(?:es)?|rooms?|la|las)\\s*)?${numericRoom}`,
+    `^\\s*(?:(?:(?:[,;/+]|(?:y|e|o|u|and|or)\\b)\\s*)+|(?:junto\\s+con)\\s+)(?:(?:habitaci[oó]n(?:es)?|rooms?|la|las)\\s*)?${numericRoom}`,
     "i",
   );
   const articleRoomCountTail = /^\s*(?:habitaci[oó]n(?:es)?|rooms?)\b/i;
   const articleQuantityTail = /^\s*(?:habitaci[oó]n(?:es)?|rooms?|personas?|hu[eé]spedes?|pax|adultos?|niñ[oa]s?|menores?|noches?|d[ií]as?|horas?|minutos?|a\.?m\.?|p\.?m\.?|hs?\.?|a(?:ñ|n)os?|mes(?:es)?|camas?|plazas?|de\s+(?:enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre))\b/i;
+  const articleTimeTail = /^\s*:\s*[0-5]\d\b/;
 
   const isExcludedMention = (index: number): boolean => {
     const prefix = message.slice(0, index);
@@ -64,6 +65,7 @@ function explicitNaturalRoomNumbers(message: string): {
     );
     const clausePrefix = prefix.slice(boundary + 1).trim();
     if (/^no(?!\s+solo\b)\b/i.test(clausePrefix)) return true;
+    if (/^(?:pero\s+)?no\s+quier(?:o|e|en|emos)\s*$/i.test(clausePrefix)) return true;
     return /(?:^|\s)(?:no|excepto|menos)\s*$/i.test(clausePrefix) || /^(?:excepto|menos)\b/i.test(clausePrefix);
   };
 
@@ -82,7 +84,7 @@ function explicitNaturalRoomNumbers(message: string): {
     const matchIndex = match.index ?? 0;
     const matchEnd = matchIndex + match[0].length;
     const tail = message.slice(matchEnd);
-    if (articlePrefixed && articleQuantityTail.test(tail)) {
+    if (articlePrefixed && (articleQuantityTail.test(tail) || articleTimeTail.test(tail))) {
       if (articleRoomCountTail.test(tail)) explicitRoomQuantity = true;
       continue;
     }
