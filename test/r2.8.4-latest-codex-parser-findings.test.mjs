@@ -91,3 +91,22 @@ test("R2.8.4 newest Codex P2: room range cannot silently route only its endpoint
   assert.equal(result.purpose, "clarification");
   assert.ok(result.missing?.includes("selection"));
 });
+
+test("R2.8.4 newest Codex P2: bare stated room count must match enumerated selection", async () => {
+  const router = new DeterministicModelRouter();
+  const result = await router.route(
+    "Quiero reservar 3 habitaciones, la 101 y la 102.",
+    {},
+    tools,
+    [],
+    state([
+      { id: roomId101, roomNumber: "101" },
+      { id: roomId102, roomNumber: "102" },
+      { id: roomId103, roomNumber: "103" },
+    ]),
+  );
+
+  assert.equal(result.kind, "message");
+  assert.equal(result.purpose, "clarification");
+  assert.ok(result.missing?.includes("selection"));
+});
