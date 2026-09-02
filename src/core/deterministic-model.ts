@@ -64,7 +64,7 @@ function explicitNaturalRoomNumbers(message: string): {
     );
     const clausePrefix = prefix.slice(boundary + 1).trim();
     if (/^no(?!\s+solo\b)\b/i.test(clausePrefix)) return true;
-    return /(?:^|\s)(?:excepto|menos)\s*$/i.test(clausePrefix) || /^(?:excepto|menos)\b/i.test(clausePrefix);
+    return /(?:^|\s)(?:no|excepto|menos)\s*$/i.test(clausePrefix) || /^(?:excepto|menos)\b/i.test(clausePrefix);
   };
 
   const remove = (value: string): void => {
