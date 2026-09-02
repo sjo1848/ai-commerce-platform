@@ -24,29 +24,35 @@ function schemaRequired(schema: JsonSchema | undefined, field: string): boolean 
   return Array.isArray(schema.required) ? schema.required.includes(field) : false;
 }
 
-function explicitNaturalRoomNumbers(message: string): { numbers: string[]; overflow: boolean; partial: boolean } {
+function explicitNaturalRoomNumbers(message: string): { numbers: string[]; overflow: boolean; partial: boolean; explicitRoomQuantity: boolean } {
   const numbers: string[] = [];
   const seen = new Set<string>();
   let partial = false;
+  let explicitRoomQuantity = false;
   const numericRoom = "\\d{1,5}(?![-\\dA-Za-zÁÉÍÓÚáéíóúÑñ])";
+  const listSeparator = "(?:\\s*,\\s*(?:(?:y|e)\\s+)?|\\s+(?:y|e)\\s+)";
   const namedPattern = new RegExp(
-    `\\b(?:habitaci[oó]n(?:es)?|rooms?)\\s*((?:${numericRoom})(?:\\s*(?:,|y|e)\\s*(?:(?:habitaci[oó]n(?:es)?|rooms?|la|las)\\s*)?${numericRoom})*)`,
+    `\\b(?:habitaci[oó]n(?:es)?|rooms?)\\s*((?:${numericRoom})(?:${listSeparator}(?:(?:habitaci[oó]n(?:es)?|rooms?|la|las)\\s*)?${numericRoom})*)`,
     "gi",
   );
   const articlePattern = new RegExp(
-    `\\b(?:la|las)\\s*((?:${numericRoom})(?:\\s*(?:,|y|e)\\s*(?:(?:la|las)\\s*)?${numericRoom})*)`,
+    `\\b(?:la|las)\\s*((?:${numericRoom})(?:${listSeparator}(?:(?:la|las)\\s*)?${numericRoom})*)`,
     "gi",
   );
-  const residualRoomSeparator = new RegExp(
-    `^\\s*(?:o|u|\\/|;|\\+|and|or)\\s*(?:(?:habitaci[oó]n(?:es)?|rooms?|la|las)\\s*)?${numericRoom}`,
+  const residualRoomContinuation = new RegExp(
+    `^\\s*(?:(?:[,;/+]|(?:y|e|o|u|and|or)\\b)\\s*)+(?:(?:habitaci[oó]n(?:es)?|rooms?|la|las)\\s*)?${numericRoom}`,
     "i",
   );
-  const articleQuantityTail = /^\s*(?:personas?|hu[eé]spedes?|pax|adultos?|niñ[oa]s?|menores?|noches?|d[ií]as?|horas?|a(?:ñ|n)os?|mes(?:es)?|camas?|plazas?|de\s+(?:enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre))\b/i;
+  const articleRoomCountTail = /^\s*(?:habitaci[oó]n(?:es)?|rooms?)\b/i;
+  const articleQuantityTail = /^\s*(?:habitaci[oó]n(?:es)?|rooms?|personas?|hu[eé]spedes?|pax|adultos?|niñ[oa]s?|menores?|noches?|d[ií]as?|horas?|minutos?|a\.?m\.?|p\.?m\.?|hs?\.?|a(?:ñ|n)os?|mes(?:es)?|camas?|plazas?|de\s+(?:enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre))\b/i;
 
   const collect = (match: RegExpMatchArray, articlePrefixed: boolean): void => {
     const matchEnd = (match.index ?? 0) + match[0].length;
     const tail = message.slice(matchEnd);
-    if (articlePrefixed && articleQuantityTail.test(tail)) return;
+    if (articlePrefixed && articleQuantityTail.test(tail)) {
+      if (articleRoomCountTail.test(tail)) explicitRoomQuantity = true;
+      return;
+    }
 
     const values = match[1]?.match(/\d{1,5}/g) ?? [];
     for (const value of values) {
@@ -55,13 +61,13 @@ function explicitNaturalRoomNumbers(message: string): { numbers: string[]; overf
         numbers.push(value);
       }
     }
-    if (residualRoomSeparator.test(tail)) partial = true;
+    if (residualRoomContinuation.test(tail)) partial = true;
   };
 
   for (const match of message.matchAll(namedPattern)) collect(match, false);
   for (const match of message.matchAll(articlePattern)) collect(match, true);
 
-  return { numbers, overflow: numbers.length > 10, partial };
+  return { numbers, overflow: numbers.length > 10, partial, explicitRoomQuantity };
 }
 
 function groundedNaturalRoomSelection(
@@ -70,7 +76,10 @@ function groundedNaturalRoomSelection(
 ): { explicit: boolean; roomIds: string[]; unresolved: boolean } {
   const naturalNumbers = explicitNaturalRoomNumbers(message);
   const roomNumbers = naturalNumbers.numbers;
-  if (roomNumbers.length === 0) return { explicit: false, roomIds: [], unresolved: false };
+  if (roomNumbers.length === 0) {
+    if (naturalNumbers.explicitRoomQuantity) return { explicit: true, roomIds: [], unresolved: true };
+    return { explicit: false, roomIds: [], unresolved: false };
+  }
 
   const byNumber = new Map<string, string>();
   const ambiguous = new Set<string>();
