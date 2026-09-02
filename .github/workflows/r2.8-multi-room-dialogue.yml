@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - feat/acp-2.6.9-r2.8.4-multi-room-dialogue
+      - feature/acp-2.6.9-r2.8.4-late-review-reclosure
 
 permissions:
   contents: read
@@ -157,7 +158,7 @@ jobs:
           DIALOGUE_PID=$!
 
           set +e
-          timeout 35s script -qefc \
+          timeout 150s script -qefc \
             "npx wrangler tail '$WORKER_NAME' --format=json --method POST" \
             /tmp/r28-r4-tail.log
           DIALOGUE_TAIL_CODE=$?
