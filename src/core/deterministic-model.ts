@@ -48,6 +48,10 @@ function explicitNaturalRoomNumbers(message: string): {
     `\\b(?:la|las)\\s*((?:${numericRoom})(?:${listSeparator}(?:(?:la|las)\\s*)?${numericRoom})*)`,
     "gi",
   );
+  const roomRangePattern = new RegExp(
+    `\\b(?:(?:de|desde)\\s+)?(?:habitaci[oó]n(?:es)?|rooms?|la|las)\\s*${numericRoom}\\s+(?:a|hasta)\\s+(?:(?:habitaci[oó]n(?:es)?|rooms?|la|las)\\s*)?${numericRoom}`,
+    "i",
+  );
   const residualRoomContinuation = new RegExp(
     `^\\s*(?:(?:(?:[,;/+]|(?:y|e|o|u|and|or)\\b)\\s*)+|(?:junto\\s+con)\\s+)(?:(?:habitaci[oó]n(?:es)?|rooms?|la|las)\\s*)?${numericRoom}`,
     "i",
@@ -56,6 +60,8 @@ function explicitNaturalRoomNumbers(message: string): {
   const articleOrdinalRoomCountTail = /^\s*(?:(?:primer|segund|tercer|cuart|quint|sext|s[eé]ptim|octav|noven|d[eé]cim|[uú]ltim)(?:a|as|o|os)|first|second|third|last)\s+(?:habitaci[oó]n(?:es)?|rooms?)\b/i;
   const articleQuantityTail = /^\s*(?:habitaci[oó]n(?:es)?|rooms?|personas?|hu[eé]spedes?|pax|adultos?|niñ[oa]s?|menores?|noches?|d[ií]as?|horas?|minutos?|a\.?m\.?|p\.?m\.?|hs?\.?|a(?:ñ|n)os?|mes(?:es)?|camas?|plazas?|de\s+la\s+(?:mañana|tarde|noche|madrugada)|de\s+(?:enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre))\b/i;
   const articleTimeTail = /^\s*:\s*[0-5]\d\b/;
+
+  partial = roomRangePattern.test(message);
 
   const isExcludedMention = (index: number): boolean => {
     const prefix = message.slice(0, index);
