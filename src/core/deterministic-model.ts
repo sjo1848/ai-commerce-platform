@@ -24,10 +24,12 @@ function schemaRequired(schema: JsonSchema | undefined, field: string): boolean 
   return Array.isArray(schema.required) ? schema.required.includes(field) : false;
 }
 
-function explicitNaturalRoomNumbers(message: string): { numbers: string[]; overflow: boolean } {
+function explicitNaturalRoomNumbers(message: string): { numbers: string[]; overflow: boolean; partial: boolean } {
   const numbers: string[] = [];
   const seen = new Set<string>();
+  let partial = false;
   const pattern = /\b(?:habitaci[oó]n(?:es)?|rooms?|la|las)\s*((?:\d{1,5}(?![-\d]))(?:\s*(?:,|y|e)\s*(?:(?:habitaci[oó]n(?:es)?|rooms?|la|las)\s*)?\d{1,5}(?![-\d]))*)/gi;
+  const residualRoomSeparator = /^\s*(?:o|u|\/|;|\+|and|or)\s*(?:(?:habitaci[oó]n(?:es)?|rooms?|la|las)\s*)?\d{1,5}(?![-\d])/i;
   for (const match of message.matchAll(pattern)) {
     const values = match[1]?.match(/\d{1,5}/g) ?? [];
     for (const value of values) {
@@ -36,8 +38,10 @@ function explicitNaturalRoomNumbers(message: string): { numbers: string[]; overf
         numbers.push(value);
       }
     }
+    const matchEnd = (match.index ?? 0) + match[0].length;
+    if (residualRoomSeparator.test(message.slice(matchEnd))) partial = true;
   }
-  return { numbers, overflow: numbers.length > 10 };
+  return { numbers, overflow: numbers.length > 10, partial };
 }
 
 function groundedNaturalRoomSelection(
@@ -59,7 +63,7 @@ function groundedNaturalRoomSelection(
 
   const roomIds: string[] = [];
   const seenIds = new Set<string>();
-  let unresolved = naturalNumbers.overflow;
+  let unresolved = naturalNumbers.overflow || naturalNumbers.partial;
   for (const roomNumber of roomNumbers) {
     const id = ambiguous.has(roomNumber) ? undefined : byNumber.get(roomNumber);
     if (!id) {
