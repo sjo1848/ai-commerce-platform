@@ -29,12 +29,14 @@ function explicitNaturalRoomNumbers(message: string): {
   overflow: boolean;
   partial: boolean;
   explicitRoomQuantity: boolean;
+  requestedRoomCount?: number;
   explicitRoomExclusion: boolean;
 } {
   const numbers: string[] = [];
   const selected = new Set<string>();
   let partial = false;
   let explicitRoomQuantity = false;
+  let requestedRoomCount: number | undefined;
   let explicitRoomExclusion = false;
   const numericRoom = "\\d{1,5}(?![-\\dA-Za-zÁÉÍÓÚáéíóúÑñ])";
   const listSeparator = "(?:\\s*,\\s*(?:(?:y|e)\\s+)?|\\s+(?:y|e)\\s+)";
@@ -51,7 +53,7 @@ function explicitNaturalRoomNumbers(message: string): {
     "i",
   );
   const articleRoomCountTail = /^\s*(?:habitaci[oó]n(?:es)?|rooms?)\b/i;
-  const articleQuantityTail = /^\s*(?:habitaci[oó]n(?:es)?|rooms?|personas?|hu[eé]spedes?|pax|adultos?|niñ[oa]s?|menores?|noches?|d[ií]as?|horas?|minutos?|a\.?m\.?|p\.?m\.?|hs?\.?|a(?:ñ|n)os?|mes(?:es)?|camas?|plazas?|de\s+(?:enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre))\b/i;
+  const articleQuantityTail = /^\s*(?:habitaci[oó]n(?:es)?|rooms?|personas?|hu[eé]spedes?|pax|adultos?|niñ[oa]s?|menores?|noches?|d[ií]as?|horas?|minutos?|a\.?m\.?|p\.?m\.?|hs?\.?|a(?:ñ|n)os?|mes(?:es)?|camas?|plazas?|de\s+la\s+(?:mañana|tarde|noche|madrugada)|de\s+(?:enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre))\b/i;
   const articleTimeTail = /^\s*:\s*[0-5]\d\b/;
 
   const isExcludedMention = (index: number): boolean => {
@@ -66,6 +68,7 @@ function explicitNaturalRoomNumbers(message: string): {
     const clausePrefix = prefix.slice(boundary + 1).trim();
     if (/^no(?!\s+solo\b)\b/i.test(clausePrefix)) return true;
     if (/^(?:pero\s+)?no\s+quier(?:o|e|en|emos)\s*$/i.test(clausePrefix)) return true;
+    if (/(?:^|\s)(?:en\s+vez\s+de|en\s+lugar\s+de)\s*$/i.test(clausePrefix)) return true;
     return /(?:^|\s)(?:no|excepto|menos)\s*$/i.test(clausePrefix) || /^(?:excepto|menos)\b/i.test(clausePrefix);
   };
 
@@ -84,12 +87,15 @@ function explicitNaturalRoomNumbers(message: string): {
     const matchIndex = match.index ?? 0;
     const matchEnd = matchIndex + match[0].length;
     const tail = message.slice(matchEnd);
+    const values = match[1]?.match(/\d{1,5}/g) ?? [];
     if (articlePrefixed && (articleQuantityTail.test(tail) || articleTimeTail.test(tail))) {
-      if (articleRoomCountTail.test(tail)) explicitRoomQuantity = true;
+      if (articleRoomCountTail.test(tail)) {
+        explicitRoomQuantity = true;
+        if (values.length === 1) requestedRoomCount = Number(values[0]);
+      }
       continue;
     }
 
-    const values = match[1]?.match(/\d{1,5}/g) ?? [];
     if (residualRoomContinuation.test(tail)) partial = true;
 
     if (isExcludedMention(matchIndex)) {
@@ -106,7 +112,7 @@ function explicitNaturalRoomNumbers(message: string): {
     }
   }
 
-  return { numbers, overflow: numbers.length > 10, partial, explicitRoomQuantity, explicitRoomExclusion };
+  return { numbers, overflow: numbers.length > 10, partial, explicitRoomQuantity, requestedRoomCount, explicitRoomExclusion };
 }
 
 function groundedNaturalRoomSelection(
@@ -133,7 +139,9 @@ function groundedNaturalRoomSelection(
 
   const roomIds: string[] = [];
   const seenIds = new Set<string>();
-  let unresolved = naturalNumbers.overflow || naturalNumbers.partial;
+  let unresolved = naturalNumbers.overflow
+    || naturalNumbers.partial
+    || (naturalNumbers.requestedRoomCount !== undefined && naturalNumbers.requestedRoomCount !== roomNumbers.length);
   for (const roomNumber of roomNumbers) {
     const id = ambiguous.has(roomNumber) ? undefined : byNumber.get(roomNumber);
     if (!id) {
