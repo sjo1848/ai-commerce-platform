@@ -227,7 +227,7 @@ export class DeterministicModelRouter implements ModelRouter {
       return {
         kind: "tool",
         plan: { toolId: tool.id, input: { roomId, ...(guestRequired && guestId ? { guestId } : {}), checkIn: dates[0], checkOut: dates[1] } },
-        ...(naturalSelection.explicit ? { statePatch: { selectedRoomIds: [roomId] } : {}),
+        ...(naturalSelection.explicit ? { statePatch: { selectedRoomIds: [roomId] } } : {}),
       };
     }
 
