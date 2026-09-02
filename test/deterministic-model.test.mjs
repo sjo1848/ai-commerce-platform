@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { DeterministicModelRouter } from "../dist/core/deterministic-model.js";
 
 const quoteTool = {
@@ -11,6 +12,7 @@ const quoteTool = {
 
 const roomId = "11000000-0000-0000-0000-000000000001";
 const roomId102 = "11000000-0000-0000-0000-000000000002";
+const roomId103 = "11000000-0000-0000-0000-000000000003";
 const guestId = "12000000-0000-0000-0000-000000000001";
 
 const availabilityTool26 = {
@@ -153,4 +155,37 @@ test("R2.8.4 fallback resolves explicit room numbers only against authoritative 
     },
     statePatch: { selectedRoomIds: [roomId, roomId102] },
   });
+});
+
+test("R2.8.4 late-review P2: deterministic fallback preserves every explicit room in a natural bounded list", async () => {
+  const router = new DeterministicModelRouter();
+  const state = {
+    stay: { checkIn: "2030-01-01", checkOut: "2030-01-03", guests: 6 },
+    availabilityRoomIds: [roomId, roomId102, roomId103],
+    availabilityRooms: [
+      { id: roomId, roomNumber: "101" },
+      { id: roomId102, roomNumber: "102" },
+      { id: roomId103, roomNumber: "103" },
+    ],
+    selectedRoomIds: [],
+  };
+
+  const result = await router.route(
+    "Quiero reservar las habitaciones 101, 102 y 103.",
+    {},
+    [reservationTool26, multiReservationTool],
+    [],
+    state,
+  );
+
+  assert.equal(result.kind, "tool");
+  assert.equal(result.plan.toolId, "hms.createMultiReservation");
+  assert.deepEqual(result.plan.input.roomIds, [roomId, roomId102, roomId103]);
+  assert.deepEqual(result.statePatch?.selectedRoomIds, [roomId, roomId102, roomId103]);
+});
+
+test("R2.8.4 late-review P1: staging gate requires exact approval-target correlation with C06 room ids", async () => {
+  const source = await readFile(new URL("../scripts/r2.8-multi-room-dialogue.mjs", import.meta.url), "utf8");
+  assert.match(source, /approvalTargetMatchesExpectedRooms/);
+  assert.match(source, /expectedApprovalRoomIds/);
 });
