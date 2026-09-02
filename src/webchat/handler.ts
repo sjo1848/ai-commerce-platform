@@ -27,23 +27,37 @@ function stringList(value: unknown): string[] {
     : [];
 }
 
-function approvalSummaryForPlan(plan: ToolPlan): string {
+function humanList(values: readonly string[]): string {
+  if (values.length === 0) return "";
+  if (values.length === 1) return values[0] ?? "";
+  if (values.length === 2) return `${values[0]} y ${values[1]}`;
+  return `${values.slice(0, -1).join(", ")} y ${values.at(-1)}`;
+}
+
+async function approvalSummaryForPlan(plan: ToolPlan, runtime: AgentCoreRuntime, sessionId: string): Promise<string> {
   const input = record(plan.input);
   if (plan.toolId === "hms.createMultiReservation") {
     const roomIds = stringList(input.roomIds);
+    const state = await runtime.conversationState.get(sessionId);
+    const roomNumbers = roomIds.map((roomId) => state.availabilityRooms?.find((room) => room.id === roomId)?.roomNumber?.trim()).filter((value): value is string => Boolean(value));
     const checkIn = typeof input.checkIn === "string" ? input.checkIn : "?";
     const checkOut = typeof input.checkOut === "string" ? input.checkOut : "?";
-    return `Confirmar reserva de ${roomIds.length} habitaciones (${roomIds.join(", ")}) del ${checkIn} al ${checkOut}.`;
+    const roomLabel = roomNumbers.length === roomIds.length && roomNumbers.length > 0
+      ? `habitaciones ${humanList(roomNumbers)}`
+      : `${roomIds.length} habitaciones seleccionadas`;
+    return `Confirmar reserva de ${roomLabel} del ${checkIn} al ${checkOut}.`;
   }
   if (plan.toolId === "hms.cancelMultiReservation") {
     const bookingIds = stringList(input.bookingIds);
     return `Confirmar cancelación de ${bookingIds.length} reservas (${bookingIds.join(", ")}).`;
   }
   if (plan.toolId === "hms.createReservation") {
-    const roomId = typeof input.roomId === "string" ? input.roomId : "?";
+    const roomId = typeof input.roomId === "string" ? input.roomId : "";
+    const state = await runtime.conversationState.get(sessionId);
+    const roomNumber = state.availabilityRooms?.find((room) => room.id === roomId)?.roomNumber?.trim();
     const checkIn = typeof input.checkIn === "string" ? input.checkIn : "?";
     const checkOut = typeof input.checkOut === "string" ? input.checkOut : "?";
-    return `Confirmar reserva de la habitación ${roomId} del ${checkIn} al ${checkOut}.`;
+    return `Confirmar reserva de la habitación ${roomNumber || "seleccionada"} del ${checkIn} al ${checkOut}.`;
   }
   if (plan.toolId === "hms.cancelReservation") {
     const bookingId = typeof input.bookingId === "string" ? input.bookingId : "?";
@@ -174,7 +188,7 @@ export function createWebchatHandler(runtime: AgentCoreRuntime, config: WebchatH
             sessionId: activeSessionId,
             approvalToken: challenge.token,
             approvalExpiresAt: challenge.expiresAt,
-            approvalSummary: approvalSummaryForPlan(error.plan),
+            approvalSummary: await approvalSummaryForPlan(error.plan, runtime, approvalCandidate.sessionId),
           }, error.status);
         } catch (approvalError) {
           console.error(JSON.stringify({
@@ -232,7 +246,7 @@ export function createWebchatHandler(runtime: AgentCoreRuntime, config: WebchatH
             recoveryApprovalToken: recovery.token,
             recoveryApprovalExpiresAt: recovery.expiresAt,
             recoveryAttempt: nextRecoveryAttempt,
-            approvalSummary: approvalSummaryForPlan(consumedApproval.plan),
+            approvalSummary: await approvalSummaryForPlan(consumedApproval.plan, runtime, approvalCandidate.sessionId),
           }, error.status);
         } catch (recoveryError) {
           console.error(JSON.stringify({
