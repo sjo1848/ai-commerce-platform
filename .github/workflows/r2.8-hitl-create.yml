@@ -1,0 +1,194 @@
+name: R2.8 HITL create
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/acp-2.6.9-r2.8.5-hitl-create
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-commerce-staging
+  cancel-in-progress: false
+
+jobs:
+  create:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      WORKER_NAME: ai-commerce-agent-core
+      EXPECTED_MODEL: '@cf/meta/llama-3.3-70b-instruct-fp8-fast'
+      R28_START: '2030-01-01'
+      R28_END: '2030-01-03'
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install locked toolchain
+        run: npm ci
+
+      - name: Foundation gate
+        run: npm run qa
+
+      - name: Validate R2.8.5 harness
+        run: |
+          node --check scripts/r2.8-hitl-create.mjs
+          node --check scripts/count-model-telemetry.mjs
+          node --check scripts/count-audit-events.mjs
+
+      - name: Verify Cloudflare credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_API_TOKEN"
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          command -v script
+          npx wrangler whoami
+
+      - name: Deploy exact R2.8.5 head to staging
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler deploy --dry-run
+          npx wrangler deploy | tee /tmp/r28-r5-deploy.log
+          version_id="$(node - <<'NODE'
+          const fs = require('fs');
+          const text = fs.readFileSync('/tmp/r28-r5-deploy.log', 'utf8');
+          const matches = [...text.matchAll(/Current Version ID:\s*([0-9a-f-]{36})/gi)];
+          const value = matches.at(-1)?.[1];
+          if (!value) process.exit(2);
+          process.stdout.write(value);
+          NODE
+          )"
+          echo "R28_VERSION_ID=$version_id" >> "$GITHUB_ENV"
+          echo "Exact staging Version ID: $version_id"
+
+      - name: Resolve workers.dev URL
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain")"
+          subdomain="$(printf '%s' "$payload" | node -e '
+            const fs=require("fs");
+            const p=JSON.parse(fs.readFileSync(0,"utf8"));
+            if (!p?.success || !p?.result?.subdomain) process.exit(2);
+            process.stdout.write(p.result.subdomain);
+          ')"
+          echo "AI_COMMERCE_STAGING_URL=https://$WORKER_NAME.$subdomain.workers.dev" >> "$GITHUB_ENV"
+
+      - name: Wait for exact staging deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 12); do
+            status="$(curl -sS --max-time 10 -o /tmp/r28-r5-root.html -w '%{http_code}' "$AI_COMMERCE_STAGING_URL/" || true)"
+            if [[ "$status" == 2* ]]; then exit 0; fi
+            sleep 2
+          done
+          cat /tmp/r28-r5-root.html >&2 || true
+          exit 1
+
+      - name: Real-model HITL create and mandatory cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          probe_path="/__r28-r5-tail-probe?run=${GITHUB_RUN_ID}"
+          rm -f /tmp/r28-r5-probe-tail.log /tmp/r28-r5-probe-status.txt
+          (
+            sleep 4
+            curl -sS --max-time 10 -X POST -o /tmp/r28-r5-tail-probe.txt -w '%{http_code}' "$AI_COMMERCE_STAGING_URL$probe_path" > /tmp/r28-r5-probe-status.txt || true
+          ) &
+          PROBE_PID=$!
+          set +e
+          timeout 15s script -qefc "npx wrangler tail '$WORKER_NAME' --format=json --method POST" /tmp/r28-r5-probe-tail.log
+          PROBE_TAIL_CODE=$?
+          set -e
+          wait "$PROBE_PID"
+          [[ "$(cat /tmp/r28-r5-probe-status.txt 2>/dev/null || true)" == "404" ]]
+          [[ "$PROBE_TAIL_CODE" -eq 0 || "$PROBE_TAIL_CODE" -eq 124 ]]
+          grep -Fq "$probe_path" /tmp/r28-r5-probe-tail.log
+
+          rm -f /tmp/r28-r5-tail.log /tmp/r28-r5-report.json /tmp/r28-r5-code.txt
+          (
+            sleep 4
+            set +e
+            node scripts/r2.8-hitl-create.mjs > /tmp/r28-r5-report.json 2>&1
+            code=$?
+            set -e
+            printf '%s' "$code" > /tmp/r28-r5-code.txt
+          ) &
+          CORPUS_PID=$!
+          set +e
+          timeout 95s script -qefc "npx wrangler tail '$WORKER_NAME' --format=json --method POST" /tmp/r28-r5-tail.log
+          TAIL_CODE=$?
+          set -e
+          wait "$CORPUS_PID"
+          [[ "$TAIL_CODE" -eq 0 || "$TAIL_CODE" -eq 124 ]]
+          test -f /tmp/r28-r5-code.txt
+          CORPUS_CODE="$(cat /tmp/r28-r5-code.txt)"
+
+          echo '--- R2.8.5 report ---'
+          cat /tmp/r28-r5-report.json || true
+          echo '--- R2.8.5 tail ---'
+          cat /tmp/r28-r5-tail.log || true
+
+          MODEL_TELEMETRY="$(node scripts/count-model-telemetry.mjs /tmp/r28-r5-tail.log)"
+          AUDIT_TELEMETRY="$(node scripts/count-audit-events.mjs /tmp/r28-r5-tail.log)"
+          echo "$MODEL_TELEMETRY" > /tmp/r28-r5-model-telemetry.json
+          echo "$AUDIT_TELEMETRY" > /tmp/r28-r5-audit-telemetry.json
+
+          if [[ "$CORPUS_CODE" -ne 0 ]]; then exit "$CORPUS_CODE"; fi
+
+          EXPECTED_MODEL="$EXPECTED_MODEL" MODEL_TELEMETRY="$MODEL_TELEMETRY" REPORT_PATH=/tmp/r28-r5-report.json node - <<'NODE'
+          const fs = require('fs');
+          const telemetry = JSON.parse(process.env.MODEL_TELEMETRY);
+          const report = JSON.parse(fs.readFileSync(process.env.REPORT_PATH, 'utf8'));
+          if (telemetry.models.length !== 1 || telemetry.models[0] !== process.env.EXPECTED_MODEL) throw new Error(`model mismatch ${JSON.stringify(telemetry.models)}`);
+          const routes = telemetry.inferences.filter((item) => item.sessionId === report.sessionId && item.label === 'agent_core_route');
+          const fallbacks = telemetry.fallbacks.filter((item) => item.sessionId === report.sessionId && item.label === 'agent_core_route');
+          if (routes.length < 2) throw new Error(`insufficient real model route evidence: ${routes.length}`);
+          if (fallbacks.length) throw new Error(`R2.8.5 depended on deterministic route fallback: ${JSON.stringify(fallbacks)}`);
+          if (telemetry.totalInputTokens <= 0 || telemetry.totalOutputTokens <= 0) throw new Error('missing token evidence');
+          NODE
+
+          AUDIT_TELEMETRY="$AUDIT_TELEMETRY" REPORT_PATH=/tmp/r28-r5-report.json node - <<'NODE'
+          const fs = require('fs');
+          const audit = JSON.parse(process.env.AUDIT_TELEMETRY);
+          const report = JSON.parse(fs.readFileSync(process.env.REPORT_PATH, 'utf8'));
+          const events = audit.events.filter((event) => event.sessionId === report.sessionId);
+          const compositeCreates = events.filter((event) => event.toolId === 'hms.createMultiReservation');
+          if (!compositeCreates.some((event) => event.status === 'approval_required')) throw new Error('missing composite approval_required audit');
+          if (compositeCreates.filter((event) => event.status === 'succeeded').length !== 1) throw new Error(`expected exactly one composite create success: ${JSON.stringify(compositeCreates)}`);
+          if (events.some((event) => event.toolId === 'hms.createReservation' && ['approval_required','succeeded','replayed'].includes(event.status))) throw new Error('multi-room create collapsed to single-room path');
+          const cleanupSucceeded = events.some((event) => event.toolId === 'hms.cancelMultiReservation' && event.status === 'succeeded')
+            || events.some((event) => event.toolId === 'hms.cancelReservation' && event.status === 'succeeded');
+          if (!cleanupSucceeded) throw new Error('mandatory cleanup has no successful cancellation audit');
+          NODE
+
+          grep -q 'ACP_R2_8_5_CREATE_PASS' /tmp/r28-r5-report.json
+          echo 'ACP_R2_8_5_CREATE_PASS'
+
+      - name: Preserve R2.8.5 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r2.8-hitl-create-${{ github.run_id }}
+          path: |
+            /tmp/r28-r5-deploy.log
+            /tmp/r28-r5-probe-tail.log
+            /tmp/r28-r5-tail.log
+            /tmp/r28-r5-report.json
+            /tmp/r28-r5-model-telemetry.json
+            /tmp/r28-r5-audit-telemetry.json
+          if-no-files-found: warn
+          retention-days: 14
