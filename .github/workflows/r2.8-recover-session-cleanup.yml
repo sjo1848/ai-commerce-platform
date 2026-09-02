@@ -1,0 +1,56 @@
+name: R2.8 scoped recovery cleanup
+
+on:
+  push:
+    branches:
+      - feat/acp-2.6.9-r2.8.5-hitl-create
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-commerce-staging
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    if: contains(github.event.head_commit.message, '[cleanup-staging]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      WORKER_NAME: ai-commerce-agent-core
+      R28_RECOVERY_SESSION_ID: session_bb031b98-ccbb-4d80-955a-1de84de967c4
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Validate recovery helper
+        run: node --check scripts/r2.8-recover-session-cleanup.mjs
+      - name: Resolve workers.dev URL
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain")"
+          subdomain="$(printf '%s' "$payload" | node -e '
+            const fs=require("fs");
+            const p=JSON.parse(fs.readFileSync(0,"utf8"));
+            if (!p?.success || !p?.result?.subdomain) process.exit(2);
+            process.stdout.write(p.result.subdomain);
+          ')"
+          echo "AI_COMMERCE_STAGING_URL=https://$WORKER_NAME.$subdomain.workers.dev" >> "$GITHUB_ENV"
+      - name: Cleanup only the known R2.8.5 session
+        run: node scripts/r2.8-recover-session-cleanup.mjs | tee /tmp/r28-r5-recovery.json
+      - name: Preserve recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r2.8-recovery-cleanup-${{ github.run_id }}
+          path: /tmp/r28-r5-recovery.json
+          if-no-files-found: warn
+          retention-days: 14
