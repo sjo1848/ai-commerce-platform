@@ -251,3 +251,58 @@ test("R2.8.4 second fresh Codex P2: article-prefixed guest count is not parsed a
   assert.deepEqual(result.plan.input.roomIds, [roomId, roomId102]);
   assert.deepEqual(result.statePatch?.selectedRoomIds, [roomId, roomId102]);
 });
+
+test("R2.8.4 third fresh Codex P2: room-count noun is not interpreted as room number 4", async () => {
+  const router = new DeterministicModelRouter();
+  const roomId4 = "11000000-0000-0000-0000-000000000004";
+  const state = {
+    stay: { checkIn: "2030-01-01", checkOut: "2030-01-03", guests: 8 },
+    availabilityRoomIds: [roomId4, roomId, roomId102, roomId103],
+    availabilityRooms: [
+      { id: roomId4, roomNumber: "4" },
+      { id: roomId, roomNumber: "101" },
+      { id: roomId102, roomNumber: "102" },
+      { id: roomId103, roomNumber: "103" },
+    ],
+    selectedRoomIds: [],
+  };
+
+  const result = await router.route(
+    "Quiero reservar las 4 habitaciones.",
+    {},
+    [reservationTool26, multiReservationTool],
+    [],
+    state,
+  );
+
+  assert.equal(result.kind, "message");
+  assert.equal(result.purpose, "clarification");
+  assert.deepEqual(result.missing, ["selection"]);
+});
+
+test("R2.8.4 third fresh Codex P2: Oxford-comma natural list cannot silently drop the final room", async () => {
+  const router = new DeterministicModelRouter();
+  const state = {
+    stay: { checkIn: "2030-01-01", checkOut: "2030-01-03", guests: 6 },
+    availabilityRoomIds: [roomId, roomId102, roomId103],
+    availabilityRooms: [
+      { id: roomId, roomNumber: "101" },
+      { id: roomId102, roomNumber: "102" },
+      { id: roomId103, roomNumber: "103" },
+    ],
+    selectedRoomIds: [],
+  };
+
+  const result = await router.route(
+    "Quiero reservar las habitaciones 101, 102, y 103.",
+    {},
+    [reservationTool26, multiReservationTool],
+    [],
+    state,
+  );
+
+  assert.equal(result.kind, "tool");
+  assert.equal(result.plan.toolId, "hms.createMultiReservation");
+  assert.deepEqual(result.plan.input.roomIds, [roomId, roomId102, roomId103]);
+  assert.deepEqual(result.statePatch?.selectedRoomIds, [roomId, roomId102, roomId103]);
+});
