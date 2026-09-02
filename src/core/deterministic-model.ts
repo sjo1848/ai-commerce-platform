@@ -29,7 +29,7 @@ function explicitNaturalRoomNumbers(message: string): {
   overflow: boolean;
   partial: boolean;
   explicitRoomQuantity: boolean;
-  requestedRoomCount?: number;
+  requestedRoomCount: number | undefined;
   explicitRoomExclusion: boolean;
 } {
   const numbers: string[] = [];
