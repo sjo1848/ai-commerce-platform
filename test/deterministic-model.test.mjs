@@ -189,3 +189,37 @@ test("R2.8.4 late-review P1: staging gate requires exact approval-target correla
   assert.match(source, /approvalTargetMatchesExpectedRooms/);
   assert.match(source, /expectedApprovalRoomIds/);
 });
+
+test("R2.8.4 fresh Codex P2: unsupported residual room separator cannot route a strict subset", async () => {
+  const router = new DeterministicModelRouter();
+  const state = {
+    stay: { checkIn: "2030-01-01", checkOut: "2030-01-03", guests: 6 },
+    availabilityRoomIds: [roomId, roomId102, roomId103],
+    availabilityRooms: [
+      { id: roomId, roomNumber: "101" },
+      { id: roomId102, roomNumber: "102" },
+      { id: roomId103, roomNumber: "999" },
+    ],
+    selectedRoomIds: [],
+  };
+
+  const result = await router.route(
+    "Quiero reservar las habitaciones 101, 102 o 999.",
+    {},
+    [reservationTool26, multiReservationTool],
+    [],
+    state,
+  );
+
+  assert.equal(result.kind, "message");
+  assert.equal(result.purpose, "clarification");
+  assert.deepEqual(result.missing, ["selection"]);
+});
+
+test("R2.8.4 fresh Codex P2: corpus tail bound covers the full four-request dialogue budget", async () => {
+  const source = await readFile(new URL("../.github/workflows/r2.8-multi-room-dialogue.yml", import.meta.url), "utf8");
+  const phaseB = source.slice(source.indexOf("# Phase B:"));
+  const match = phaseB.match(/timeout\s+(\d+)s\s+script\s+-qefc/);
+  assert.ok(match, "Phase B must keep a bounded wrangler tail");
+  assert.ok(Number(match[1]) >= 130, `Phase B tail timeout too short: ${match[1]}s`);
+});
