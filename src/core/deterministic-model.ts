@@ -49,7 +49,7 @@ function explicitNaturalRoomNumbers(message: string): {
     "gi",
   );
   const roomRangePattern = new RegExp(
-    `\\b(?:(?:de|desde)\\s+)?(?:habitaci[oó]n(?:es)?|rooms?|la|las)\\s*${numericRoom}\\s+(?:a|hasta)\\s+(?:(?:habitaci[oó]n(?:es)?|rooms?|la|las)\\s*)?${numericRoom}`,
+    `\\b(?:(?:de|desde)\\s+)?(?:habitaci[oó]n(?:es)?|rooms?|la|las)\\s*${numericRoom}\\s+(?:a|hasta)\\s+(?:habitaci[oó]n(?:es)?|rooms?|la)\\s*${numericRoom}`,
     "i",
   );
   const residualRoomContinuation = new RegExp(
