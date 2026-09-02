@@ -28,9 +28,26 @@ function explicitNaturalRoomNumbers(message: string): { numbers: string[]; overf
   const numbers: string[] = [];
   const seen = new Set<string>();
   let partial = false;
-  const pattern = /\b(?:habitaci[oó]n(?:es)?|rooms?|la|las)\s*((?:\d{1,5}(?![-\d]))(?:\s*(?:,|y|e)\s*(?:(?:habitaci[oó]n(?:es)?|rooms?|la|las)\s*)?\d{1,5}(?![-\d]))*)/gi;
-  const residualRoomSeparator = /^\s*(?:o|u|\/|;|\+|and|or)\s*(?:(?:habitaci[oó]n(?:es)?|rooms?|la|las)\s*)?\d{1,5}(?![-\d])/i;
-  for (const match of message.matchAll(pattern)) {
+  const numericRoom = "\\d{1,5}(?![-\\dA-Za-zÁÉÍÓÚáéíóúÑñ])";
+  const namedPattern = new RegExp(
+    `\\b(?:habitaci[oó]n(?:es)?|rooms?)\\s*((?:${numericRoom})(?:\\s*(?:,|y|e)\\s*(?:(?:habitaci[oó]n(?:es)?|rooms?|la|las)\\s*)?${numericRoom})*)`,
+    "gi",
+  );
+  const articlePattern = new RegExp(
+    `\\b(?:la|las)\\s*((?:${numericRoom})(?:\\s*(?:,|y|e)\\s*(?:(?:la|las)\\s*)?${numericRoom})*)`,
+    "gi",
+  );
+  const residualRoomSeparator = new RegExp(
+    `^\\s*(?:o|u|\\/|;|\\+|and|or)\\s*(?:(?:habitaci[oó]n(?:es)?|rooms?|la|las)\\s*)?${numericRoom}`,
+    "i",
+  );
+  const articleQuantityTail = /^\s*(?:personas?|hu[eé]spedes?|pax|adultos?|niñ[oa]s?|menores?|noches?|d[ií]as?|horas?|a(?:ñ|n)os?|mes(?:es)?|camas?|plazas?|de\s+(?:enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre))\b/i;
+
+  const collect = (match: RegExpMatchArray, articlePrefixed: boolean): void => {
+    const matchEnd = (match.index ?? 0) + match[0].length;
+    const tail = message.slice(matchEnd);
+    if (articlePrefixed && articleQuantityTail.test(tail)) return;
+
     const values = match[1]?.match(/\d{1,5}/g) ?? [];
     for (const value of values) {
       if (!seen.has(value)) {
@@ -38,9 +55,12 @@ function explicitNaturalRoomNumbers(message: string): { numbers: string[]; overf
         numbers.push(value);
       }
     }
-    const matchEnd = (match.index ?? 0) + match[0].length;
-    if (residualRoomSeparator.test(message.slice(matchEnd))) partial = true;
-  }
+    if (residualRoomSeparator.test(tail)) partial = true;
+  };
+
+  for (const match of message.matchAll(namedPattern)) collect(match, false);
+  for (const match of message.matchAll(articlePattern)) collect(match, true);
+
   return { numbers, overflow: numbers.length > 10, partial };
 }
 
@@ -207,7 +227,7 @@ export class DeterministicModelRouter implements ModelRouter {
       return {
         kind: "tool",
         plan: { toolId: tool.id, input: { roomId, ...(guestRequired && guestId ? { guestId } : {}), checkIn: dates[0], checkOut: dates[1] } },
-        ...(naturalSelection.explicit ? { statePatch: { selectedRoomIds: [roomId] } } : {}),
+        ...(naturalSelection.explicit ? { statePatch: { selectedRoomIds: [roomId] } : {}),
       };
     }
 
