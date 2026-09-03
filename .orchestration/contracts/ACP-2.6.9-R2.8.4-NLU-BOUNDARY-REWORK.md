@@ -8,6 +8,13 @@ Only the LLM may derive, from open natural language, intent or semantic referenc
 
 ## Core obligations
 
+### Mutation grounding (rework amendment)
+
+- A write proposal carries a closed `mutationGrounding` union: `reservation` requires explicit check-in, check-out and exact room IDs; `cancellation` requires either `{scope: "single", bookingId}` or `{scope: "all"}`.
+- A write is invalid without complete structured grounding. Core MUST NOT recover missing mutation fields from current-turn raw text, `applyUserSemanticTurn`, generic `statePatch`, or `enrichPlanInputFromState`.
+- Cancellation scope and reference are LLM-derived structured data and are validated by Core against server-owned active bookings. Raw text cannot override, broaden, or repair them.
+- Clarifications expose machine-readable `outcome: "clarification"` and a non-empty `missing` field list; an HTTP success status alone is not evidence of clarification.
+
 - Core validates and grounds structured LLM output against authoritative state, all-or-nothing for room selection and occupancy.
 - An incomplete, ambiguous, stale, or partially groundable selection fails closed; it must not become a write plan.
 - A valid current selection replaces the previous selection rather than merging stale room state.

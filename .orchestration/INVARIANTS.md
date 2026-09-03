@@ -35,3 +35,5 @@
 - `R28-GROUND-001` Core validates and grounds room selection and occupancy all-or-nothing against authoritative state; incomplete, ambiguous, stale or partial grounding fails closed.
 - `R28-GROUND-002` A valid current selection replaces prior selection state; stale rooms are not merged into a new operation.
 - `R28-EVID-001` Natural-language room references are evidenced by the LLM corpus; R2.8.4 staging must correlate exact C06 authoritative rooms to C07 and verify the exact deployed Version ID before accepting evidence.
+- `R28-NLU-003` Every mutating plan carries one valid closed `mutationGrounding` variant; missing, duplicate, unknown, stale, mismatched or text-overridden grounding fails closed before write planning.
+- `R28-NLU-004` Clarification responses are observable as `outcome: "clarification"` with explicit missing fields; status code or prose alone is insufficient.
