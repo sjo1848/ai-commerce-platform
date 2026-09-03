@@ -54,11 +54,7 @@ test("model cannot make guests a reservation prerequisite when the visible schem
   );
 
   assert.equal(fallback.calls, 1);
-  assert.deepEqual(result, {
-    kind: "tool",
-    plan: {
-      toolId: "hms.createReservation",
-      input: { roomId, checkIn: "2032-01-10", checkOut: "2032-01-12" },
-    },
-  });
+  assert.equal(result.kind, "message");
+  assert.equal(Object.hasOwn(result, "plan"), false);
+  assert.equal(Object.hasOwn(result, "statePatch"), false);
 });

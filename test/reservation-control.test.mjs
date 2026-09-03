@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { HmsServiceBindingAdapter } from "../dist/adapters/hms-service-binding.js";
 import { AgentCoreRuntime } from "../dist/core/runtime.js";
-import { DeterministicModelRouter } from "../dist/core/deterministic-model.js";
 import { operationFingerprint } from "../dist/core/operation-fingerprint.js";
 import { InMemoryReservationOperationStore } from "../dist/core/reservation-operation-store.js";
 import { InMemoryApprovalStore } from "../dist/webchat/approval.js";
@@ -59,6 +58,13 @@ function mockService() {
   };
 }
 
+const structuredReservationModel = {
+  async route(message) {
+    if (/cancelar reserva/.test(message)) return { kind: "tool", plan: { toolId: "hms.cancelReservation", input: { bookingId } } };
+    return { kind: "tool", plan: { toolId: "hms.createReservation", input: { roomId, guestId, checkIn: "2027-02-10", checkOut: "2027-02-12" } } };
+  },
+};
+
 function setup({ approvalStore = new InMemoryApprovalStore(now), model } = {}) {
   const mock = mockService();
   const reservationOperations = new InMemoryReservationOperationStore();
@@ -67,7 +73,7 @@ function setup({ approvalStore = new InMemoryApprovalStore(now), model } = {}) {
     tenants: [tenant()],
     tools: [adapter.checkAvailabilityTool(), adapter.getQuoteTool(), adapter.createReservationTool(), adapter.cancelReservationTool()],
     now,
-    ...(model ? { model } : {}),
+    model: model ?? structuredReservationModel,
   });
   const handler = createWebchatHandler(runtime, { fixedTenantId: "hotel-demo", fixedActorId: "visitor-demo", approvalStore });
   return { mock, runtime, handler, approvalStore, reservationOperations };
@@ -207,6 +213,7 @@ test("cancellation fails closed without trusted ownership binding", async () => 
 });
 
 test("deterministic fallback never prepares natural-language reserve/cancel writes", async () => {
+  const { DeterministicModelRouter } = await import("../dist/core/deterministic-model.js");
   const model = new DeterministicModelRouter();
   const tools = [
     { id: "hms.createReservation", primitive: "RESERVE", description: "reserve", risk: "write" },
