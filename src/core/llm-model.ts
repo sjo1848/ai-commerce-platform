@@ -136,6 +136,7 @@ function sanitizedConversation(conversation: readonly ModelConversationTurn[]): 
  */
 function modelVisibleState(state: Readonly<ConversationState>): Record<string, unknown> {
   const semanticMemory = (state as Readonly<ConversationState> & { semanticMemory?: ConversationState["semanticMemory"] }).semanticMemory;
+  const activeBookings = (state as Readonly<ConversationState> & { activeBookings?: readonly { bookingId: string; roomNumber?: string }[] }).activeBookings;
   return {
     stay: state.stay,
     preferences: semanticMemory?.preferences.slice(-8).map((item) => item.value) ?? [],
@@ -151,6 +152,7 @@ function modelVisibleState(state: Readonly<ConversationState>): Record<string, u
     ...((state.roomOccupancy?.length ?? 0) > 0 ? { roomOccupancy: state.roomOccupancy } : {}),
     ...(state.activeBookingId ? { activeBookingId: state.activeBookingId } : {}),
     ...(state.bookingStatus ? { bookingStatus: state.bookingStatus } : {}),
+    ...(activeBookings ? { activeBookings: activeBookings.map((booking) => ({ bookingId: booking.bookingId, ...(booking.roomNumber ? { roomNumber: booking.roomNumber } : {}) })) } : {}),
   };
 }
 
@@ -456,6 +458,8 @@ export class LLMModelRouter implements ModelRouter {
       "A selection-only or correction-only turn that is complete and needs no tool => kind=message, clarificationReason=acknowledgement, missing=[], toolId='', input={}, with the bounded statePatch.",
       "When more than one room is selected and hms.createMultiReservation is visible, multi-room reservation intent must route to hms.createMultiReservation. Never collapse several rooms into one roomId. Core server-grounds the exact selected room set and dates; external policy owns approval.",
       "Booking grounding is server-owned: use the current active booking from state for cancellation planning, never invent or mutate booking IDs in statePatch.",
+      "Every message/read route MUST set mutationGrounding=null. Every write route MUST include mutationGrounding: reservation requires explicit checkIn, checkOut and exact roomIds; cancellation requires scope=single plus exact visible bookingId, or scope=all. Core validates it all-or-nothing; statePatch never substitutes for it.",
+      "For reservation grounding, reaffirm dates and exact room IDs even when they already exist in state. For cancellation, reaffirm the exact booking ID or explicit whole-group scope. Never infer mutation grounding from raw text in Core.",
       "FIRST identify current intent. THEN apply only requirements for that capability.",
       "Pure greeting with no operational request => kind=message, clarificationReason=greeting, missing=[], toolId='', input={}, statePatch={}.",
       "Pure thanks/social acknowledgement with no operational request => kind=message, clarificationReason=social, missing=[], toolId='', input={}, statePatch={}.",
