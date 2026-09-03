@@ -13,6 +13,7 @@ import type {
   ToolDescriptor,
 } from "./types.js";
 import type { UsageSink } from "./usage.js";
+import { validateMutationGrounding, type MutationGrounding } from "./mutation-grounding.js";
 
 const TRUSTED_FIELDS = new Set([
   "tenantid", "hotelid", "actorid", "guestid", "roles", "permissions",
@@ -67,8 +68,19 @@ const ROUTE_SCHEMA: JsonSchema = {
     clarificationReason: { type: "string", enum: CLARIFICATION_REASONS },
     missing: { type: "array", items: { type: "string", enum: CLARIFICATION_FIELDS }, maxItems: 5 },
     statePatch: STATE_PATCH_SCHEMA,
+    mutationGrounding: {
+      type: ["object", "null"], additionalProperties: false,
+      properties: {
+        kind: { type: "string", enum: ["reservation", "cancellation"] },
+        checkIn: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
+        checkOut: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
+        roomIds: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 10 },
+        scope: { type: "string", enum: ["single", "all"] },
+        bookingId: { type: "string" },
+      }, required: ["kind"],
+    },
   },
-  required: ["kind", "toolId", "input", "clarificationReason", "missing", "statePatch"],
+  required: ["kind", "toolId", "input", "clarificationReason", "missing", "statePatch", "mutationGrounding"],
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -226,6 +238,15 @@ function parseStatePatch(value: unknown): ConversationStatePatch | undefined {
   return patch;
 }
 
+function parseMutationGrounding(value: unknown, tool: ToolDescriptor | undefined, state: Readonly<ConversationState>): MutationGrounding | null | undefined {
+  if (value === null) return null;
+  if (!tool || tool.risk !== "write") return undefined;
+  const rooms = state.selectedRoomIds?.length ? state.selectedRoomIds : state.selectedRoomId ? [state.selectedRoomId] : state.availabilityRoomIds;
+  const bookings = state.activeBookingId ? [state.activeBookingId] : undefined;
+  const result = validateMutationGrounding(value, { rooms, ...(bookings ? { bookings } : {}) });
+  return result.ok ? result.grounding : undefined;
+}
+
 function isReservationIntent(message: string): boolean {
   if (/\b(cancelar|cancela|anular|anula)\b/i.test(message) && /\b(reserva|booking)\b/i.test(message)) return false;
   return /\b(reservar|reserv[aá]|confirmar\s+(?:la\s+)?reserva|hacer\s+(?:una\s+)?reserva)\b/i.test(message);
@@ -354,6 +375,7 @@ export class LLMModelRouter implements ModelRouter {
     message: string,
     context: ExecutionContext,
     availableTools: readonly ToolDescriptor[],
+    state: Readonly<ConversationState>,
     onProviderFailure?: (category: string | undefined) => void,
   ): Promise<ModelRouteResult | undefined> {
     let repairResult;
@@ -383,7 +405,7 @@ export class LLMModelRouter implements ModelRouter {
     const repaired = repairResult.value;
     if (!isRecord(repaired)) return undefined;
     const keys = Object.keys(repaired);
-    if (keys.some((key) => !["kind", "toolId", "input", "clarificationReason", "missing", "statePatch"].includes(key))) return undefined;
+    if (keys.some((key) => !["kind", "toolId", "input", "clarificationReason", "missing", "statePatch", "mutationGrounding"].includes(key))) return undefined;
     if (hasTrustedField(repaired)) return undefined;
     const clarification = clarificationDecision(repaired);
     const statePatch = parseStatePatch(repaired.statePatch);
@@ -391,6 +413,8 @@ export class LLMModelRouter implements ModelRouter {
     if (repaired.kind !== "tool" || typeof repaired.toolId !== "string" || !isRecord(repaired.input) || clarification.reason !== "none" || clarification.missing.length !== 0) return undefined;
     const tool = availableTools.find((candidate) => candidate.id === repaired.toolId);
     if (!tool) return undefined;
+    const mutationGrounding = parseMutationGrounding(repaired.mutationGrounding, tool, state);
+    if (tool.risk === "write" && !mutationGrounding) return undefined;
     if (hasUnknownTopLevelInput(repaired.input, tool)) return undefined;
     if (JSON.stringify(repaired.input).length > 8_000) return undefined;
     return { kind: "tool", plan: { toolId: tool.id, input: repaired.input }, statePatch };
@@ -480,7 +504,7 @@ export class LLMModelRouter implements ModelRouter {
       if (!isRecord(value)) return this.fallbackRoute("invalid_response_shape", message, context, availableTools, conversation, state);
 
       const keys = Object.keys(value);
-      if (keys.some((key) => !["kind", "toolId", "input", "clarificationReason", "missing", "statePatch"].includes(key))) {
+      if (keys.some((key) => !["kind", "toolId", "input", "clarificationReason", "missing", "statePatch", "mutationGrounding"].includes(key))) {
         return this.fallbackRoute("unexpected_top_level_field", message, context, availableTools, conversation, state);
       }
       if (hasTrustedField(value)) return this.fallbackRoute("trusted_field_attempt", message, context, availableTools, conversation, state);
@@ -489,6 +513,7 @@ export class LLMModelRouter implements ModelRouter {
       if (!clarification || !statePatch) return this.fallbackRoute("invalid_route_state_shape", message, context, availableTools, conversation, state);
 
       if (value.kind === "message") {
+        if (value.mutationGrounding !== null) return this.fallbackRoute("message_mutation_grounding", message, context, availableTools, conversation, state);
         if (value.toolId !== "" || !isRecord(value.input) || Object.keys(value.input).length !== 0 || clarification.reason === "none") {
           return this.fallbackRoute("invalid_message_route", message, context, availableTools, conversation, state);
         }
@@ -512,12 +537,14 @@ export class LLMModelRouter implements ModelRouter {
 
       if (value.kind !== "tool" || typeof value.toolId !== "string" || !isRecord(value.input) || clarification.reason !== "none" || clarification.missing.length !== 0) {
         let repairFailureCategory: string | undefined;
-        const repaired = await this.repairContradictoryToolRoute(value, system, message, context, availableTools, (category) => { repairFailureCategory = category; });
+        const repaired = await this.repairContradictoryToolRoute(value, system, message, context, availableTools, state, (category) => { repairFailureCategory = category; });
         if (repaired) return repaired;
         return this.fallbackRoute("invalid_tool_plan_shape", message, context, availableTools, conversation, state, repairFailureCategory);
       }
       const tool = availableTools.find((candidate) => candidate.id === value.toolId);
       if (!tool) return this.fallbackRoute("non_visible_tool", message, context, availableTools, conversation, state);
+      const mutationGrounding = parseMutationGrounding(value.mutationGrounding, tool, state);
+      if (tool.risk === "write" && !mutationGrounding) return this.fallbackRoute("missing_mutation_grounding", message, context, availableTools, conversation, state);
       if (hasUnknownTopLevelInput(value.input, tool)) return this.fallbackRoute("unknown_tool_argument", message, context, availableTools, conversation, state);
       if (JSON.stringify(value.input).length > 8_000) return this.fallbackRoute("tool_input_too_large", message, context, availableTools, conversation, state);
       return { kind: "tool", plan: { toolId: tool.id, input: value.input }, statePatch };
