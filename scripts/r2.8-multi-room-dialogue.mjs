@@ -65,6 +65,11 @@ function hasMutationResult(item) {
   const raw = JSON.stringify(item?.body ?? {});
   return /"(?:bookingId|createdBookingIds|cancelledBookingIds|failedBookingIds)"\s*:/i.test(raw);
 }
+function uniqueExactSet(expected, actual) {
+  const left = [...new Set(expected)]; const right = [...new Set(actual)];
+  return left.length === expected.length && right.length === actual.length && left.length === right.length && left.every((value) => right.includes(value));
+}
+function approvalRoomIds(item) { return String(item?.body?.approvalSummary ?? "").match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi) ?? []; }
 function record(caseId, pass, reason, extra = {}) { results.push({ caseId, pass, reason, ...extra }); }
 
 // C06 — fresh multi-room setup against the readiness-approved synthetic window.
@@ -75,6 +80,9 @@ const setup = await chat(
 const sessionId = setup.body?.sessionId;
 const rooms = Array.isArray(setup.body?.data?.rooms) ? setup.body.data.rooms : [];
 const roomNumbers = rooms.map((room) => String(room?.roomNumber ?? "")).filter(Boolean);
+const expectedRooms = ["101", "102"].map((number) => rooms.filter((room) => String(room?.roomNumber) === number));
+const expectedRoomIds = expectedRooms.map((matches) => matches.length === 1 ? matches[0].id : undefined);
+const c06ExactSetValid = expectedRoomIds.every(Boolean) && uniqueExactSet(expectedRoomIds, expectedRoomIds);
 record(
   "C06",
   is2xx(setup)
@@ -84,8 +92,7 @@ record(
     && setup.body?.data?.start === start
     && setup.body?.data?.end === end
     && setup.body?.data?.requestedGuests === 4
-    && roomNumbers.includes("101")
-    && roomNumbers.includes("102")
+    && c06ExactSetValid
     && !hasInternalLeak(userFacing(setup))
     && !hasUuid(userFacing(setup))
     && !inventedPayment(userFacing(setup)),
@@ -147,6 +154,7 @@ record(
   c07LanguageSafe
     && (is2xx(selection) || approvalRequired(selection))
     && Boolean(boundary)
+    && uniqueExactSet(expectedRoomIds, approvalRoomIds(boundary))
     && !hasMutationResult(selection)
     && !hasMutationResult(occupancy)
     && !hasMutationResult(probe),
@@ -157,15 +165,18 @@ record(
     reachedApprovalAt: boundary?.caseId ?? null,
     approvalSummary: boundary?.body?.approvalSummary ?? null,
     approvalSummaryHasUuid: hasUuid(boundary?.body?.approvalSummary ?? ""),
+    expectedRoomNumbers: ["101", "102"],
+    expectedRoomIds,
+    approvalTargetsExact: Boolean(boundary) && uniqueExactSet(expectedRoomIds, approvalRoomIds(boundary)),
     latencyMs: selection.latencyMs,
   },
 );
 
 record(
   "R2.8.4-HISTORICAL-PROBE",
-  Boolean(boundary) && !staleUnsupported(userFacing(boundary)),
+  Boolean(boundary) && uniqueExactSet(expectedRoomIds, approvalRoomIds(boundary)) && !staleUnsupported(userFacing(boundary)),
   "real conversational path progresses beyond stale R2.4 assumptions to an approval boundary",
-  { boundaryCaseId: boundary?.caseId ?? null, boundaryStatus: boundary?.status ?? null },
+  { boundaryCaseId: boundary?.caseId ?? null, boundaryStatus: boundary?.status ?? null, approvalTargetsExact: Boolean(boundary) && uniqueExactSet(expectedRoomIds, approvalRoomIds(boundary)) },
 );
 
 const mutationSignals = transcript.filter(hasMutationResult);
@@ -192,7 +203,7 @@ const report = {
     p95LatencyMs: p95,
     reachedApprovalChallenge: Boolean(boundary),
     approvalConsumed: false,
-    hmsMutationRequests: 0,
+    hmsMutationRequests: mutationSignals.length,
   },
   results,
   transcript,
