@@ -4,7 +4,7 @@
     {"id":"L01","category":"three_room_list","message":"Quiero reservar la 101, 102 y 103","expected":{"roomNumbers":["101","102","103"]}},
     {"id":"L02","category":"oxford_comma_list","message":"Quiero reservar la 101, la 102, y la 103","expected":{"roomNumbers":["101","102","103"]}},
     {"id":"L03","category":"residual_separator","message":"Quiero reservar la 101 junto con la 102 y la 103","expected":{"roomNumbers":["101","102","103"]}},
-    {"id":"L04","category":"article_guest_count","message":"Quiero reservar la 101 y la 102 para las 4 personas.","expected":{"roomNumbers":["101","102"]}},
+    {"id":"L04","category":"article_guest_count","setupGuests":4,"message":"Quiero reservar la 101 y la 102 para las 4 personas.","expected":{"roomNumbers":["101","102"]}},
     {"id":"L05","category":"declared_count_prefix_mismatch","message":"Dos habitaciones: la 101, la 102 y la 103","expected":{"clarification":"selection"}},
     {"id":"L06","category":"declared_count_bare_mismatch","message":"Quiero 2 habitaciones: la 101, la 102 y la 103","expected":{"clarification":"selection"}},
     {"id":"L07","category":"ordinal_quantity","message":"Quiero reservar las dos primeras habitaciones","expected":{"roomNumbers":["101","102"]}},

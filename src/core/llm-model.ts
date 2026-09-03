@@ -420,6 +420,8 @@ export class LLMModelRouter implements ModelRouter {
       "Server scope, provenance and revision metadata are intentionally not model-visible and must never be inferred or requested.",
       "statePatch records only facts learned or explicitly changed in the CURRENT user message. For dates/guest count it is only a routing hint: Core independently owns durable semantic persistence and ignores ungrounded model memory patches.",
       "For dates and guest count, combine the current message with CURRENT_CONVERSATION_STATE. Never ask again for a value already present there unless the user explicitly changed it ambiguously.",
+      "Quantities explicitly attached to personas, huéspedes or pax are guest/occupancy quantities, never room counts or room references.",
+      "For 'X en vez de Y', include X, exclude Y, and never add unrelated candidates; preserve prior rooms only when state explicitly identifies unaffected selections.",
       "For one displayed option by position, selectedRoomIndex is the ONE-BASED list position/index. For several ordinals such as 'las dos primeras', use selectedRoomIndexes=[1,2]. Core resolves every index server-side.",
       "For natural room numbers such as 'la 101 y la 102', use selectedRoomNumbers=['101','102']. They must come from CURRENT_CONVERSATION_STATE.availabilityRooms. Never derive a roomId from the number yourself.",
       "Natural relational references are explicit too: if exactly TWO current candidates exist, 'las dos' => selectedRoomRelation='both'. If exactly one room is selected and exactly one other candidate exists, 'la otra' => selectedRoomRelation='other'. Otherwise these references are ambiguous and you must ask which room(s), never choose arbitrarily.",

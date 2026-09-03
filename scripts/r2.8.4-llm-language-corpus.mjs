@@ -13,7 +13,7 @@ function uuidTargets(summary) { return String(summary ?? "").match(/[0-9a-f]{8}-
 async function chat(message, sessionId, key) { return fetch(`${baseUrl}/api/chat`, { method: "POST", headers: { "content-type": "application/json", "Idempotency-Key": key }, body: JSON.stringify({ message, ...(sessionId ? { sessionId } : {}) }), signal: AbortSignal.timeout(30_000) }); }
 function approvalRequired(response, body) { return response.status === 409 && body?.error?.code === "APPROVAL_REQUIRED" && typeof body.approvalToken === "string"; }
 for (const item of corpus.cases) {
-  const availability = await chat("Somos dos. Del 1 al 3 de enero de 2030, ¿qué habitaciones están disponibles?", undefined, `r28-corpus-${item.id}-availability`);
+  const availability = await chat(`Somos ${item.setupGuests ?? 2}. Del 1 al 3 de enero de 2030, ¿qué habitaciones están disponibles?`, undefined, `r28-corpus-${item.id}-availability`);
   const availabilityBody = await availability.json();
   const sessionId = availabilityBody.sessionId;
   const rooms = Array.isArray(availabilityBody.data?.rooms) ? availabilityBody.data.rooms : [];
