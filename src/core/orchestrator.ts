@@ -27,6 +27,7 @@ import type { AgentCoreExecutor } from "./executor.js";
 import type { ModelResponder } from "./model-responder.js";
 import type {
   ModelRouter,
+  ModelRoutingState,
   ExecutionContext,
   ModelClarificationField,
   ModelConversationTurn,
@@ -36,6 +37,7 @@ import type {
 } from "./types.js";
 import type { ToolRegistry } from "./tool-registry.js";
 import type { UsageSink } from "./usage.js";
+import { validateMutationGrounding } from "./mutation-grounding.js";
 
 export type ChatResult = {
   message: string;
@@ -469,7 +471,7 @@ export class ChatOrchestrator {
 
     const priorConversation = modelVisibleConversation(await this.conversation.list(context.session.id, 32));
     const rawPriorState = await this.conversationState.get(context.session.id);
-    const priorState = { ...rawPriorState, activeBookings: currentGroup.activeBookings.map((b) => ({ bookingId: b.bookingId, ...(b.roomNumber ? { roomNumber: b.roomNumber } : {}) })) };
+    const priorState: ModelRoutingState = { ...rawPriorState, activeBookings: currentGroup.activeBookings.map((b) => ({ bookingId: b.bookingId, ...(b.roomNumber ? { roomNumber: b.roomNumber } : {}) })) };
 
     await this.conversation.append(context.session.id, { role: "user", content: normalized });
     await this.usage.record({ timestamp: context.now, tenantId: context.tenant.id, sessionId: context.session.id, kind: "message", units: 1, estimatedCostUsd: 0 });
@@ -479,7 +481,10 @@ export class ChatOrchestrator {
     const route = await this.model.route(normalized, context, tools, priorConversation, priorState);
     const routeIntent = route.kind === "tool" ? multiToolIntent(route.plan.toolId) : undefined;
     const isWrite = route.kind === "tool" && tools.find((tool) => tool.id === route.plan.toolId)?.risk === "write";
-    const nextState = applyConversationStatePatch(priorState, isWrite ? undefined : stripModelSemanticStatePatch(route.statePatch), {
+    const advisoryState = !isWrite ? invalidateStaleRoomGrounding(rawPriorState, applyUserSemanticTurn(rawPriorState, normalized, {
+      tenantId: context.tenant.id, actorId: context.actor.id, sessionId: context.session.id,
+    })) : rawPriorState;
+    const nextState = applyConversationStatePatch(advisoryState, isWrite ? undefined : stripModelSemanticStatePatch(route.statePatch), {
       ...(routeIntent ? { activeIntent: routeIntent, activeIntentSource: "server" as const } : {}),
     });
     await this.conversationState.put(context.session.id, nextState);
@@ -499,7 +504,8 @@ export class ChatOrchestrator {
         context,
       });
       await this.conversation.append(context.session.id, { role: "assistant", content: reply });
-      return { message: reply, sessionId: context.session.id };
+      const missing = bounded?.missing ?? route.missing ?? [];
+      return { message: reply, sessionId: context.session.id, ...(route.purpose === "clarification" || bounded ? { outcome: "clarification" as const, missing } : {}) };
     }
 
     const routeIssue = multiRoomConversationIssue(durableNextState);
@@ -510,8 +516,16 @@ export class ChatOrchestrator {
 
     const selectedRoomIds = canonicalSelectedRoomIds(durableNextState);
     let planToolId = route.plan.toolId;
-    const grounding = route.mutationGrounding;
-    if (!grounding) return this.clarification("No pude validar referencias suficientes para preparar esa operación.", normalized, context, ["selection"]);
+    const proposedGrounding = route.mutationGrounding;
+    if (!proposedGrounding) return this.clarification("No pude validar referencias suficientes para preparar esa operación.", normalized, context, ["selection"]);
+    const serverBookings = currentGroup.activeBookingIds.length ? currentGroup.activeBookingIds : (rawPriorState.activeBookingId ? [rawPriorState.activeBookingId] : []);
+    const checkedGrounding = validateMutationGrounding(proposedGrounding, { rooms: rawPriorState.availabilityRoomIds, bookings: serverBookings });
+    if (!checkedGrounding.ok) return this.clarification("No pude validar referencias suficientes para preparar esa operación.", normalized, context, ["selection"]);
+    if ((route.plan.toolId.startsWith("hms.create") && checkedGrounding.grounding.kind !== "reservation")
+      || (route.plan.toolId.startsWith("hms.cancel") && checkedGrounding.grounding.kind !== "cancellation")) {
+      return this.clarification("La operación no coincide con la referencia indicada.", normalized, context, ["selection"]);
+    }
+    const grounding = checkedGrounding.grounding;
     let planInput: unknown = route.plan.input;
     if (grounding.kind === "reservation") {
       if (grounding.roomIds.length === 0) return this.clarification("¿Qué habitación querés reservar?", normalized, context, ["selection"]);

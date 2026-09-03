@@ -102,7 +102,8 @@ export type ModelRouteResult =
       purpose?: ModelMessagePurpose;
       missing?: readonly ModelClarificationField[];
       statePatch?: ConversationStatePatch;
-    };
+  };
+export type ModelRoutingState = ConversationState & { activeBookings?: readonly { bookingId: string; roomNumber?: string }[] };
 
 export type ModelConversationTurn = {
   role: "user" | "assistant" | "tool";
@@ -116,7 +117,7 @@ export interface ModelRouter {
     context: ExecutionContext,
     availableTools: readonly ToolDescriptor[],
     conversation?: readonly ModelConversationTurn[],
-    state?: Readonly<ConversationState>,
+    state?: Readonly<ModelRoutingState>,
   ): Promise<ModelRouteResult>;
 }
 

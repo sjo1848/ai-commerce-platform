@@ -9,6 +9,7 @@ import type {
   ModelConversationTurn,
   ModelMessagePurpose,
   ModelRouteResult,
+  ModelRoutingState,
   ModelRouter,
   ToolDescriptor,
 } from "./types.js";
@@ -355,7 +356,7 @@ export class LLMModelRouter implements ModelRouter {
     context: ExecutionContext,
     availableTools: readonly ToolDescriptor[],
     conversation: readonly ModelConversationTurn[],
-    state: Readonly<ConversationState>,
+    state: Readonly<ModelRoutingState>,
     failureCategory?: string,
   ): Promise<ModelRouteResult> {
     await recordModelFallback(this.usage, context, "agent_core_route", reason, failureCategory);
@@ -427,7 +428,7 @@ export class LLMModelRouter implements ModelRouter {
     context: ExecutionContext,
     availableTools: readonly ToolDescriptor[],
     conversation: readonly ModelConversationTurn[] = [],
-    state: Readonly<ConversationState> = emptyConversationState(),
+    state: Readonly<ModelRoutingState> = emptyConversationState(),
   ): Promise<ModelRouteResult> {
     const toolText = availableTools.map(renderTool).join("\n");
     const requirements = capabilityRequirements(availableTools);
