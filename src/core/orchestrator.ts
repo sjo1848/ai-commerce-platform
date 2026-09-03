@@ -171,12 +171,10 @@ function missingRequiredClarificationFields(fields: readonly string[]): ModelCla
   return result;
 }
 
-function normalizeText(value: string): string {
-  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
-}
-
 type WholeGroupCancellationIntent = "none" | "all" | "not_all" | "subset_exclusion";
 
+/* legacy parser removed: cancellation scope is LLM-grounded */
+/*
 function wholeGroupCancellationIntent(message: string): WholeGroupCancellationIntent {
   const text = normalizeText(message);
   const groupTarget = "(?:todas|todos|ambas|ambos|las dos|los dos|todo el grupo|grupo completo)";
@@ -193,7 +191,7 @@ function wholeGroupCancellationIntent(message: string): WholeGroupCancellationIn
   if (negatesWholeGroup) return "not_all";
 
   return "all";
-}
+} */
 
 function multiToolIntent(toolId: string) {
   if (toolId === "hms.createMultiReservation") return "reservation" as const;
@@ -245,6 +243,7 @@ type SpecificBookingResolution =
   | { kind: "invalid" }
   | { kind: "ambiguous" };
 
+/*
 function resolveSpecificBookingReference(message: string, group: Readonly<ReservationGroupState>): SpecificBookingResolution {
   if (group.activeBookings.length === 0) return { kind: "none" };
   const text = normalizeText(message);
@@ -281,7 +280,7 @@ function resolveSpecificBookingReference(message: string, group: Readonly<Reserv
     ?? text.match(/\b(?:la|el)\s+(\d{1,4})\b/);
   if (explicitRoom) return { kind: "invalid" };
   return { kind: "none" };
-}
+} */
 
 export class ChatOrchestrator {
   private readonly reservationGroupState: ReservationGroupStateStore;
@@ -546,7 +545,7 @@ export class ChatOrchestrator {
         ...(grounding.roomIds.length === 1 ? { roomId: grounding.roomIds[0] } : { roomIds: grounding.roomIds }),
         checkIn: grounding.checkIn,
         checkOut: grounding.checkOut,
-        ...(raw.notes !== undefined ? { notes: raw.notes } : {}),
+        ...(route.plan.toolId === "hms.createMultiReservation" && (typeof raw.notes === "string" || raw.notes === null) ? { notes: raw.notes } : {}),
       };
     }
 
@@ -564,6 +563,9 @@ export class ChatOrchestrator {
         if (groundedBookingIds.length === 1) {
           planInput = { bookingId: groundedBookingIds[0] };
         } else {
+          if (route.plan.toolId === "hms.cancelReservation") {
+            return this.clarification("La cancelación grupal requiere la operación de grupo habilitada.", normalized, context, ["booking"]);
+          }
           if (!tools.some((tool) => tool.id === "hms.cancelMultiReservation")) {
             return this.clarification("La cancelación grupal no está habilitada en este runtime. Indicame qué reserva específica querés cancelar.", normalized, context, ["booking"]);
           }
@@ -579,8 +581,12 @@ export class ChatOrchestrator {
     }
 
     const plan: ToolPlan = { toolId: route.plan.toolId, input: planInput };
-    if (grounding.kind === "cancellation" && grounding.scope === "all" && groundedBookingIds.length === 1) plan.toolId = "hms.cancelReservation";
-    if (grounding.kind === "cancellation" && grounding.scope === "all" && groundedBookingIds.length > 1) plan.toolId = "hms.cancelMultiReservation";
+    if (grounding.kind === "cancellation" && grounding.scope === "all" && groundedBookingIds.length === 1) {
+      if (plan.toolId !== "hms.cancelMultiReservation") plan.toolId = "hms.cancelReservation";
+    }
+    if (grounding.kind === "cancellation" && grounding.scope === "all" && groundedBookingIds.length > 1) {
+      if (plan.toolId !== "hms.cancelMultiReservation") return this.clarification("La operación no coincide con la cancelación grupal.", normalized, context, ["booking"]);
+    }
     if (grounding.kind === "cancellation" && grounding.scope === "single") plan.toolId = "hms.cancelReservation";
     const finalTool = tools.find((tool) => tool.id === plan.toolId);
     if (finalTool) {

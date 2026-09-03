@@ -244,9 +244,16 @@ function parseStatePatch(value: unknown): ConversationStatePatch | undefined {
 function parseMutationGrounding(value: unknown, tool: ToolDescriptor | undefined, state: Readonly<ConversationState>): MutationGrounding | null | undefined {
   if (value === null) return null;
   if (!tool || tool.risk !== "write") return undefined;
-  const rooms = state.selectedRoomIds?.length ? state.selectedRoomIds : state.selectedRoomId ? [state.selectedRoomId] : state.availabilityRoomIds;
-  const bookings = state.activeBookingId ? [state.activeBookingId] : undefined;
-  const result = validateMutationGrounding(value, { rooms, ...(bookings ? { bookings } : {}) });
+  const rooms = state.availabilityRoomIds;
+  const ephemeralBookings = (state as Readonly<ConversationState> & { activeBookings?: readonly { bookingId: string }[] }).activeBookings;
+  const bookings = ephemeralBookings?.map((booking) => booking.bookingId)
+    ?? (state.activeBookingId ? [state.activeBookingId] : undefined);
+  const result = validateMutationGrounding(value, {
+    rooms,
+    ...(bookings ? { bookings } : {}),
+    ...(state.stay.checkIn ? { checkIn: state.stay.checkIn } : {}),
+    ...(state.stay.checkOut ? { checkOut: state.stay.checkOut } : {}),
+  });
   return result.ok ? result.grounding : undefined;
 }
 
