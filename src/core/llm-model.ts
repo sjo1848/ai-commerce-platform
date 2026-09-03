@@ -419,7 +419,7 @@ export class LLMModelRouter implements ModelRouter {
     if (tool.risk === "write" && !mutationGrounding) return undefined;
     if (hasUnknownTopLevelInput(repaired.input, tool)) return undefined;
     if (JSON.stringify(repaired.input).length > 8_000) return undefined;
-    return { kind: "tool", plan: { toolId: tool.id, input: repaired.input }, statePatch };
+    return { kind: "tool", plan: { toolId: tool.id, input: repaired.input }, statePatch, ...(mutationGrounding ? { mutationGrounding } : {}) };
   }
 
   async route(
@@ -551,7 +551,7 @@ export class LLMModelRouter implements ModelRouter {
       if (tool.risk === "write" && !mutationGrounding) return this.fallbackRoute("missing_mutation_grounding", message, context, availableTools, conversation, state);
       if (hasUnknownTopLevelInput(value.input, tool)) return this.fallbackRoute("unknown_tool_argument", message, context, availableTools, conversation, state);
       if (JSON.stringify(value.input).length > 8_000) return this.fallbackRoute("tool_input_too_large", message, context, availableTools, conversation, state);
-      return { kind: "tool", plan: { toolId: tool.id, input: value.input }, statePatch };
+      return { kind: "tool", plan: { toolId: tool.id, input: value.input }, statePatch, ...(mutationGrounding ? { mutationGrounding } : {}) };
     } catch (error) {
       return this.fallbackRoute(
         "provider_failure",

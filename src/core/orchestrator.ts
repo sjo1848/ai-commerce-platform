@@ -41,6 +41,8 @@ export type ChatResult = {
   message: string;
   sessionId: string;
   data?: unknown;
+  outcome?: "clarification";
+  missing?: readonly ModelClarificationField[];
 };
 
 function modelVisibleConversation(turns: readonly ModelConversationTurn[]): ModelConversationTurn[] {
@@ -467,14 +469,7 @@ export class ChatOrchestrator {
 
     const priorConversation = modelVisibleConversation(await this.conversation.list(context.session.id, 32));
     const rawPriorState = await this.conversationState.get(context.session.id);
-    const semanticPriorState = applyUserSemanticTurn(rawPriorState, normalized, {
-      tenantId: context.tenant.id,
-      actorId: context.actor.id,
-      sessionId: context.session.id,
-    });
-    const proposedPriorState = invalidateStaleRoomGrounding(rawPriorState, semanticPriorState);
-    await this.conversationState.put(context.session.id, proposedPriorState);
-    const priorState = await this.conversationState.get(context.session.id);
+    const priorState = { ...rawPriorState, activeBookings: currentGroup.activeBookings.map((b) => ({ bookingId: b.bookingId, ...(b.roomNumber ? { roomNumber: b.roomNumber } : {}) })) };
 
     await this.conversation.append(context.session.id, { role: "user", content: normalized });
     await this.usage.record({ timestamp: context.now, tenantId: context.tenant.id, sessionId: context.session.id, kind: "message", units: 1, estimatedCostUsd: 0 });
@@ -483,7 +478,8 @@ export class ChatOrchestrator {
     await this.usage.record({ timestamp: context.now, tenantId: context.tenant.id, sessionId: context.session.id, kind: "model_route", units: 1, estimatedCostUsd: 0 });
     const route = await this.model.route(normalized, context, tools, priorConversation, priorState);
     const routeIntent = route.kind === "tool" ? multiToolIntent(route.plan.toolId) : undefined;
-    const nextState = applyConversationStatePatch(priorState, stripModelSemanticStatePatch(route.statePatch), {
+    const isWrite = route.kind === "tool" && tools.find((tool) => tool.id === route.plan.toolId)?.risk === "write";
+    const nextState = applyConversationStatePatch(priorState, isWrite ? undefined : stripModelSemanticStatePatch(route.statePatch), {
       ...(routeIntent ? { activeIntent: routeIntent, activeIntentSource: "server" as const } : {}),
     });
     await this.conversationState.put(context.session.id, nextState);
@@ -514,23 +510,34 @@ export class ChatOrchestrator {
 
     const selectedRoomIds = canonicalSelectedRoomIds(durableNextState);
     let planToolId = route.plan.toolId;
-    let planInput: unknown = enrichPlanInputFromState(route.plan.toolId, route.plan.input, durableNextState);
+    const grounding = route.mutationGrounding;
+    if (!grounding) return this.clarification("No pude validar referencias suficientes para preparar esa operación.", normalized, context, ["selection"]);
+    let planInput: unknown = route.plan.input;
+    if (grounding.kind === "reservation") {
+      if (grounding.roomIds.length === 0) return this.clarification("¿Qué habitación querés reservar?", normalized, context, ["selection"]);
+      const raw = isRecord(route.plan.input) ? route.plan.input : {};
+      planInput = {
+        ...(grounding.roomIds.length === 1 ? { roomId: grounding.roomIds[0] } : { roomIds: grounding.roomIds }),
+        checkIn: grounding.checkIn,
+        checkOut: grounding.checkOut,
+        ...(raw.notes !== undefined ? { notes: raw.notes } : {}),
+      };
+      if (grounding.roomIds.length > 1) planToolId = "hms.createMultiReservation";
+      else planToolId = "hms.createReservation";
+    }
 
-    if ((route.plan.toolId === "hms.createReservation" || route.plan.toolId === "hms.createMultiReservation")
+    if (grounding.kind === "reservation"
       && (selectedRoomIds.length > 1 || (durableNextState.requestedRoomCount ?? 0) > 1)) {
-      if (selectedRoomIds.length < 2) return this.clarification("¿Qué habitaciones querés elegir?", normalized, context, ["selection"]);
-      if (!durableNextState.stay.checkIn || !durableNextState.stay.checkOut) {
-        return this.clarification("¿Para qué fechas sería?", normalized, context, ["dates"]);
-      }
+      if (grounding.roomIds.length < 2) return this.clarification("¿Qué habitaciones querés elegir?", normalized, context, ["selection"]);
       if (!tools.some((tool) => tool.id === "hms.createMultiReservation")) {
         return this.unsupportedMultiRoom(normalized, context);
       }
       planToolId = "hms.createMultiReservation";
       const raw = isRecord(route.plan.input) ? route.plan.input : {};
       planInput = {
-        roomIds: selectedRoomIds,
-        checkIn: durableNextState.stay.checkIn,
-        checkOut: durableNextState.stay.checkOut,
+        roomIds: grounding.roomIds,
+        checkIn: grounding.checkIn,
+        checkOut: grounding.checkOut,
         ...(raw.notes !== undefined ? { notes: raw.notes } : {}),
       };
     }
@@ -540,17 +547,12 @@ export class ChatOrchestrator {
       ? groupState.activeBookingIds
       : durableNextState.activeBookingId ? [durableNextState.activeBookingId] : [];
 
-    if (route.plan.toolId === "hms.cancelReservation" || route.plan.toolId === "hms.cancelMultiReservation") {
+    if (grounding.kind === "cancellation") {
       if (groundedBookingIds.length === 0) {
         return this.clarification("¿Qué reserva querés cancelar? No tengo una reserva activa identificada en esta sesión.", normalized, context, ["booking"]);
       }
 
-      const reference = resolveSpecificBookingReference(normalized, groupState);
-      const groupIntent = wholeGroupCancellationIntent(normalized);
-      if (groupIntent === "subset_exclusion") {
-        return this.clarification("No puedo asumir una cancelación parcial del grupo. Indicame una reserva específica o confirmá que querés cancelar todo el grupo.", normalized, context, ["booking"]);
-      }
-      if (groupIntent === "all") {
+      if (grounding.scope === "all") {
         if (groundedBookingIds.length === 1) {
           planToolId = "hms.cancelReservation";
           planInput = { bookingId: groundedBookingIds[0] };
@@ -561,28 +563,13 @@ export class ChatOrchestrator {
           planToolId = "hms.cancelMultiReservation";
           planInput = { bookingIds: [...groundedBookingIds] };
         }
-      } else if (reference.kind === "match") {
+      } else if (grounding.scope === "single" && groundedBookingIds.includes(grounding.bookingId)) {
         planToolId = "hms.cancelReservation";
-        planInput = { bookingId: reference.bookingId };
-      } else if (reference.kind === "invalid") {
-        return this.clarification("No encuentro esa habitación entre las reservas activas. Indicame cuál querés cancelar.", normalized, context, ["booking"]);
-      } else if (reference.kind === "ambiguous") {
-        return this.clarification("La referencia coincide con más de una reserva. Indicame una habitación específica.", normalized, context, ["booking"]);
-      } else if (groupIntent === "not_all") {
-        return this.clarification("Entendido: no querés cancelar todo el grupo. Indicame qué reserva específica querés cancelar.", normalized, context, ["booking"]);
+        planInput = { bookingId: grounding.bookingId };
       } else if (groundedBookingIds.length === 1) {
-        planToolId = "hms.cancelReservation";
-        planInput = { bookingId: groundedBookingIds[0] };
+        return this.clarification("Indicame la reserva exacta que querés cancelar.", normalized, context, ["booking"]);
       } else {
-        const candidate = isRecord(route.plan.input) && typeof route.plan.input.bookingId === "string"
-          ? route.plan.input.bookingId.trim()
-          : "";
-        if (candidate && groundedBookingIds.includes(candidate)) {
-          planToolId = "hms.cancelReservation";
-          planInput = { bookingId: candidate };
-        } else {
-          return this.clarification("Tenés varias reservas activas. ¿Querés cancelar una reserva específica o todas?", normalized, context, ["booking"]);
-        }
+        return this.clarification("Indicame la reserva exacta que querés cancelar.", normalized, context, ["booking"]);
       }
     }
 

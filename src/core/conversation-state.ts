@@ -41,6 +41,8 @@ export type ConversationState = {
   bookingStatus?: string;
   /** Server-owned revision for operational booking grounding; never model-authored. */
   bookingStateRevision?: number;
+  /** Ephemeral server-owned cancellation context; never persisted or model-authored. */
+  activeBookings?: readonly { bookingId: string; roomNumber?: string }[];
 };
 export type ConversationStatePatch = {
   checkIn?: string | null;

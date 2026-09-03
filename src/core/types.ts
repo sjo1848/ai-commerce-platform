@@ -1,4 +1,5 @@
 import type { ConversationState, ConversationStatePatch } from "./conversation-state.js";
+import type { MutationGrounding } from "./mutation-grounding.js";
 
 export type TenantStatus = "active" | "suspended";
 export type Channel = "webchat" | "whatsapp" | "email";
@@ -94,7 +95,7 @@ export type ModelMessagePurpose = "clarification" | "unsupported" | "greeting" |
 export type ModelClarificationField = "dates" | "guests" | "room" | "booking" | "selection" | "occupancy";
 
 export type ModelRouteResult =
-  | { kind: "tool"; plan: ToolPlan; statePatch?: ConversationStatePatch }
+  | { kind: "tool"; plan: ToolPlan; statePatch?: ConversationStatePatch; mutationGrounding?: MutationGrounding }
   | {
       kind: "message";
       message: string;
