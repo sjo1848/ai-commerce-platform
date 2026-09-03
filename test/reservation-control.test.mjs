@@ -206,19 +206,18 @@ test("cancellation fails closed without trusted ownership binding", async () => 
   assert.equal(mock.calls.filter((call) => call.method === "cancelReservation").length, 0);
 });
 
-test("deterministic model routes reserve/cancel intent but never execution metadata", async () => {
+test("deterministic fallback never prepares natural-language reserve/cancel writes", async () => {
   const model = new DeterministicModelRouter();
   const tools = [
     { id: "hms.createReservation", primitive: "RESERVE", description: "reserve", risk: "write" },
     { id: "hms.cancelReservation", primitive: "CANCEL", description: "cancel", risk: "write" },
   ];
   const reserve = await model.route(reserveMessage, {}, tools);
-  assert.equal(reserve.kind, "tool");
-  assert.equal(reserve.plan.toolId, "hms.createReservation");
-  assert.deepEqual(Object.keys(reserve.plan).sort(), ["input", "toolId"]);
-  assert.deepEqual(reserve.plan.input, { roomId, guestId, checkIn: "2027-02-10", checkOut: "2027-02-12" });
+  assert.equal(reserve.kind, "message");
+  assert.equal(Object.hasOwn(reserve, "plan"), false);
+  assert.equal(Object.hasOwn(reserve, "statePatch"), false);
   const cancel = await model.route(`cancelar reserva ${bookingId}`, {}, tools);
-  assert.equal(cancel.kind, "tool");
-  assert.equal(cancel.plan.toolId, "hms.cancelReservation");
-  assert.deepEqual(cancel.plan.input, { bookingId });
+  assert.equal(cancel.kind, "message");
+  assert.equal(Object.hasOwn(cancel, "plan"), false);
+  assert.equal(Object.hasOwn(cancel, "statePatch"), false);
 });

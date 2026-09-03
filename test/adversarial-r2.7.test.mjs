@@ -61,7 +61,7 @@ function multiState() {
   };
 }
 
-test("R2.7 provider failure preserves R2.5 multi-room orchestration instead of stale unsupported fallback", async () => {
+test("R2.8.4 provider failure fallback never prepares a multi-room write", async () => {
   const fallback = new DeterministicModelRouter();
   const provider = { async completeStructured() { throw new Error("provider down"); } };
   const router = new LLMModelRouter(provider, fallback);
@@ -73,12 +73,12 @@ test("R2.7 provider failure preserves R2.5 multi-room orchestration instead of s
     multiState(),
   );
 
-  assert.equal(result.kind, "tool");
-  assert.equal(result.plan.toolId, "hms.createMultiReservation");
-  assert.notEqual(result.plan.toolId, "hms.createReservation");
+  assert.equal(result.kind, "message");
+  assert.equal(Object.hasOwn(result, "plan"), false);
+  assert.equal(Object.hasOwn(result, "statePatch"), false);
 });
 
-test("R2.7 fallback never collapses grounded multi-room intent into the single-room tool", async () => {
+test("R2.8.4 deterministic fallback never prepares a multi-room write", async () => {
   const result = await new DeterministicModelRouter().route(
     "reservame las dos",
     {},
@@ -86,8 +86,9 @@ test("R2.7 fallback never collapses grounded multi-room intent into the single-r
     [],
     multiState(),
   );
-  assert.equal(result.kind, "tool");
-  assert.equal(result.plan.toolId, "hms.createMultiReservation");
+  assert.equal(result.kind, "message");
+  assert.equal(Object.hasOwn(result, "plan"), false);
+  assert.equal(Object.hasOwn(result, "statePatch"), false);
 });
 
 test("R2.7 natural 'habitaciones para dos' persists user-owned guest count", () => {
