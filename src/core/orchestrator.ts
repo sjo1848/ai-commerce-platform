@@ -171,27 +171,6 @@ function missingRequiredClarificationFields(fields: readonly string[]): ModelCla
   return result;
 }
 
-type WholeGroupCancellationIntent = "none" | "all" | "not_all" | "subset_exclusion";
-
-/* legacy parser removed: cancellation scope is LLM-grounded */
-/*
-function wholeGroupCancellationIntent(message: string): WholeGroupCancellationIntent {
-  const text = normalizeText(message);
-  const groupTarget = "(?:todas|todos|ambas|ambos|las dos|los dos|todo el grupo|grupo completo)";
-  const hasWholeGroup = new RegExp(`\\b${groupTarget}\\b|\\b(?:cancelar|anular)\\s+todo\\b`).test(text);
-  if (!hasWholeGroup) return "none";
-
-  const excludesMember = new RegExp(`\\b${groupTarget}\\s+(?:menos|excepto|salvo)\\b`).test(text)
-    || new RegExp(`\\b${groupTarget}\\b[^.!?]{0,50}\\b(?:pero\\s+)?no\\s+(?:la|el|las|los)?\\s*(?:primera|primero|primer|segunda|segundo|tercera|tercero|tercer|cuarta|cuarto|quinta|quinto|\\d{1,6}|habitacion|room|pieza)\\b`).test(text);
-  if (excludesMember) return "subset_exclusion";
-
-  const negatesWholeGroup = new RegExp(`\\b(?:no|nunca)\\s+(?:(?:quiero|queremos|canceles?|anules?|cancelar|anular)\\s+){0,3}${groupTarget}\\b`).test(text)
-    || new RegExp(`\\b(?:no|nunca)\\s+${groupTarget}\\b`).test(text)
-    || /\b(?:no|nunca)\s+(?:cancelar|anular)\s+todo\b/.test(text);
-  if (negatesWholeGroup) return "not_all";
-
-  return "all";
-} */
 
 function multiToolIntent(toolId: string) {
   if (toolId === "hms.createMultiReservation") return "reservation" as const;
@@ -237,50 +216,6 @@ function sameBookingGrounding(left: readonly ReservationGroupBooking[], right: r
   });
 }
 
-type SpecificBookingResolution =
-  | { kind: "none" }
-  | { kind: "match"; bookingId: string }
-  | { kind: "invalid" }
-  | { kind: "ambiguous" };
-
-/*
-function resolveSpecificBookingReference(message: string, group: Readonly<ReservationGroupState>): SpecificBookingResolution {
-  if (group.activeBookings.length === 0) return { kind: "none" };
-  const text = normalizeText(message);
-  const roomMatches = group.activeBookings.filter((booking) => {
-    const roomNumber = booking.roomNumber?.trim();
-    if (!roomNumber) return false;
-    const escaped = roomNumber.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return new RegExp(`(?:^|[^0-9])${escaped}(?:[^0-9]|$)`).test(text);
-  });
-  if (roomMatches.length === 1) {
-    const booking = roomMatches[0];
-    return booking ? { kind: "match", bookingId: booking.bookingId } : { kind: "ambiguous" };
-  }
-  if (roomMatches.length > 1) return { kind: "ambiguous" };
-
-  const ordinalWords = [
-    /\b(?:primera|primero|primer)\b/,
-    /\b(?:segunda|segundo)\b/,
-    /\b(?:tercera|tercero|tercer)\b/,
-    /\b(?:cuarta|cuarto)\b/,
-    /\b(?:quinta|quinto)\b/,
-  ];
-  const ordinalIndexes = ordinalWords
-    .map((pattern, index) => pattern.test(text) ? index : -1)
-    .filter((index) => index >= 0);
-  const ordinalIndex = ordinalIndexes[0];
-  if (ordinalIndexes.length === 1 && ordinalIndex !== undefined) {
-    const booking = group.activeBookings[ordinalIndex];
-    return booking ? { kind: "match", bookingId: booking.bookingId } : { kind: "invalid" };
-  }
-  if (ordinalIndexes.length > 1) return { kind: "ambiguous" };
-
-  const explicitRoom = text.match(/\b(?:habitacion|room|pieza)\s*(?:n(?:ro)?\.?\s*)?(\d{1,6})\b/)
-    ?? text.match(/\b(?:la|el)\s+(\d{1,4})\b/);
-  if (explicitRoom) return { kind: "invalid" };
-  return { kind: "none" };
-} */
 
 export class ChatOrchestrator {
   private readonly reservationGroupState: ReservationGroupStateStore;
