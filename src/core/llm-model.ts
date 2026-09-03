@@ -336,7 +336,16 @@ export class LLMModelRouter implements ModelRouter {
     failureCategory?: string,
   ): Promise<ModelRouteResult> {
     await recordModelFallback(this.usage, context, "agent_core_route", reason, failureCategory);
-    return this.fallback.route(message, context, availableTools, conversation, state);
+    const fallbackResult = await this.fallback.route(message, context, availableTools, conversation, state);
+    if (fallbackResult.kind === "message") {
+      const { statePatch: _discardedStatePatch, ...safeMessage } = fallbackResult;
+      return safeMessage;
+    }
+    const tool = availableTools.find((candidate) => candidate.id === fallbackResult.plan.toolId);
+    if (!tool || tool.risk !== "read") {
+      return { kind: "message", purpose: "clarification", message: "No pude procesar la solicitud con seguridad. ¿Podés reformularla?" };
+    }
+    return { kind: "tool", plan: fallbackResult.plan };
   }
 
   private async repairContradictoryToolRoute(

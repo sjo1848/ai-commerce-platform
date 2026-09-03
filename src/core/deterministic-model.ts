@@ -12,64 +12,9 @@ function extractRoomId(message: string): string | undefined {
   const hmsId = message.match(new RegExp(`\\b${UUID_SHAPED}\\b`, "i"))?.[0];
   return hmsId ?? message.match(/\broom-[a-z0-9_-]+\b/i)?.[0];
 }
-function extractLabeledId(message: string, labels: readonly string[]): string | undefined {
-  for (const label of labels) {
-    const match = message.match(new RegExp(`\\b${label}\\s*(?:id\\s*)?[:#-]?\\s*(${UUID_SHAPED})\\b`, "i"));
-    if (match?.[1]) return match[1];
-  }
-  return undefined;
-}
 function schemaRequired(schema: JsonSchema | undefined, field: string): boolean | undefined {
   if (!schema) return undefined;
   return Array.isArray(schema.required) ? schema.required.includes(field) : false;
-}
-
-function explicitNaturalRoomNumbers(message: string): string[] {
-  const numbers: string[] = [];
-  const seen = new Set<string>();
-  const pattern = /\b(?:habitaci[oó]n(?:es)?|rooms?|la|las)\s*(\d{1,5})(?![-\d])(?:\s*(?:,|y)\s*(?:la\s*)?(\d{1,5})(?![-\d]))?/gi;
-  for (const match of message.matchAll(pattern)) {
-    for (const value of [match[1], match[2]]) {
-      if (value && !seen.has(value)) {
-        seen.add(value);
-        numbers.push(value);
-      }
-    }
-  }
-  return numbers;
-}
-
-function groundedNaturalRoomSelection(
-  message: string,
-  state: Readonly<ConversationState> | undefined,
-): { explicit: boolean; roomIds: string[]; unresolved: boolean } {
-  const roomNumbers = explicitNaturalRoomNumbers(message);
-  if (roomNumbers.length === 0) return { explicit: false, roomIds: [], unresolved: false };
-
-  const byNumber = new Map<string, string>();
-  const ambiguous = new Set<string>();
-  for (const room of state?.availabilityRooms ?? []) {
-    if (!room.roomNumber) continue;
-    const prior = byNumber.get(room.roomNumber);
-    if (prior && prior !== room.id) ambiguous.add(room.roomNumber);
-    else byNumber.set(room.roomNumber, room.id);
-  }
-
-  const roomIds: string[] = [];
-  const seenIds = new Set<string>();
-  let unresolved = false;
-  for (const roomNumber of roomNumbers) {
-    const id = ambiguous.has(roomNumber) ? undefined : byNumber.get(roomNumber);
-    if (!id) {
-      unresolved = true;
-      continue;
-    }
-    if (!seenIds.has(id)) {
-      seenIds.add(id);
-      roomIds.push(id);
-    }
-  }
-  return { explicit: true, roomIds, unresolved };
 }
 
 function isPureGreeting(message: string): boolean {
@@ -122,87 +67,9 @@ export class DeterministicModelRouter implements ModelRouter {
     const explicitGuests = extractGuests(message);
     const guests = explicitGuests ?? state?.stay.guests;
 
-    const cancellationIntent = /\b(cancelar|cancela|anular|anula)\b/i.test(message) && /\b(reserva|booking)\b/i.test(message);
-    if (cancellationIntent) {
-      const tool = availableTools.find((candidate) => candidate.id === "hms.cancelReservation");
-      if (!tool) return { kind: "message", purpose: "unsupported", message: "La cancelación de reservas no está habilitada para este negocio." };
-      const bookingId = extractLabeledId(message, ["reserva", "booking"]) ?? state?.activeBookingId;
-      if (!bookingId) {
-        return {
-          kind: "message",
-          purpose: "clarification",
-          missing: ["booking"],
-          message: "¿Qué reserva querés cancelar? Necesito identificarla de forma inequívoca.",
-        };
-      }
-      return { kind: "tool", plan: { toolId: tool.id, input: { bookingId } } };
-    }
-
     const reservationIntent = /\b(?:reservar|reserva|reservame|reserváme|reservamela|reservámela|reservanos|reservános|confirmar\s+reserva)\b/i.test(message);
     if (reservationIntent) {
-      const naturalSelection = groundedNaturalRoomSelection(message, state);
-      if (naturalSelection.explicit && naturalSelection.unresolved) {
-        return {
-          kind: "message",
-          purpose: "clarification",
-          missing: ["selection"],
-          message: "No puedo identificar con seguridad todas las habitaciones que nombraste. Decime cuáles querés elegir.",
-        };
-      }
-      const selectedRoomIds = naturalSelection.explicit ? naturalSelection.roomIds : (state?.selectedRoomIds ?? []);
-      const multiRoom = selectedRoomIds.length > 1 || (state?.requestedRoomCount ?? 0) > 1;
-      if (multiRoom) {
-        if (selectedRoomIds.length < 2) {
-          return {
-            kind: "message",
-            purpose: "clarification",
-            missing: ["selection"],
-            message: "¿Qué habitaciones querés elegir?",
-          };
-        }
-        if (dates.length < 2) {
-          return {
-            kind: "message",
-            purpose: "clarification",
-            missing: ["dates"],
-            message: "¿Para qué fechas sería?",
-          };
-        }
-        const multiTool = availableTools.find((candidate) => candidate.id === "hms.createMultiReservation");
-        if (!multiTool) {
-          return { kind: "message", purpose: "unsupported", message: "La reserva conjunta no está habilitada para este negocio." };
-        }
-        return {
-          kind: "tool",
-          plan: {
-            toolId: multiTool.id,
-            input: { roomIds: [...selectedRoomIds], checkIn: dates[0], checkOut: dates[1] },
-          },
-          ...(naturalSelection.explicit ? { statePatch: { selectedRoomIds: [...selectedRoomIds] } } : {}),
-        };
-      }
-      const tool = availableTools.find((candidate) => candidate.id === "hms.createReservation");
-      if (!tool) return { kind: "message", purpose: "unsupported", message: "La creación de reservas no está habilitada para este negocio." };
-      const roomId = naturalSelection.roomIds[0] ?? extractLabeledId(message, ["habitaci[oó]n", "room"]) ?? state?.selectedRoomId;
-      const guestId = extractLabeledId(message, ["hu[eé]sped", "guest"]);
-      const guestRequired = schemaRequired(tool.inputSchema, "guestId") ?? true;
-      if (dates.length < 2 || !roomId || (guestRequired && !guestId)) {
-        const missing = [
-          ...(dates.length < 2 ? ["dates" as const] : []),
-          ...(!roomId ? ["room" as const] : []),
-        ];
-        return {
-          kind: "message",
-          purpose: "clarification",
-          missing,
-          message: guestRequired ? "Para reservar necesito identificar habitación, huésped y fechas." : "Para reservar necesito identificar la habitación y las fechas.",
-        };
-      }
-      return {
-        kind: "tool",
-        plan: { toolId: tool.id, input: { roomId, ...(guestRequired && guestId ? { guestId } : {}), checkIn: dates[0], checkOut: dates[1] } },
-        ...(naturalSelection.explicit ? { statePatch: { selectedRoomIds: [roomId] } } : {}),
-      };
+      return { kind: "message", purpose: "clarification", missing: ["selection"], message: "Puedo preparar la reserva cuando el sistema confirme la selección estructurada de habitaciones." };
     }
 
     const explicitRoomId = extractRoomId(message);
