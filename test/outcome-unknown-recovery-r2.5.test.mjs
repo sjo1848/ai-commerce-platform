@@ -4,6 +4,7 @@ import { CoreError } from "../dist/core/errors.js";
 import { AgentCoreRuntime } from "../dist/core/runtime.js";
 import { InMemoryApprovalStore } from "../dist/webchat/approval.js";
 import { createWebchatHandler } from "../dist/webchat/handler.js";
+import { emptyConversationState } from "../dist/core/conversation-state.js";
 
 const tenant = {
   id: "hotel-demo",
@@ -13,7 +14,8 @@ const tenant = {
   toolPolicies: { "hms.createReservation": "approval" },
 };
 
-function request(handler, path, body, key) {
+async function request(handler, path, body, key) {
+  if (handler.seededSession && path === "/api/chat") body = { ...body, sessionId: await handler.seededSession };
   return handler(new Request(`https://agent.example${path}`, {
     method: "POST",
     headers: { "content-type": "application/json", "idempotency-key": key },
@@ -46,6 +48,16 @@ const canonicalPlan = {
   input: { roomId: "room-101", checkIn: "2027-02-10", checkOut: "2027-02-12" },
 };
 
+async function seed(runtime) {
+  const context = await runtime.createContext({ tenantId: "hotel-demo", actor: { id: "visitor-demo", type: "customer", roles: ["customer"], permissions: ["hms.reservation.write"] }, channel: "webchat" });
+  const state = emptyConversationState();
+  state.stay = { checkIn: "2027-02-10", checkOut: "2027-02-12", guests: 1 };
+  state.availabilityRoomIds = ["room-101"];
+  state.availabilityRooms = [{ id: "room-101", roomNumber: "101", capacity: 2 }];
+  await runtime.conversationState.put(context.session.id, state);
+  return context.session.id;
+}
+
 function runtimeWithTool(tool, onRoute) {
   return new AgentCoreRuntime({
     tenants: [tenant],
@@ -53,7 +65,7 @@ function runtimeWithTool(tool, onRoute) {
     model: {
       async route() {
         onRoute();
-        return { kind: "tool", plan: structuredClone(canonicalPlan) };
+        return { kind: "tool", plan: structuredClone(canonicalPlan), mutationGrounding: { kind: "reservation", checkIn: "2027-02-10", checkOut: "2027-02-12", roomIds: ["room-101"] } };
       },
     },
   });
@@ -77,6 +89,7 @@ test("R2.5 OUTCOME_UNKNOWN reissues only the exact approved plan and same idempo
     fixedActorId: "visitor-demo",
     approvalStore: new InMemoryApprovalStore(),
   });
+  handler.seededSession = seed(runtime);
 
   const message = "reservala";
   const key = "unknown-recovery-key";
@@ -127,6 +140,7 @@ test("R2.5 recovery depth is server-owned, ignores forged client counters, and e
     fixedActorId: "visitor-demo",
     approvalStore: new InMemoryApprovalStore(),
   });
+  handler.seededSession = seed(runtime);
 
   const message = "reservala";
   const key = "unknown-recovery-exhaustion";
@@ -185,6 +199,7 @@ test("Independent Critic P1: manual-reconciliation OUTCOME_UNKNOWN never issues 
     fixedActorId: "visitor-demo",
     approvalStore: new InMemoryApprovalStore(),
   });
+  handler.seededSession = seed(runtime);
 
   const message = "reservala";
   const key = "manual-reconciliation-boundary";
