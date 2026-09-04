@@ -53,14 +53,14 @@ jobs:
           test -n "$CLOUDFLARE_API_TOKEN"
           test -n "$CLOUDFLARE_ACCOUNT_ID"
           command -v script
-          npx wrangler whoami
+          ./node_modules/.bin/wrangler whoami
 
       - name: Deploy exact R2.8.4 head to staging
         shell: bash
         run: |
           set -euo pipefail
-          npx wrangler deploy --dry-run
-          npx wrangler deploy --tag "$GITHUB_SHA" --message "R2.8.4 exact $GITHUB_SHA" | tee /tmp/r28-r4-deploy.log
+          ./node_modules/.bin/wrangler deploy --dry-run
+          ./node_modules/.bin/wrangler deploy --tag "$GITHUB_SHA" --message "R2.8.4 exact $GITHUB_SHA" | tee /tmp/r28-r4-deploy.log
           version_id="$(node - <<'NODE'
           const fs = require('fs');
           const text = fs.readFileSync('/tmp/r28-r4-deploy.log', 'utf8');
@@ -114,38 +114,54 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Phase A: prove that a foreground Wrangler tail really receives an event.
+          # Phase A: attach tail first, then prove that the live stream receives an event.
+          # `script` may emit "<not executed on terminal>"; that is only PTY metadata.
           probe_path="/__r28-tail-probe?run=${GITHUB_RUN_ID}"
           rm -f /tmp/r28-r4-probe-tail.log /tmp/r28-r4-tail-probe.txt /tmp/r28-r4-probe-status.txt
-          (
-            sleep 4
-            status="$(curl -sS --max-time 10 -X POST \
-              -o /tmp/r28-r4-tail-probe.txt \
-              -w '%{http_code}' \
-              "$AI_COMMERCE_STAGING_URL$probe_path" || true)"
-            printf '%s' "$status" > /tmp/r28-r4-probe-status.txt
-          ) &
-          PROBE_PID=$!
+          timeout 45s script -qefc \
+            "./node_modules/.bin/wrangler tail '$WORKER_NAME' --version-id '$R28_VERSION_ID' --format=json --method POST" \
+            /tmp/r28-r4-probe-tail.log &
+          PROBE_TAIL_PID=$!
 
-          set +e
-          timeout 15s script -qefc \
-            "npx wrangler tail '$WORKER_NAME' --version-id '$R28_VERSION_ID' --format=json --method POST" \
-            /tmp/r28-r4-probe-tail.log
-          PROBE_TAIL_CODE=$?
-          set -e
-          wait "$PROBE_PID"
+          # A live PTY process with a growing Wrangler log is the attachment-ready
+          # signal. Do not key readiness off the script PTY diagnostic banner.
+          attached=0
+          for attempt in $(seq 1 15); do
+            if ! kill -0 "$PROBE_TAIL_PID" 2>/dev/null; then break; fi
+            if [[ -s /tmp/r28-r4-probe-tail.log ]]; then attached=1; break; fi
+            sleep 1
+          done
+          if [[ "$attached" -ne 1 ]]; then
+            echo "R2.8.4 OBSERVABILITY_INVALID: Wrangler tail did not become live" >&2
+            cat /tmp/r28-r4-probe-tail.log >&2 || true
+            kill "$PROBE_TAIL_PID" 2>/dev/null || true
+            wait "$PROBE_TAIL_PID" 2>/dev/null || true
+            exit 1
+          fi
+
+          for attempt in $(seq 1 10); do
+            probe_path="/__r28-tail-probe?run=${GITHUB_RUN_ID}-${attempt}"
+            status="$(curl -sS --max-time 10 -X POST -o /tmp/r28-r4-tail-probe.txt -w '%{http_code}' "$AI_COMMERCE_STAGING_URL$probe_path" || true)"
+            if [[ "$status" == "404" ]] && grep -Fq "$probe_path" /tmp/r28-r4-probe-tail.log; then
+              printf '%s' "$status" > /tmp/r28-r4-probe-status.txt
+              break
+            fi
+            sleep 3
+          done
+          kill -INT "$PROBE_TAIL_PID" 2>/dev/null || true
+          set +e; wait "$PROBE_TAIL_PID"; PROBE_TAIL_CODE=$?; set -e
 
           if [[ ! -f /tmp/r28-r4-probe-status.txt || "$(cat /tmp/r28-r4-probe-status.txt)" != "404" ]]; then
             echo "R2.8.4 OBSERVABILITY_INVALID: foreground attachment probe did not return expected 404" >&2
             cat /tmp/r28-r4-tail-probe.txt >&2 || true
             exit 1
           fi
-          if [[ "$PROBE_TAIL_CODE" -ne 0 && "$PROBE_TAIL_CODE" -ne 124 ]]; then
+          if [[ "$PROBE_TAIL_CODE" -ne 0 && "$PROBE_TAIL_CODE" -ne 124 && "$PROBE_TAIL_CODE" -ne 130 && "$PROBE_TAIL_CODE" -ne 143 ]]; then
             echo "R2.8.4 OBSERVABILITY_INVALID: foreground wrangler tail exited unexpectedly ($PROBE_TAIL_CODE)" >&2
             cat /tmp/r28-r4-probe-tail.log >&2 || true
             exit 1
           fi
-          if ! grep -Fq "$probe_path" /tmp/r28-r4-probe-tail.log; then
+          if ! grep -Fq '/__r28-tail-probe?run=' /tmp/r28-r4-probe-tail.log; then
             echo "R2.8.4 OBSERVABILITY_INVALID: foreground wrangler tail did not capture the non-LLM POST probe" >&2
             cat /tmp/r28-r4-probe-tail.log >&2 || true
             exit 1
@@ -171,7 +187,7 @@ jobs:
 
           set +e
           timeout 600s script -qefc \
-            "npx wrangler tail '$WORKER_NAME' --version-id '$R28_VERSION_ID' --format=json --method POST" \
+            "./node_modules/.bin/wrangler tail '$WORKER_NAME' --version-id '$R28_VERSION_ID' --format=json --method POST" \
             /tmp/r28-r4-tail.log
           DIALOGUE_TAIL_CODE=$?
           set -e
