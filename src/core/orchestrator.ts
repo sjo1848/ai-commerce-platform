@@ -483,7 +483,7 @@ export class ChatOrchestrator {
         ...(grounding.roomIds.length === 1 ? { roomId: grounding.roomIds[0] } : { roomIds: grounding.roomIds }),
         checkIn: grounding.checkIn,
         checkOut: grounding.checkOut,
-        ...(route.plan.toolId === "hms.createMultiReservation" && (typeof raw.notes === "string" || raw.notes === null) ? { notes: raw.notes } : {}),
+        ...((route.plan.toolId === "hms.createReservation" || route.plan.toolId === "hms.createMultiReservation") && (typeof raw.notes === "string" || raw.notes === null) ? { notes: raw.notes } : {}),
       };
     }
 
