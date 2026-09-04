@@ -2,6 +2,7 @@
 description: Performs final integration review after implementation, QA, staging and independent criticism; read-only and evidence-focused.
 mode: subagent
 model: openai/gpt-5.6-terra
+reasoningEffort: medium
 steps: 32
 permissions:
   - action: edit
