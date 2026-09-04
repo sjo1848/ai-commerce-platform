@@ -51,7 +51,7 @@ test("LLM router accepts a visible tool with schema-bounded business arguments",
   assert.deepEqual(result, {
     kind: "tool",
     plan: { toolId: "hms.checkAvailability", input: { checkIn: "2034-02-10", checkOut: "2034-02-12", guests: 2 } },
-    statePatch: {},
+    statePatch: {}, mutationGrounding: null,
   });
   assert.equal(fb.calls, 0);
   const prompt = p.request.messages.map((item) => item.content).join("\n");
@@ -72,7 +72,7 @@ test("LLM router accepts a one-based ordinal selection as state, not as a room i
     stay: { checkIn: "2034-02-10", checkOut: "2034-02-12", guests: 2 },
     availabilityRoomIds: ["room-a", "room-b"],
   });
-  assert.deepEqual(result, { kind: "tool", plan: { toolId: "hms.getQuote", input: {} }, statePatch: { selectedRoomIndex: 2 } });
+  assert.deepEqual(result, { kind: "tool", plan: { toolId: "hms.getQuote", input: {} }, statePatch: { selectedRoomIndex: 2 }, mutationGrounding: null });
   assert.equal(fb.calls, 0);
   assert.match(p.request.messages[0].content, /ONE-BASED list position/i);
 });
@@ -86,7 +86,7 @@ test("LLM router converts structured missing-field decision into bounded clarifi
     message: "¿Para qué fechas sería?",
     purpose: "clarification",
     missing: ["dates"],
-    statePatch: {},
+    statePatch: {}, mutationGrounding: null,
   });
   assert.equal(fb.calls, 0);
 });

@@ -427,7 +427,7 @@ export class LLMModelRouter implements ModelRouter {
     if (tool.risk === "write" && !mutationGrounding) return undefined;
     if (hasUnknownTopLevelInput(repaired.input, tool)) return undefined;
     if (JSON.stringify(repaired.input).length > 8_000) return undefined;
-    return { kind: "tool", plan: { toolId: tool.id, input: repaired.input }, statePatch, ...(mutationGrounding ? { mutationGrounding } : {}) };
+    return { kind: "tool", plan: { toolId: tool.id, input: repaired.input }, statePatch, mutationGrounding: mutationGrounding ?? null };
   }
 
   async route(

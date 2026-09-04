@@ -95,13 +95,14 @@ export type ModelMessagePurpose = "clarification" | "unsupported" | "greeting" |
 export type ModelClarificationField = "dates" | "guests" | "room" | "booking" | "selection" | "occupancy";
 
 export type ModelRouteResult =
-  | { kind: "tool"; plan: ToolPlan; statePatch?: ConversationStatePatch; mutationGrounding?: MutationGrounding }
+  | { kind: "tool"; plan: ToolPlan; statePatch?: ConversationStatePatch; mutationGrounding?: MutationGrounding | null }
   | {
       kind: "message";
       message: string;
       purpose?: ModelMessagePurpose;
       missing?: readonly ModelClarificationField[];
       statePatch?: ConversationStatePatch;
+      mutationGrounding?: null;
   };
 export type ModelRoutingState = ConversationState & { activeBookings?: readonly { bookingId: string; roomNumber?: string }[] };
 
