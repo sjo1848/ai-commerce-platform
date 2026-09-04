@@ -40,7 +40,7 @@ function toolRoute(input, toolId = "hms.checkAvailability", statePatch = {}) {
   return { kind: "tool", toolId, input, clarificationReason: "none", missing: [], statePatch };
 }
 function messageRoute(reason, missing, statePatch = {}) {
-  return { kind: "message", toolId: "", input: {}, clarificationReason: reason, missing, statePatch };
+  return { kind: "message", toolId: "", input: {}, clarificationReason: reason, missing, statePatch, mutationGrounding: null };
 }
 
 test("LLM router accepts a visible tool with schema-bounded business arguments", async () => {
