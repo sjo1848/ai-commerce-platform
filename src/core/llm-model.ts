@@ -369,12 +369,15 @@ export class LLMModelRouter implements ModelRouter {
     await recordModelFallback(this.usage, context, "agent_core_route", reason, failureCategory);
     const fallbackResult = await this.fallback.route(message, context, availableTools, conversation, state);
     if (fallbackResult.kind === "message") {
-      const { statePatch: _discardedStatePatch, ...safeMessage } = fallbackResult;
+      const { statePatch: _discardedStatePatch, mutationGrounding: _discardedMutationGrounding, ...safeMessage } = fallbackResult;
+      if (safeMessage.purpose === "clarification" && (!safeMessage.missing || safeMessage.missing.length === 0)) {
+        return { ...safeMessage, missing: ["selection"] };
+      }
       return safeMessage;
     }
     const tool = availableTools.find((candidate) => candidate.id === fallbackResult.plan.toolId);
     if (!tool || tool.risk !== "read") {
-      return { kind: "message", purpose: "clarification", message: "No pude procesar la solicitud con seguridad. ¿Podés reformularla?" };
+      return { kind: "message", purpose: "clarification", message: "No pude procesar la solicitud con seguridad. ¿Podés reformularla?", missing: ["selection"] };
     }
     return { kind: "tool", plan: fallbackResult.plan };
   }

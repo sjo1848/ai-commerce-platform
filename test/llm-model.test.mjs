@@ -157,6 +157,15 @@ test("inconsistent message/tool clarification state fails to fallback", async ()
   assert.equal(fb.calls, 1);
 });
 
+test("fallback message discards state patch and mutation grounding", async () => {
+  const p = provider({ kind: "message", toolId: "", input: {}, clarificationReason: "missing", missing: [], statePatch: { activeBookingId: "forged" }, mutationGrounding: { kind: "cancellation", scope: "all" } });
+  const fb = fallback({ kind: "message", purpose: "clarification", message: "Necesito más datos", missing: [], statePatch: { selectedRoomNumbers: ["101"] }, mutationGrounding: { kind: "reservation", checkIn: "1900-01-01", checkOut: "1900-01-02", roomIds: ["forged"] } });
+  const result = await new LLMModelRouter(p, fb).route("reservá", context, tools);
+  assert.deepEqual(result, { kind: "message", purpose: "clarification", message: "Necesito más datos", missing: ["selection"] });
+  assert.equal("statePatch" in result, false);
+  assert.equal("mutationGrounding" in result, false);
+});
+
 test("provider failure degrades to deterministic fallback without changing policy", async () => {
   const p = provider(undefined, new Error("model unavailable"));
   const fb = fallback({ kind: "tool", plan: { toolId: "hms.checkAvailability", input: { checkIn: "2034-02-10", checkOut: "2034-02-12", guests: 1 } } });

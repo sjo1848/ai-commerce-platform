@@ -91,6 +91,24 @@ test("cancellation scope and booking are structured; contradictory wording canno
   assert.equal(approval?.toolId, "hms.cancelReservation");
 });
 
+test("all cancellation with one active booking canonicalizes multi route to exact single plan", async () => {
+  const route = { kind: "tool", plan: { toolId: "hms.cancelMultiReservation", input: { bookingIds: ["forged"] } }, statePatch: {}, mutationGrounding: { kind: "cancellation", scope: "all" } };
+  const { runtime, context } = await setup(route, ["hms.cancelReservation", "hms.cancelMultiReservation"], { "hms.cancelReservation": "approval", "hms.cancelMultiReservation": "approval" });
+  await runtime.conversation.append(context.session.id, { role: "tool", toolId: RESERVATION_GROUP_STATE_TOOL_ID, content: JSON.stringify({ activeBookingIds: ["booking-only"], activeBookings: [{ bookingId: "booking-only" }], revision: 1 }) });
+  await assert.rejects(() => runtime.orchestrator.chat("cancelá todo", context), ApprovalRequiredError);
+  const approval = runtime.audit.events.find((event) => event.status === "approval_required");
+  assert.equal(approval?.toolId, "hms.cancelReservation");
+});
+
+test("all cancellation with one active booking clarifies when single tool is hidden", async () => {
+  const route = { kind: "tool", plan: { toolId: "hms.cancelMultiReservation", input: {} }, statePatch: {}, mutationGrounding: { kind: "cancellation", scope: "all" } };
+  const { runtime, context } = await setup(route, ["hms.cancelMultiReservation"]);
+  await runtime.conversation.append(context.session.id, { role: "tool", toolId: RESERVATION_GROUP_STATE_TOOL_ID, content: JSON.stringify({ activeBookingIds: ["booking-only"], activeBookings: [{ bookingId: "booking-only" }], revision: 1 }) });
+  const result = await runtime.orchestrator.chat("cancelá todo", context);
+  assert.equal(result.outcome, "clarification");
+  assert.deepEqual(result.missing, ["booking"]);
+});
+
 test("activeBookings routing context is not persisted in conversation state", async () => {
   let routedState;
   const model = { async route(_message, _context, _tools, _conversation, state) { routedState = state; return { kind: "message", message: "ok", purpose: "acknowledgement", statePatch: {} }; } };

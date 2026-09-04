@@ -433,7 +433,7 @@ export class ChatOrchestrator {
         context,
       });
       await this.conversation.append(context.session.id, { role: "assistant", content: reply });
-      const missing = bounded?.missing ?? route.missing ?? [];
+      const missing = bounded?.missing ?? (route.missing?.length ? route.missing : ["selection"]);
       const isClarification = Boolean(bounded) || (route.purpose ?? "clarification") === "clarification";
       return { message: reply, sessionId: context.session.id, ...(isClarification ? { outcome: "clarification" as const, missing } : {}) };
     }
@@ -499,6 +499,9 @@ export class ChatOrchestrator {
 
       if (grounding.scope === "all") {
         if (groundedBookingIds.length === 1) {
+          if (route.plan.toolId === "hms.cancelMultiReservation" && !tools.some((tool) => tool.id === "hms.cancelReservation")) {
+            return this.clarification("La cancelación grupal requiere la operación de reserva individual habilitada. Indicame qué reserva específica querés cancelar.", normalized, context, ["booking"]);
+          }
           planInput = { bookingId: groundedBookingIds[0] };
         } else {
           if (route.plan.toolId === "hms.cancelReservation") {
@@ -520,7 +523,7 @@ export class ChatOrchestrator {
 
     const plan: ToolPlan = { toolId: route.plan.toolId, input: planInput };
     if (grounding.kind === "cancellation" && grounding.scope === "all" && groundedBookingIds.length === 1) {
-      if (plan.toolId !== "hms.cancelMultiReservation") plan.toolId = "hms.cancelReservation";
+      if (tools.some((tool) => tool.id === "hms.cancelReservation")) plan.toolId = "hms.cancelReservation";
     }
     if (grounding.kind === "cancellation" && grounding.scope === "all" && groundedBookingIds.length > 1) {
       if (plan.toolId !== "hms.cancelMultiReservation") return this.clarification("La operación no coincide con la cancelación grupal.", normalized, context, ["booking"]);
