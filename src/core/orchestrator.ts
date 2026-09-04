@@ -439,7 +439,10 @@ export class ChatOrchestrator {
     }
 
     const visibleTool = tools.find((tool) => tool.id === route.plan.toolId);
-    if (!visibleTool) return this.clarification("No pude validar una operación permitida.", normalized, context, ["selection"]);
+    if (!visibleTool) {
+      await this.audit.record({ timestamp: context.now, requestId: context.requestId, tenantId: context.tenant.id, actorId: context.actor.id, sessionId: context.session.id, toolId: route.plan.toolId, status: "denied", detail: "model_requested_non_visible_tool" });
+      throw new CoreError("TOOL_NOT_ALLOWED", "Requested tool is not available", 403);
+    }
     if (visibleTool.risk === "read") {
       const semanticState = invalidateStaleRoomGrounding(rawPriorState, applyUserSemanticTurn(rawPriorState, normalized, { tenantId: context.tenant.id, actorId: context.actor.id, sessionId: context.session.id }));
       const readIntent = multiToolIntent(route.plan.toolId);

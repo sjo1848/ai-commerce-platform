@@ -544,6 +544,7 @@ export class LLMModelRouter implements ModelRouter {
           purpose: messagePurpose(clarification.reason),
           ...(clarification.missing.length ? { missing: clarification.missing as readonly ModelClarificationField[] } : {}),
           statePatch,
+          mutationGrounding: null,
         };
       }
 
@@ -559,7 +560,7 @@ export class LLMModelRouter implements ModelRouter {
       if (tool.risk === "write" && !mutationGrounding) return this.fallbackRoute("missing_mutation_grounding", message, context, availableTools, conversation, state);
       if (hasUnknownTopLevelInput(value.input, tool)) return this.fallbackRoute("unknown_tool_argument", message, context, availableTools, conversation, state);
       if (JSON.stringify(value.input).length > 8_000) return this.fallbackRoute("tool_input_too_large", message, context, availableTools, conversation, state);
-      return { kind: "tool", plan: { toolId: tool.id, input: value.input }, statePatch, ...(mutationGrounding ? { mutationGrounding } : {}) };
+      return { kind: "tool", plan: { toolId: tool.id, input: value.input }, statePatch, mutationGrounding: mutationGrounding ?? null };
     } catch (error) {
       return this.fallbackRoute(
         "provider_failure",

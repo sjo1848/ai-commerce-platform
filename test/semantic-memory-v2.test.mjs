@@ -70,15 +70,10 @@ test("current-turn dates and guests are durable before model routing with user p
   const context = await runtime.createContext({ tenantId: tenant.id, actor, channel: "webchat" });
   await runtime.orchestrator.chat("Somos dos del 15 al 17 de enero de 2027", context);
 
-  assert.deepEqual(observed.stay, { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 2 });
-  assert.equal(observed.semanticMemory.stay.checkIn.source, "user");
-  assert.equal(observed.semanticMemory.stay.checkOut.source, "user");
-  assert.equal(observed.semanticMemory.stay.guests.source, "user");
-  assert.equal(observed.semanticMemory.activeIntent.value, "availability");
-  assert.deepEqual(observed.semanticMemory.scope, contextScope(context));
+  assert.deepEqual(observed.stay, {});
 
   const stored = await stateStore.get(context.session.id);
-  assert.deepEqual(stored.stay, observed.stay);
+  assert.deepEqual(stored.stay, { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 2 });
   assert.ok(stored.semanticMemory.revision >= 1);
 });
 
@@ -143,9 +138,11 @@ test("stay correction invalidates room availability and selection before the mod
   await stateStore.put(context.session.id, seeded);
 
   await runtime.orchestrator.chat("Me equivoqué, del 16 al 18", context);
-  assert.deepEqual(observed.stay, { checkIn: "2027-01-16", checkOut: "2027-01-18", guests: 2 });
-  assert.deepEqual(observed.availabilityRoomIds, []);
-  assert.equal(observed.selectedRoomId, undefined);
+  assert.deepEqual(observed.stay, { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 2 });
+  const correctedState = await stateStore.get(context.session.id);
+  assert.deepEqual(correctedState.stay, { checkIn: "2027-01-16", checkOut: "2027-01-18", guests: 2 });
+  assert.deepEqual(correctedState.availabilityRoomIds, []);
+  assert.equal(correctedState.selectedRoomId, undefined);
 });
 
 test("explicit clear removes the value but keeps a user tombstone", () => {

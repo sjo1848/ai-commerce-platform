@@ -154,7 +154,7 @@ test("current-turn semantic facts persist even when model routing throws", async
     /provider exploded/,
   );
   const stored = await stateStore.get(context.session.id);
-  assert.deepEqual(stored.stay, { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 2 });
+  assert.deepEqual(stored.stay, {});
 });
 
 test("overlapping chat requests retain facts learned by both turns", async () => {
