@@ -1,7 +1,7 @@
 ---
 description: Diagnoses repeated/systemic failures and proposes architecture or contract corrections before further micro-fixes; read-only by default.
 mode: subagent
-model: opencode/gpt-5.6-sol
+model: openai/gpt-5.6-sol
 steps: 36
 permissions:
   - action: edit

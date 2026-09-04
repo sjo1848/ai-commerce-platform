@@ -2,6 +2,10 @@
 
 This file is a runtime adapter policy. It does not change Project Method, Task Contracts, gates, invariants, DICS authority, or product scope.
 
+## Provider
+
+Use the native `openai` provider authenticated through OpenCode with `ChatGPT Plus/Pro` OAuth when available. Do not require OpenCode Zen for this routing and never commit credentials. If the OpenAI provider is unavailable, report a runtime/model blocker instead of silently changing project semantics or swapping to an unapproved provider.
+
 ## Routing principle
 
 Use the cheapest model tier that is adequate for the task. Escalate because of demonstrated complexity/risk, not because a command or test failed once.
@@ -57,4 +61,4 @@ Use only when the expected value justifies the higher tier:
 
 ## Cost-control intent
 
-The purpose of this routing is to spend most tokens on Luna/Terra and reserve Sol for infrequent, high-value decisions/reviews. Step limits are also role-specific so repetitive work cannot silently turn into an unbounded high-cost session.
+The purpose of this routing is to spend most routine work on Luna, normal engineering/review work on Terra, and reserve Sol for infrequent high-value reasoning and final criticism. Step limits are role-specific so repetitive work cannot silently turn into an unbounded high-cost session.

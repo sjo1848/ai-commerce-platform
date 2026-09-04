@@ -1,7 +1,7 @@
 ---
 description: Governs project execution under Project Method and delegates bounded work to specialized subagents using cost-aware GPT-5.6 routing.
 mode: primary
-model: opencode/gpt-5.6-luna
+model: openai/gpt-5.6-luna
 steps: 64
 permissions:
   - action: edit

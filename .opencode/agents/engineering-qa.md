@@ -1,7 +1,7 @@
 ---
 description: Performs engineering QA on an exact candidate artifact without editing it; verifies tests, invariants, regressions and evidence completeness.
 mode: subagent
-model: opencode/gpt-5.6-terra
+model: openai/gpt-5.6-terra
 steps: 36
 permissions:
   - action: edit
