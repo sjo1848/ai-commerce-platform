@@ -1,6 +1,7 @@
 ---
 description: Diagnoses repeated/systemic failures and proposes architecture or contract corrections before further micro-fixes; read-only by default.
 mode: subagent
+model: opencode/nemotron-3-ultra-free
 steps: 28
 permissions:
   - action: edit
