@@ -123,23 +123,11 @@ jobs:
             /tmp/r28-r4-probe-tail.log &
           PROBE_TAIL_PID=$!
 
-          # A live PTY process with a growing Wrangler log is the attachment-ready
-          # signal. Do not key readiness off the script PTY diagnostic banner.
-          attached=0
-          for attempt in $(seq 1 15); do
-            if ! kill -0 "$PROBE_TAIL_PID" 2>/dev/null; then break; fi
-            if [[ -s /tmp/r28-r4-probe-tail.log ]]; then attached=1; break; fi
-            sleep 1
-          done
-          if [[ "$attached" -ne 1 ]]; then
-            echo "R2.8.4 OBSERVABILITY_INVALID: Wrangler tail did not become live" >&2
-            cat /tmp/r28-r4-probe-tail.log >&2 || true
-            kill "$PROBE_TAIL_PID" 2>/dev/null || true
-            wait "$PROBE_TAIL_PID" 2>/dev/null || true
-            exit 1
-          fi
-
           for attempt in $(seq 1 10); do
+            if ! kill -0 "$PROBE_TAIL_PID" 2>/dev/null; then
+              echo "R2.8.4 OBSERVABILITY_INVALID: Wrangler tail exited before probe attachment" >&2
+              break
+            fi
             probe_path="/__r28-tail-probe?run=${GITHUB_RUN_ID}-${attempt}"
             status="$(curl -sS --max-time 10 -X POST -o /tmp/r28-r4-tail-probe.txt -w '%{http_code}' "$AI_COMMERCE_STAGING_URL$probe_path" || true)"
             if [[ "$status" == "404" ]] && grep -Fq "$probe_path" /tmp/r28-r4-probe-tail.log; then

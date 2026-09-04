@@ -15,6 +15,7 @@ test("R2.8.4 staging binds evidence to exact deployed version and shared concurr
   assert.match(workflow, /timeout 45s script/);
   assert.match(workflow, /PROBE_TAIL_PID/);
   assert.match(workflow, /kill -0.*PROBE_TAIL_PID/);
+  assert.doesNotMatch(workflow, /-s \/tmp\/r28-r4-probe-tail\.log/);
   assert.match(workflow, /seq 1 10/);
   assert.match(workflow, /grep -Fq.*__r28-tail-probe\?run=/);
   assert.match(workflow, /kill -INT.*PROBE_TAIL_PID/);
