@@ -1,6 +1,7 @@
 ---
 description: Governs project execution under Project Method and delegates bounded work to specialized subagents.
 mode: primary
+model: opencode/nemotron-3-ultra-free
 steps: 40
 permissions:
   - action: edit
