@@ -30,5 +30,7 @@ test("R2.8.4 staging binds evidence to exact deployed version and shared concurr
   assert.match(workflow, /r28-r4-llm-corpus-report/); assert.match(workflow, /r28-r4-llm-corpus-code/); assert.match(workflow, /timeout 600s/); assert.match(workflow, /r2\.8\.4-llm-language-corpus/); assert.match(workflow, /ai-commerce-staging/); assert.match(evalWorkflow, /group: ai-commerce-staging/);
   assert.match(workflow, /EXPECTED_MODEL/); assert.match(workflow, /routeInferences/); assert.match(workflow, /routeFallbacks/);
   assert.match(workflow, /CORPUS_REPORT/); assert.match(workflow, /for \(const item of report\.transcript/); assert.match(workflow, /missing availability audit/); assert.match(workflow, /corpus mutation/); assert.doesNotMatch(workflow, /name: Run LLM language corpus/);
+  const corpusGate = workflow.slice(workflow.indexOf("for (const item of report.transcript"), workflow.indexOf("EXPECTED_MODEL=\"$EXPECTED_MODEL\" MODEL_TELEMETRY", workflow.indexOf("for (const item of report.transcript")));
+  assert.doesNotMatch(corpusGate, /fb\.length/); assert.match(workflow, /if \(routeFallbacks\.length > 0\)/);
   assert.match(dialogue, /function uniqueExactSet/); assert.match(dialogue, /approvalTargetsExact/); assert.match(dialogue, /expectedRoomIds/);
 });
