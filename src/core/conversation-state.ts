@@ -1187,15 +1187,15 @@ export function conversationIntentForTool(toolId: string): ConversationIntent | 
 export function enrichPlanInputFromState(toolId: string, input: unknown, state: ConversationState): unknown {
   const raw = isRecord(input) ? { ...input } : {};
   if (toolId === "hms.checkAvailability") {
-    if (state.stay.checkIn) raw.checkIn = state.stay.checkIn;
-    if (state.stay.checkOut) raw.checkOut = state.stay.checkOut;
+    if (raw.checkIn === undefined && state.stay.checkIn) raw.checkIn = state.stay.checkIn;
+    if (raw.checkOut === undefined && state.stay.checkOut) raw.checkOut = state.stay.checkOut;
     if (state.stay.guests !== undefined) raw.guests = state.stay.guests;
   }
   if (toolId === "hms.getQuote" || toolId === "hms.createReservation") {
     const selectedRoomIds = canonicalSelectedRoomIds(state);
     if (raw.roomId === undefined && selectedRoomIds.length === 1) raw.roomId = selectedRoomIds[0];
-    if (state.stay.checkIn) raw.checkIn = state.stay.checkIn;
-    if (state.stay.checkOut) raw.checkOut = state.stay.checkOut;
+    if (raw.checkIn === undefined && state.stay.checkIn) raw.checkIn = state.stay.checkIn;
+    if (raw.checkOut === undefined && state.stay.checkOut) raw.checkOut = state.stay.checkOut;
   }
   if (toolId === "hms.cancelReservation" && raw.bookingId === undefined && state.activeBookingId) {
     raw.bookingId = state.activeBookingId;

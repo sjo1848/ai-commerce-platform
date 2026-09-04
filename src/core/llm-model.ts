@@ -529,7 +529,7 @@ export class LLMModelRouter implements ModelRouter {
 
       if (value.kind === "message") {
         if (value.mutationGrounding !== null) return this.fallbackRoute("message_mutation_grounding", message, context, availableTools, conversation, state);
-        if (value.toolId !== "" || !isRecord(value.input) || Object.keys(value.input).length !== 0 || clarification.reason === "none") {
+        if (value.toolId !== "" || !isRecord(value.input) || Object.keys(value.input).length !== 0 || clarification.reason === "none" || (clarification.missing.length !== 0 && clarification.reason !== "missing" && clarification.reason !== "ambiguous")) {
           return this.fallbackRoute("invalid_message_route", message, context, availableTools, conversation, state);
         }
         if (isSocialReason(clarification.reason) && (clarification.missing.length !== 0 || Object.keys(statePatch).length !== 0)) {

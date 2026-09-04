@@ -3,7 +3,6 @@ import type { AuditSink } from "./audit.js";
 import { serializeToolResult, type ConversationStore } from "./conversation.js";
 import {
   applyConversationStatePatch,
-  applyUserSemanticTurn,
   canonicalSelectedRoomIds,
   clearStaleRoomGrounding,
   CONVERSATION_STATE_TOOL_ID,
@@ -414,9 +413,7 @@ export class ChatOrchestrator {
     await this.usage.record({ timestamp: context.now, tenantId: context.tenant.id, sessionId: context.session.id, kind: "model_route", units: 1, estimatedCostUsd: 0 });
     const route = await this.model.route(normalized, context, tools, priorConversation, priorState);
     if (route.kind === "message") {
-      const semanticState = invalidateStaleRoomGrounding(rawPriorState, applyUserSemanticTurn(rawPriorState, normalized, {
-        tenantId: context.tenant.id, actorId: context.actor.id, sessionId: context.session.id,
-      }));
+      const semanticState = invalidateStaleRoomGrounding(rawPriorState);
       const nextState = applyConversationStatePatch(semanticState, stripModelSemanticStatePatch(route.statePatch), { activeIntentSource: "server" });
       await this.conversationState.put(context.session.id, nextState);
       const durableNextState = await this.conversationState.get(context.session.id);
@@ -444,7 +441,7 @@ export class ChatOrchestrator {
       throw new CoreError("TOOL_NOT_ALLOWED", "Requested tool is not available", 403);
     }
     if (visibleTool.risk === "read") {
-      const semanticState = invalidateStaleRoomGrounding(rawPriorState, applyUserSemanticTurn(rawPriorState, normalized, { tenantId: context.tenant.id, actorId: context.actor.id, sessionId: context.session.id }));
+      const semanticState = invalidateStaleRoomGrounding(rawPriorState);
       const readIntent = multiToolIntent(route.plan.toolId);
       const nextState = applyConversationStatePatch(semanticState, stripModelSemanticStatePatch(route.statePatch), readIntent
         ? { activeIntent: readIntent, activeIntentSource: "server" }
@@ -462,7 +459,12 @@ export class ChatOrchestrator {
     const proposedGrounding = route.mutationGrounding;
     if (!proposedGrounding) return this.clarification("No pude validar referencias suficientes para preparar esa operación.", normalized, context, ["selection"]);
     const serverBookings = currentGroup.activeBookingIds.length ? currentGroup.activeBookingIds : (rawPriorState.activeBookingId ? [rawPriorState.activeBookingId] : []);
-    const checkedGrounding = validateMutationGrounding(proposedGrounding, { rooms: rawPriorState.availabilityRoomIds, bookings: serverBookings, ...(rawPriorState.stay.checkIn ? { checkIn: rawPriorState.stay.checkIn } : {}), ...(rawPriorState.stay.checkOut ? { checkOut: rawPriorState.stay.checkOut } : {}) });
+    const checkInMeta = rawPriorState.semanticMemory.stay.checkIn;
+    const checkOutMeta = rawPriorState.semanticMemory.stay.checkOut;
+    const groundedDatesAreAuthoritative = checkInMeta?.source === "tool" || checkInMeta?.source === "server"
+      ? checkOutMeta?.source === "tool" || checkOutMeta?.source === "server"
+      : false;
+    const checkedGrounding = validateMutationGrounding(proposedGrounding, { rooms: rawPriorState.availabilityRoomIds, bookings: serverBookings, ...(groundedDatesAreAuthoritative && rawPriorState.stay.checkIn ? { checkIn: rawPriorState.stay.checkIn } : {}), ...(groundedDatesAreAuthoritative && rawPriorState.stay.checkOut ? { checkOut: rawPriorState.stay.checkOut } : {}) });
     if (!checkedGrounding.ok) return this.clarification("No pude validar referencias suficientes para preparar esa operación.", normalized, context, ["selection"]);
     const grounding = checkedGrounding.grounding;
     const expected = route.plan.toolId === "hms.createReservation" || route.plan.toolId === "hms.createMultiReservation" ? "reservation" : route.plan.toolId === "hms.cancelReservation" || route.plan.toolId === "hms.cancelMultiReservation" ? "cancellation" : "other";
