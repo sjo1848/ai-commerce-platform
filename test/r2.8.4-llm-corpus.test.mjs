@@ -12,6 +12,7 @@ test("R2.8.4 LLM language corpus has bounded structured outcomes", () => {
   const runner = readFileSync(new URL("../scripts/r2.8.4-llm-language-corpus.mjs", import.meta.url), "utf8");
   assert.match(runner, /expected/); assert.match(runner, /Idempotency-Key/); assert.match(runner, /Reservá la selección actual/);
   assert.match(runner, /approvalSummary/); assert.match(runner, /approvalConsumed/); assert.match(runner, /authoritative/); assert.match(runner, /roomNumbers/); assert.match(runner, /setupValid/); assert.match(runner, /mutationSignals/); assert.match(runner, /initial/); assert.match(runner, /final/);
+  assert.match(runner, /body\.outcome === "clarification"/); assert.match(runner, /body\.missing/); assert.match(runner, /typeof body\?\.message === "string"/); assert.match(runner, /uniqueMissing/); assert.match(runner, /approvalToken\|approvalSummary\|approvalTarget/); assert.match(runner, /observedOutcome/); assert.match(runner, /observedMissing/);
   assert.equal(/fetch\([^)]*\/api\/approve/.test(runner), false);
   const ids = new Set();
   for (const item of corpus.cases) {
