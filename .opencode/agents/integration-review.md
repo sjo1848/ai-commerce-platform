@@ -1,6 +1,7 @@
 ---
 description: Performs final integration review after implementation, QA, staging and independent criticism; read-only and evidence-focused.
 mode: subagent
+model: opencode/mimo-v2.5-free
 steps: 28
 permissions:
   - action: edit
