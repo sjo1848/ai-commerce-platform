@@ -10,6 +10,8 @@ Use the native `openai` provider authenticated through OpenCode with `ChatGPT Pl
 
 Use the cheapest model tier that is adequate for the task. Escalate because of demonstrated complexity/risk, not because a command or test failed once.
 
+Model tier and reasoning effort are separate controls. LOW/MEDIUM/HIGH below describe model capability/cost tiers (Luna/Terra/Sol), not OpenAI `reasoningEffort` values.
+
 ### LOW — GPT-5.6 Luna
 Use for:
 - project orchestration and handoffs;
@@ -41,13 +43,17 @@ Use only when the expected value justifies the higher tier:
 
 ## Agent mapping
 
-- `project-controller` -> Luna
-- `engineering-routine` -> Luna
-- `engineering` -> Terra
-- `engineering-qa` -> Terra
-- `root-cause-architect` -> Sol
-- `independent-critic` -> Sol
-- `integration-review` -> Terra
+| Agent | Model tier | Model | reasoningEffort |
+| --- | --- | --- | --- |
+| `project-controller` | LOW | GPT-5.6 Luna | `medium` |
+| `engineering-routine` | LOW | GPT-5.6 Luna | `low` |
+| `engineering` | MEDIUM | GPT-5.6 Terra | `medium` |
+| `engineering-qa` | MEDIUM | GPT-5.6 Terra | `medium` |
+| `integration-review` | MEDIUM | GPT-5.6 Terra | `medium` |
+| `root-cause-architect` | HIGH | GPT-5.6 Sol | `medium` |
+| `independent-critic` | HIGH | GPT-5.6 Sol | `medium` |
+
+`xhigh` is not pinned to any standing role. If a future task appears to justify higher reasoning effort, treat that as an explicit runtime escalation rather than a default cost.
 
 ## Escalation rules
 
@@ -61,4 +67,4 @@ Use only when the expected value justifies the higher tier:
 
 ## Cost-control intent
 
-The purpose of this routing is to spend most routine work on Luna, normal engineering/review work on Terra, and reserve Sol for infrequent high-value reasoning and final criticism. Step limits are role-specific so repetitive work cannot silently turn into an unbounded high-cost session.
+The purpose of this routing is to spend most routine work on Luna, normal engineering/review work on Terra, and reserve Sol for infrequent high-value reasoning and final criticism. Reasoning effort is independently bounded: routine mechanical work uses `low`, while standing substantive roles use `medium`. Step limits are role-specific so repetitive work cannot silently turn into an unbounded high-cost session.

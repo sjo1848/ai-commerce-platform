@@ -2,6 +2,7 @@
 description: Implements substantive bounded technical work under the active Task Contract; may edit and run the harness but cannot approve its own work.
 mode: subagent
 model: openai/gpt-5.6-terra
+reasoningEffort: medium
 steps: 48
 permissions:
   - action: subagent
