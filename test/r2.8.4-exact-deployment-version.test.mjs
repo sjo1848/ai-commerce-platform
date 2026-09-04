@@ -16,8 +16,16 @@ test("R2.8.4 staging binds evidence to exact deployed version and shared concurr
   assert.match(workflow, /PROBE_TAIL_PID/);
   assert.match(workflow, /kill -0.*PROBE_TAIL_PID/);
   assert.doesNotMatch(workflow, /-s \/tmp\/r28-r4-probe-tail\.log/);
-  assert.match(workflow, /seq 1 10/);
-  assert.match(workflow, /grep -Fq.*__r28-tail-probe\?run=/);
+  assert.match(workflow, /PROBE_CAPTURED=false/);
+  assert.match(workflow, /PROBE_FAILURE=""/);
+  assert.match(workflow, /seq 1 2/);
+  assert.match(workflow, /for poll in \$\(seq 1 10\)/);
+  assert.match(workflow, /printf '%s' "\$status" > \/tmp\/r28-r4-probe-status\.txt/);
+  assert.match(workflow, /if \[\[ "\$status" != "404" \]\]/);
+  assert.doesNotMatch(workflow, /status" == "404" \]\] && grep -Fq/);
+  assert.match(workflow, /grep -Fq "\$probe_path" \/tmp\/r28-r4-probe-tail\.log/);
+  assert.match(workflow, /tail exited while waiting to capture probe/);
+  assert.match(workflow, /did not capture 404 probe \$probe_path within bounded interval/);
   assert.match(workflow, /kill -INT.*PROBE_TAIL_PID/);
   assert.match(workflow, /r28-r4-llm-corpus-report/); assert.match(workflow, /r28-r4-llm-corpus-code/); assert.match(workflow, /timeout 600s/); assert.match(workflow, /r2\.8\.4-llm-language-corpus/); assert.match(workflow, /ai-commerce-staging/); assert.match(evalWorkflow, /group: ai-commerce-staging/);
   assert.match(workflow, /EXPECTED_MODEL/); assert.match(workflow, /routeInferences/); assert.match(workflow, /routeFallbacks/);

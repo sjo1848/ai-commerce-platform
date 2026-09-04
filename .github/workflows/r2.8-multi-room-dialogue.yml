@@ -116,31 +116,48 @@ jobs:
 
           # Phase A: attach tail first, then prove that the live stream receives an event.
           # `script` may emit "<not executed on terminal>"; that is only PTY metadata.
-          probe_path="/__r28-tail-probe?run=${GITHUB_RUN_ID}"
+          probe_path=""
           rm -f /tmp/r28-r4-probe-tail.log /tmp/r28-r4-tail-probe.txt /tmp/r28-r4-probe-status.txt
           timeout 45s script -qefc \
             "./node_modules/.bin/wrangler tail '$WORKER_NAME' --version-id '$R28_VERSION_ID' --format=json --method POST" \
             /tmp/r28-r4-probe-tail.log &
           PROBE_TAIL_PID=$!
 
-          for attempt in $(seq 1 10); do
+          PROBE_CAPTURED=false
+          PROBE_FAILURE=""
+          for attempt in $(seq 1 2); do
             if ! kill -0 "$PROBE_TAIL_PID" 2>/dev/null; then
-              echo "R2.8.4 OBSERVABILITY_INVALID: Wrangler tail exited before probe attachment" >&2
+              PROBE_FAILURE="tail exited before probe attachment"
               break
             fi
             probe_path="/__r28-tail-probe?run=${GITHUB_RUN_ID}-${attempt}"
             status="$(curl -sS --max-time 10 -X POST -o /tmp/r28-r4-tail-probe.txt -w '%{http_code}' "$AI_COMMERCE_STAGING_URL$probe_path" || true)"
-            if [[ "$status" == "404" ]] && grep -Fq "$probe_path" /tmp/r28-r4-probe-tail.log; then
-              printf '%s' "$status" > /tmp/r28-r4-probe-status.txt
+            printf '%s' "$status" > /tmp/r28-r4-probe-status.txt
+            if [[ "$status" != "404" ]]; then
+              PROBE_FAILURE="probe returned HTTP $status instead of expected 404"
               break
             fi
-            sleep 3
+
+            # The request and tail are asynchronous observations. Keep the
+            # probe path immutable while the live, exact-version tail catches
+            # up; only a wholly uncaptured probe may use a new path.
+            for poll in $(seq 1 10); do
+              if ! kill -0 "$PROBE_TAIL_PID" 2>/dev/null; then
+                PROBE_FAILURE="tail exited while waiting to capture probe $probe_path"
+                break 2
+              fi
+              if grep -Fq "$probe_path" /tmp/r28-r4-probe-tail.log; then
+                PROBE_CAPTURED=true
+                break 2
+              fi
+              sleep 2
+            done
           done
           kill -INT "$PROBE_TAIL_PID" 2>/dev/null || true
           set +e; wait "$PROBE_TAIL_PID"; PROBE_TAIL_CODE=$?; set -e
 
-          if [[ ! -f /tmp/r28-r4-probe-status.txt || "$(cat /tmp/r28-r4-probe-status.txt)" != "404" ]]; then
-            echo "R2.8.4 OBSERVABILITY_INVALID: foreground attachment probe did not return expected 404" >&2
+          if [[ -n "$PROBE_FAILURE" ]]; then
+            echo "R2.8.4 OBSERVABILITY_INVALID: $PROBE_FAILURE" >&2
             cat /tmp/r28-r4-tail-probe.txt >&2 || true
             exit 1
           fi
@@ -149,8 +166,8 @@ jobs:
             cat /tmp/r28-r4-probe-tail.log >&2 || true
             exit 1
           fi
-          if ! grep -Fq '/__r28-tail-probe?run=' /tmp/r28-r4-probe-tail.log; then
-            echo "R2.8.4 OBSERVABILITY_INVALID: foreground wrangler tail did not capture the non-LLM POST probe" >&2
+          if [[ "$PROBE_CAPTURED" != "true" ]]; then
+            echo "R2.8.4 OBSERVABILITY_INVALID: foreground tail did not capture 404 probe $probe_path within bounded interval" >&2
             cat /tmp/r28-r4-probe-tail.log >&2 || true
             exit 1
           fi
@@ -292,6 +309,7 @@ jobs:
             /tmp/r28-r4-deploy.log
             /tmp/r28-r4-probe-tail.log
             /tmp/r28-r4-tail-probe.txt
+            /tmp/r28-r4-probe-status.txt
             /tmp/r28-r4-tail.log
             /tmp/r28-r4-report.json
             /tmp/r28-r4-model-telemetry.json
