@@ -1,6 +1,7 @@
 ---
 description: Performs independent exact-artifact criticism; reports prioritized findings and never edits or self-fixes the candidate.
 mode: subagent
+model: opencode/nemotron-3-ultra-free
 steps: 32
 permissions:
   - action: edit

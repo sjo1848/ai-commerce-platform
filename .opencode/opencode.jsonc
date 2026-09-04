@@ -1,5 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  "model": "opencode/nemotron-3-ultra-free",
   "default_agent": "project-controller",
   "subagent_depth": 1
 }

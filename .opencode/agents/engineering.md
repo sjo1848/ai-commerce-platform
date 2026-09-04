@@ -1,6 +1,7 @@
 ---
 description: Implements bounded technical work under the active Task Contract; may edit and run the harness but cannot approve its own work.
 mode: subagent
+model: opencode/muse-spark-1.3-contributor-free
 steps: 40
 permissions:
   - action: subagent
