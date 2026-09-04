@@ -413,7 +413,7 @@ export class ChatOrchestrator {
     await this.usage.record({ timestamp: context.now, tenantId: context.tenant.id, sessionId: context.session.id, kind: "model_route", units: 1, estimatedCostUsd: 0 });
     const route = await this.model.route(normalized, context, tools, priorConversation, priorState);
     if (route.kind === "message") {
-      const semanticState = invalidateStaleRoomGrounding(rawPriorState);
+      const semanticState = rawPriorState;
       const nextState = applyConversationStatePatch(semanticState, stripModelSemanticStatePatch(route.statePatch), { activeIntentSource: "server" });
       await this.conversationState.put(context.session.id, nextState);
       const durableNextState = await this.conversationState.get(context.session.id);
@@ -441,7 +441,7 @@ export class ChatOrchestrator {
       throw new CoreError("TOOL_NOT_ALLOWED", "Requested tool is not available", 403);
     }
     if (visibleTool.risk === "read") {
-      const semanticState = invalidateStaleRoomGrounding(rawPriorState);
+      const semanticState = rawPriorState;
       const readIntent = multiToolIntent(route.plan.toolId);
       const nextState = applyConversationStatePatch(semanticState, stripModelSemanticStatePatch(route.statePatch), readIntent
         ? { activeIntent: readIntent, activeIntentSource: "server" }

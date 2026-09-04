@@ -1189,7 +1189,7 @@ export function enrichPlanInputFromState(toolId: string, input: unknown, state: 
   if (toolId === "hms.checkAvailability") {
     if (raw.checkIn === undefined && state.stay.checkIn) raw.checkIn = state.stay.checkIn;
     if (raw.checkOut === undefined && state.stay.checkOut) raw.checkOut = state.stay.checkOut;
-    if (state.stay.guests !== undefined) raw.guests = state.stay.guests;
+    if (raw.guests === undefined && state.stay.guests !== undefined) raw.guests = state.stay.guests;
   }
   if (toolId === "hms.getQuote" || toolId === "hms.createReservation") {
     const selectedRoomIds = canonicalSelectedRoomIds(state);
