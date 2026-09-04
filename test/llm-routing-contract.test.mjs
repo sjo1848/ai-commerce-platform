@@ -99,6 +99,7 @@ test("pure greeting is classified as a conversational message, not an operationa
           clarificationReason: "greeting",
           missing: [],
           statePatch: {},
+          mutationGrounding: null,
         },
       };
     },

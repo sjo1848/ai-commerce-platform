@@ -71,6 +71,7 @@ function provider() {
           clarificationReason: "none",
           missing: [],
           statePatch: { selectedRoomNumbers: ["101", "102"] },
+          mutationGrounding: { kind: "reservation", checkIn: "2030-01-01", checkOut: "2030-01-03", roomIds: ["room-101", "room-102"] },
         },
       };
     },

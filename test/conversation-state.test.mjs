@@ -182,7 +182,7 @@ test("reservation continuation with known dates but no room asks only for select
     conversationStateStore: stateStore,
     model: {
       async route() {
-        return { kind: "tool", plan: { toolId: "hms.createReservation", input: {} }, statePatch: {} };
+        return { kind: "message", purpose: "clarification", message: "¿Qué habitación querés reservar?", statePatch: {}, mutationGrounding: null };
       },
     },
   });
