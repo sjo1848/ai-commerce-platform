@@ -2,6 +2,7 @@
 description: Performs independent exact-artifact criticism; reports prioritized findings and never edits or self-fixes the candidate.
 mode: subagent
 model: openai/gpt-5.6-sol
+reasoningEffort: medium
 steps: 40
 permissions:
   - action: edit
