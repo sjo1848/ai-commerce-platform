@@ -2,6 +2,7 @@
 description: Executes small, mechanical or repetitive engineering tasks whose semantics are already fixed; low-cost and bounded.
 mode: subagent
 model: openai/gpt-5.6-luna
+reasoningEffort: low
 steps: 24
 permissions:
   - action: subagent
