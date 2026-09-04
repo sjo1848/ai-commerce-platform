@@ -3,6 +3,7 @@ import type { AuditSink } from "./audit.js";
 import { serializeToolResult, type ConversationStore } from "./conversation.js";
 import {
   applyConversationStatePatch,
+  applyUserSemanticTurn,
   canonicalSelectedRoomIds,
   clearStaleRoomGrounding,
   CONVERSATION_STATE_TOOL_ID,
@@ -50,6 +51,21 @@ function modelVisibleConversation(turns: readonly ModelConversationTurn[]): Mode
   return turns.filter((turn) => turn.toolId !== CONVERSATION_STATE_TOOL_ID && turn.toolId !== RESERVATION_GROUP_STATE_TOOL_ID).slice(-12);
 }
 
+function modelRoutingState(state: ConversationState, activeBookings: NonNullable<ModelRoutingState["activeBookings"]>): ModelRoutingState {
+  const visible = structuredClone(state);
+  const stayHasNonAuthoritativeFact = ["checkIn", "checkOut", "guests"].some((field) => {
+    const provenance = visible.semanticMemory.stay[field as keyof typeof visible.semanticMemory.stay];
+    return provenance?.source !== "tool" && provenance?.source !== "server";
+  });
+  for (const field of ["checkIn", "checkOut", "guests"] as const) {
+    const provenance = visible.semanticMemory.stay[field];
+    if (!stayHasNonAuthoritativeFact && (provenance?.source === "tool" || provenance?.source === "server")) continue;
+    delete visible.stay[field];
+    delete visible.semanticMemory.stay[field];
+  }
+  return { ...visible, activeBookings };
+}
+
 function invalidateStaleRoomGrounding(before: ConversationState, after: ConversationState): ConversationState {
   const stayChanged = before.stay.checkIn !== after.stay.checkIn
     || before.stay.checkOut !== after.stay.checkOut
@@ -58,11 +74,15 @@ function invalidateStaleRoomGrounding(before: ConversationState, after: Conversa
   return clearStaleRoomGrounding(after);
 }
 
-function preserveUserSemanticAuthority(before: ConversationState, after: ConversationState): ConversationState {
+function preserveUserSemanticAuthority(before: ConversationState, after: ConversationState, toolId: string): ConversationState {
   const next = structuredClone(after);
   const beforeMemory = (before as ConversationState & { semanticMemory?: ConversationState["semanticMemory"] }).semanticMemory;
   const afterMemory = (next as ConversationState & { semanticMemory?: ConversationState["semanticMemory"] }).semanticMemory;
   if (!beforeMemory || !afterMemory) return next;
+
+  // Availability is the authoritative observation for its complete query. Its
+  // tool provenance is required to bind a later mutation to those exact dates.
+  if (toolId === "hms.checkAvailability") return next;
 
   let staleStayTool = false;
   const preserveDate = (field: "checkIn" | "checkOut") => {
@@ -379,7 +399,7 @@ export class ChatOrchestrator {
     const data = await this.executor.execute(plan.toolId, plan.input, context, trustedMeta);
     const before = await this.conversationState.get(context.session.id);
     const toolUpdated = updateConversationStateFromTool(before, plan.toolId, plan.input, data);
-    await this.conversationState.put(context.session.id, preserveUserSemanticAuthority(before, toolUpdated));
+    await this.conversationState.put(context.session.id, preserveUserSemanticAuthority(before, toolUpdated, plan.toolId));
     await this.persistGroupOutcome(plan, data, context);
     await this.conversation.append(context.session.id, { role: "tool", toolId: plan.toolId, content: serializeToolResult(data) });
     const groundedContext = modelVisibleConversation(await this.conversation.list(context.session.id, 32));
@@ -404,16 +424,24 @@ export class ChatOrchestrator {
 
     const priorConversation = modelVisibleConversation(await this.conversation.list(context.session.id, 32));
     const rawPriorState = await this.conversationState.get(context.session.id);
-    const priorState: ModelRoutingState = { ...rawPriorState, activeBookings: currentGroup.activeBookings.map((b) => ({ bookingId: b.bookingId, ...(b.roomNumber ? { roomNumber: b.roomNumber } : {}) })) };
 
     await this.conversation.append(context.session.id, { role: "user", content: normalized });
     await this.usage.record({ timestamp: context.now, tenantId: context.tenant.id, sessionId: context.session.id, kind: "message", units: 1, estimatedCostUsd: 0 });
+
+    const scope = { tenantId: context.tenant.id, actorId: context.actor.id, sessionId: context.session.id };
+    const userUpdatedState = invalidateStaleRoomGrounding(
+      rawPriorState,
+      applyUserSemanticTurn(rawPriorState, normalized, scope),
+    );
+    await this.conversationState.put(context.session.id, userUpdatedState);
+
+    const priorState = modelRoutingState(userUpdatedState, currentGroup.activeBookings.map((b) => ({ bookingId: b.bookingId, ...(b.roomNumber ? { roomNumber: b.roomNumber } : {}) })));
 
     const tools = this.registry.descriptorsFor(context.tenant);
     await this.usage.record({ timestamp: context.now, tenantId: context.tenant.id, sessionId: context.session.id, kind: "model_route", units: 1, estimatedCostUsd: 0 });
     const route = await this.model.route(normalized, context, tools, priorConversation, priorState);
     if (route.kind === "message") {
-      const semanticState = rawPriorState;
+      const semanticState = userUpdatedState;
       const nextState = applyConversationStatePatch(semanticState, stripModelSemanticStatePatch(route.statePatch), { activeIntentSource: "server" });
       await this.conversationState.put(context.session.id, nextState);
       const durableNextState = await this.conversationState.get(context.session.id);
@@ -441,7 +469,7 @@ export class ChatOrchestrator {
       throw new CoreError("TOOL_NOT_ALLOWED", "Requested tool is not available", 403);
     }
     if (visibleTool.risk === "read") {
-      const semanticState = rawPriorState;
+      const semanticState = userUpdatedState;
       const readIntent = multiToolIntent(route.plan.toolId);
       const nextState = applyConversationStatePatch(semanticState, stripModelSemanticStatePatch(route.statePatch), readIntent
         ? { activeIntent: readIntent, activeIntentSource: "server" }
@@ -450,7 +478,14 @@ export class ChatOrchestrator {
       const durableNextState = await this.conversationState.get(context.session.id);
       const issue = multiRoomConversationIssue(durableNextState);
       if (issue) { const bounded = multiRoomClarification(issue); return this.clarification(bounded.message, normalized, context, bounded.missing); }
-      const planInput = enrichPlanInputFromState(route.plan.toolId, route.plan.input, durableNextState);
+      let planInput = enrichPlanInputFromState(route.plan.toolId, route.plan.input, durableNextState) as Record<string, unknown>;
+      if (route.plan.toolId === "hms.checkAvailability") {
+        const userStay = userUpdatedState.stay;
+        const userMemory = userUpdatedState.semanticMemory.stay;
+        if (userMemory.checkIn?.source === "user" && userStay.checkIn) planInput = { ...planInput, checkIn: userStay.checkIn };
+        if (userMemory.checkOut?.source === "user" && userStay.checkOut) planInput = { ...planInput, checkOut: userStay.checkOut };
+        if (userMemory.guests?.source === "user" && userStay.guests !== undefined) planInput = { ...planInput, guests: userStay.guests };
+      }
       const missing = missingRequiredBusinessFields(visibleTool, planInput);
       if (missing.length) return this.clarification(missingRequiredClarification(missing), normalized, context, missingRequiredClarificationFields(missing));
       return this.executePlan({ toolId: route.plan.toolId, input: planInput }, context, trustedMeta);
@@ -458,13 +493,15 @@ export class ChatOrchestrator {
     if (visibleTool.risk !== "write") return this.clarification("No pude validar una operación segura.", normalized, context, ["selection"]);
     const proposedGrounding = route.mutationGrounding;
     if (!proposedGrounding) return this.clarification("No pude validar referencias suficientes para preparar esa operación.", normalized, context, ["selection"]);
-    const serverBookings = currentGroup.activeBookingIds.length ? currentGroup.activeBookingIds : (rawPriorState.activeBookingId ? [rawPriorState.activeBookingId] : []);
-    const checkInMeta = rawPriorState.semanticMemory.stay.checkIn;
-    const checkOutMeta = rawPriorState.semanticMemory.stay.checkOut;
+    // Validate against the current turn's state so a correction has already
+    // invalidated the prior availability candidates before any write can plan.
+    const serverBookings = currentGroup.activeBookingIds.length ? currentGroup.activeBookingIds : (userUpdatedState.activeBookingId ? [userUpdatedState.activeBookingId] : []);
+    const checkInMeta = userUpdatedState.semanticMemory.stay.checkIn;
+    const checkOutMeta = userUpdatedState.semanticMemory.stay.checkOut;
     const groundedDatesAreAuthoritative = checkInMeta?.source === "tool" || checkInMeta?.source === "server"
       ? checkOutMeta?.source === "tool" || checkOutMeta?.source === "server"
       : false;
-    const checkedGrounding = validateMutationGrounding(proposedGrounding, { rooms: rawPriorState.availabilityRoomIds, bookings: serverBookings, ...(groundedDatesAreAuthoritative && rawPriorState.stay.checkIn ? { checkIn: rawPriorState.stay.checkIn } : {}), ...(groundedDatesAreAuthoritative && rawPriorState.stay.checkOut ? { checkOut: rawPriorState.stay.checkOut } : {}) });
+    const checkedGrounding = validateMutationGrounding(proposedGrounding, { rooms: userUpdatedState.availabilityRoomIds, bookings: serverBookings, ...(groundedDatesAreAuthoritative && userUpdatedState.stay.checkIn ? { checkIn: userUpdatedState.stay.checkIn } : {}), ...(groundedDatesAreAuthoritative && userUpdatedState.stay.checkOut ? { checkOut: userUpdatedState.stay.checkOut } : {}) });
     if (!checkedGrounding.ok) return this.clarification("No pude validar referencias suficientes para preparar esa operación.", normalized, context, ["selection"]);
     const grounding = checkedGrounding.grounding;
     const expected = route.plan.toolId === "hms.createReservation" || route.plan.toolId === "hms.createMultiReservation" ? "reservation" : route.plan.toolId === "hms.cancelReservation" || route.plan.toolId === "hms.cancelMultiReservation" ? "cancellation" : "other";

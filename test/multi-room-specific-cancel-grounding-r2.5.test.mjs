@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { HmsServiceBindingAdapter } from "../dist/adapters/hms-service-binding.js";
 import { hmsAgentTools } from "../dist/adapters/hms-agent-tools.js";
-import { emptyConversationState } from "../dist/core/conversation-state.js";
+import { emptyConversationState, updateConversationStateFromTool } from "../dist/core/conversation-state.js";
 import { InMemoryReservationOperationStore } from "../dist/core/reservation-operation-store.js";
 import { AgentCoreRuntime } from "../dist/core/runtime.js";
 import { InMemoryApprovalStore } from "../dist/webchat/approval.js";
@@ -134,13 +134,15 @@ async function setup() {
   const handler = createWebchatHandler(runtime, { fixedTenantId: "hotel-demo", fixedActorId: "visitor-demo", approvalStore });
   const context = await runtime.createContext({ tenantId: "hotel-demo", actor: actor(), channel: "webchat", requestId: "seed-r2.5-room-cancel" });
 
-  const state = emptyConversationState();
-  state.stay = { checkIn: "2027-02-10", checkOut: "2027-02-12", guests: 2 };
-  state.availabilityRoomIds = [roomA, roomB];
-  state.availabilityRooms = [
-    { id: roomA, roomNumber: "101", roomType: "DOUBLE" },
-    { id: roomB, roomNumber: "102", roomType: "DOUBLE" },
-  ];
+  const state = updateConversationStateFromTool(
+    emptyConversationState(),
+    "hms.checkAvailability",
+    { checkIn: "2027-02-10", checkOut: "2027-02-12", guests: 2 },
+    { rooms: [
+      { id: roomA, roomNumber: "101", roomType: "DOUBLE" },
+      { id: roomB, roomNumber: "102", roomType: "DOUBLE" },
+    ] },
+  );
   state.selectedRoomIds = [roomA, roomB];
   state.requestedRoomCount = 2;
   state.roomSelectionRevision = 1;

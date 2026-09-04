@@ -94,9 +94,13 @@ test("negated clear instructions do not erase remembered stay facts", () => {
 });
 
 test("explicit clear leaves a user tombstone and stale tool result cannot resurrect dates or grounding", () => {
-  const initial = applyUserSemanticTurn(emptyConversationState(), "Somos dos del 15 al 17 de enero de 2027", scope);
-  initial.availabilityRoomIds = ["room-current"];
-  initial.selectedRoomId = "room-current";
+  const userInitial = applyUserSemanticTurn(emptyConversationState(), "Somos dos del 15 al 17 de enero de 2027", scope);
+  const initial = updateConversationStateFromTool(
+    userInitial,
+    "hms.checkAvailability",
+    { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 2 },
+    { rooms: [{ id: "room-current", roomNumber: "101" }] },
+  );
   const cleared = applyUserSemanticTurn(initial, "Olvidá las fechas", scope);
   assert.equal(cleared.stay.checkIn, undefined);
   assert.equal(cleared.stay.checkOut, undefined);
@@ -154,7 +158,7 @@ test("current-turn semantic facts persist even when model routing throws", async
     /provider exploded/,
   );
   const stored = await stateStore.get(context.session.id);
-  assert.deepEqual(stored.stay, {});
+  assert.deepEqual(stored.stay, { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 2 });
 });
 
 test("overlapping chat requests retain facts learned by both turns", async () => {

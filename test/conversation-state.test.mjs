@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { InMemoryConversationStore } from "../dist/core/conversation.js";
-import { applyConversationStatePatch, ConversationBackedStateStore, InMemoryConversationStateStore, multiRoomConversationIssue } from "../dist/core/conversation-state.js";
+import { applyConversationStatePatch, ConversationBackedStateStore, InMemoryConversationStateStore, multiRoomConversationIssue, updateConversationStateFromTool } from "../dist/core/conversation-state.js";
 import { AgentCoreRuntime } from "../dist/core/runtime.js";
 import { InMemorySessionStore } from "../dist/core/session.js";
 
@@ -67,8 +67,10 @@ test("dates survive a clarification turn and are not requested again when guests
   const secondContext = await runtime.createContext({ tenantId: tenant.id, actor, channel: "webchat", sessionId: first.sessionId });
   await runtime.orchestrator.chat("Somos dos", secondContext);
 
-  assert.equal(seenStates[1].stay.checkIn, "2027-01-15");
-  assert.equal(seenStates[1].stay.checkOut, "2027-01-17");
+  // User-derived facts remain durable for the read plan, but are not exposed as
+  // authoritative routing state before the LLM has structured the turn.
+  assert.equal(seenStates[1].stay.checkIn, undefined);
+  assert.equal(seenStates[1].stay.checkOut, undefined);
   assert.deepEqual(executions[0].input, { guests: 2, checkIn: "2027-01-15", checkOut: "2027-01-17" });
 });
 
@@ -187,10 +189,12 @@ test("reservation continuation with known dates but no room asks only for select
     },
   });
   const context = await runtime.createContext({ tenantId: reservationTenant.id, actor: reservationActor, channel: "webchat" });
-  await stateStore.put(context.session.id, {
-    stay: { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 2 },
-    availabilityRoomIds: [roomId, secondRoomId],
-  });
+  await stateStore.put(context.session.id, updateConversationStateFromTool(
+    { stay: {}, availabilityRoomIds: [], availabilityRooms: [], selectedRoomIds: [], roomOccupancy: [] },
+    "hms.checkAvailability",
+    { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 2 },
+    { rooms: [{ id: roomId, roomNumber: "101" }, { id: secondRoomId, roomNumber: "102" }] },
+  ));
 
   const result = await runtime.orchestrator.chat("Para las fechas que te dije ya", context);
   assert.match(result.message, /habitación|opción/i);
@@ -240,8 +244,8 @@ test("conversation-backed state survives runtime replacement and internal snapsh
   const secondContext = await runtime2.createContext({ tenantId: tenant.id, actor, channel: "webchat", sessionId: firstContext.session.id });
   await runtime2.orchestrator.chat("Somos dos", secondContext);
 
-  assert.equal(observed.state.stay.checkIn, "2027-01-15");
-  assert.equal(observed.state.stay.checkOut, "2027-01-17");
+  assert.equal(observed.state.stay.checkIn, undefined);
+  assert.equal(observed.state.stay.checkOut, undefined);
   assert.ok(observed.history.every((turn) => turn.toolId !== "__conversation_state"));
   assert.deepEqual(executions[0].input, { guests: 2, checkIn: "2027-01-15", checkOut: "2027-01-17" });
 });

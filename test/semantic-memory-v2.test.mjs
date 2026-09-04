@@ -7,6 +7,7 @@ import {
   emptyConversationState,
   InMemoryConversationStateStore,
   ConversationBackedStateStore,
+  updateConversationStateFromTool,
 } from "../dist/core/conversation-state.js";
 import { AgentCoreRuntime } from "../dist/core/runtime.js";
 import { InMemorySessionStore } from "../dist/core/session.js";
@@ -132,13 +133,17 @@ test("stay correction invalidates room availability and selection before the mod
     },
   });
   const context = await runtime.createContext({ tenantId: tenant.id, actor, channel: "webchat" });
-  const seeded = applyUserSemanticTurn(emptyConversationState(), "Somos dos del 15 al 17 de enero de 2027", contextScope(context));
-  seeded.availabilityRoomIds = ["room-old-dates"];
-  seeded.selectedRoomId = "room-old-dates";
+  const userSeeded = applyUserSemanticTurn(emptyConversationState(), "Somos dos del 15 al 17 de enero de 2027", contextScope(context));
+  const seeded = updateConversationStateFromTool(
+    userSeeded,
+    "hms.checkAvailability",
+    { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 2 },
+    { rooms: [{ id: "room-old-dates", roomNumber: "101" }] },
+  );
   await stateStore.put(context.session.id, seeded);
 
   await runtime.orchestrator.chat("Me equivoqué, del 16 al 18", context);
-  assert.deepEqual(observed.stay, { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 2 });
+  assert.deepEqual(observed.stay, {});
   const correctedState = await stateStore.get(context.session.id);
   assert.deepEqual(correctedState.stay, { checkIn: "2027-01-16", checkOut: "2027-01-18", guests: 2 });
   assert.deepEqual(correctedState.availabilityRoomIds, []);
@@ -235,7 +240,7 @@ test("semantic memory survives conversation compaction and runtime replacement w
   const replacementContext = await runtime2.createContext({ tenantId: tenant.id, actor, channel: "webchat", sessionId: context.session.id });
   await runtime2.orchestrator.chat("¿Qué tenés?", replacementContext);
 
-  assert.deepEqual(observed.state.stay, { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 5 });
-  assert.equal(observed.state.semanticMemory.stay.guests.source, "user");
+  assert.deepEqual(observed.state.stay, {});
+  assert.equal(observed.state.semanticMemory.stay.guests, undefined);
   assert.ok(observed.history.every((turn) => turn.toolId !== "__conversation_state"));
 });

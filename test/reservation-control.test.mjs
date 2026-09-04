@@ -6,7 +6,7 @@ import { operationFingerprint } from "../dist/core/operation-fingerprint.js";
 import { InMemoryReservationOperationStore } from "../dist/core/reservation-operation-store.js";
 import { InMemoryApprovalStore } from "../dist/webchat/approval.js";
 import { createWebchatHandler } from "../dist/webchat/handler.js";
-import { emptyConversationState } from "../dist/core/conversation-state.js";
+import { emptyConversationState, updateConversationStateFromTool } from "../dist/core/conversation-state.js";
 import { hmsAgentTools } from "../dist/adapters/hms-agent-tools.js";
 
 const hotelId = "10000000-0000-0000-0000-000000000001";
@@ -80,10 +80,12 @@ function setup({ approvalStore = new InMemoryApprovalStore(now), model } = {}) {
   });
   const handler = createWebchatHandler(runtime, { fixedTenantId: "hotel-demo", fixedActorId: "visitor-demo", approvalStore });
   const contextReady = runtime.createContext({ tenantId: "hotel-demo", actor: actor("hms.reservation.write", "hms.reservation.cancel"), channel: "webchat" }).then(async (context) => {
-    const state = emptyConversationState();
-    state.stay = { checkIn: "2027-02-10", checkOut: "2027-02-12", guests: 1 };
-    state.availabilityRoomIds = [roomId, otherRoomId];
-    state.availabilityRooms = [{ id: roomId, roomNumber: "101", capacity: 2 }, { id: otherRoomId, roomNumber: "102", capacity: 2 }];
+    const state = updateConversationStateFromTool(
+      emptyConversationState(),
+      "hms.checkAvailability",
+      { checkIn: "2027-02-10", checkOut: "2027-02-12", guests: 1 },
+      { rooms: [{ id: roomId, roomNumber: "101", capacity: 2 }, { id: otherRoomId, roomNumber: "102", capacity: 2 }] },
+    );
     await runtime.conversationState.put(context.session.id, state);
     seededSessions.set(handler, context.session.id);
   });

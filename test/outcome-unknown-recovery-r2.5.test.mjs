@@ -4,7 +4,7 @@ import { CoreError } from "../dist/core/errors.js";
 import { AgentCoreRuntime } from "../dist/core/runtime.js";
 import { InMemoryApprovalStore } from "../dist/webchat/approval.js";
 import { createWebchatHandler } from "../dist/webchat/handler.js";
-import { emptyConversationState } from "../dist/core/conversation-state.js";
+import { emptyConversationState, updateConversationStateFromTool } from "../dist/core/conversation-state.js";
 
 const tenant = {
   id: "hotel-demo",
@@ -50,10 +50,12 @@ const canonicalPlan = {
 
 async function seed(runtime) {
   const context = await runtime.createContext({ tenantId: "hotel-demo", actor: { id: "visitor-demo", type: "customer", roles: ["customer"], permissions: ["hms.reservation.write"] }, channel: "webchat" });
-  const state = emptyConversationState();
-  state.stay = { checkIn: "2027-02-10", checkOut: "2027-02-12", guests: 1 };
-  state.availabilityRoomIds = ["room-101"];
-  state.availabilityRooms = [{ id: "room-101", roomNumber: "101", capacity: 2 }];
+  const state = updateConversationStateFromTool(
+    emptyConversationState(),
+    "hms.checkAvailability",
+    { checkIn: "2027-02-10", checkOut: "2027-02-12", guests: 1 },
+    { rooms: [{ id: "room-101", roomNumber: "101", capacity: 2 }] },
+  );
   await runtime.conversationState.put(context.session.id, state);
   return context.session.id;
 }

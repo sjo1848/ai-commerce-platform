@@ -539,6 +539,8 @@ export function bindConversationStateScope(current: ConversationState, scope: Co
 
 export type ApplyConversationStateOptions = {
   semanticSource?: SemanticMemorySource;
+  /** A completed authoritative availability query may replace matching user-entered stay facts. */
+  allowToolOverrideUserStay?: boolean;
   preferences?: readonly string[];
   clearPreferences?: boolean;
   activeIntent?: ConversationIntent | null;
@@ -637,7 +639,7 @@ export function applyConversationStatePatch(
   const setDate = (field: "checkIn" | "checkOut", value: string | null | undefined) => {
     if (value === undefined) return;
     const previous = memory.stay[field];
-    if (source === "tool" && previous?.source === "user") return;
+    if (source === "tool" && previous && (previous.source === "user" || previous.source === "tool" || previous.source === "server") && !options.allowToolOverrideUserStay) return;
     if (value === null) {
       if (next.stay[field] !== undefined || !previous?.cleared || previous.source !== source) {
         delete next.stay[field];
@@ -646,7 +648,7 @@ export function applyConversationStatePatch(
       return;
     }
     if (!validIsoDate(value)) return;
-    if (next.stay[field] !== value || previous?.cleared || !previous || (source === "user" && previous.source !== "user")) {
+    if (next.stay[field] !== value || previous?.cleared || !previous || (source === "tool" && options.allowToolOverrideUserStay && previous.source !== "tool")) {
       next.stay[field] = value;
       changed.add(field);
     }
@@ -655,7 +657,7 @@ export function applyConversationStatePatch(
   const setGuests = (value: number | null | undefined) => {
     if (value === undefined) return;
     const previous = memory.stay.guests;
-    if (source === "tool" && previous?.source === "user") return;
+    if (source === "tool" && previous && (previous.source === "user" || previous.source === "tool" || previous.source === "server") && !options.allowToolOverrideUserStay) return;
     if (value === null) {
       if (next.stay.guests !== undefined || !previous?.cleared || previous.source !== source) {
         delete next.stay.guests;
@@ -664,7 +666,7 @@ export function applyConversationStatePatch(
       return;
     }
     if (!validGuests(value)) return;
-    if (next.stay.guests !== value || previous?.cleared || !previous || (source === "user" && previous.source !== "user")) {
+    if (next.stay.guests !== value || previous?.cleared || !previous || (source === "tool" && options.allowToolOverrideUserStay && previous.source !== "tool")) {
       next.stay.guests = value;
       changed.add("guests");
     }
@@ -1186,16 +1188,28 @@ export function conversationIntentForTool(toolId: string): ConversationIntent | 
 
 export function enrichPlanInputFromState(toolId: string, input: unknown, state: ConversationState): unknown {
   const raw = isRecord(input) ? { ...input } : {};
+  const isWriteTool = toolId === "hms.createReservation" || toolId === "hms.cancelReservation";
+  const authoritativeStayValue = (field: keyof StayState): string | number | undefined => {
+    const provenance = state.semanticMemory.stay[field];
+    if (provenance?.cleared) return undefined;
+    if (isWriteTool && provenance?.source !== "tool" && provenance?.source !== "server") return undefined;
+    return state.stay[field];
+  };
   if (toolId === "hms.checkAvailability") {
-    if (raw.checkIn === undefined && state.stay.checkIn) raw.checkIn = state.stay.checkIn;
-    if (raw.checkOut === undefined && state.stay.checkOut) raw.checkOut = state.stay.checkOut;
-    if (raw.guests === undefined && state.stay.guests !== undefined) raw.guests = state.stay.guests;
+    const checkIn = authoritativeStayValue("checkIn");
+    const checkOut = authoritativeStayValue("checkOut");
+    const guests = authoritativeStayValue("guests");
+    if (raw.checkIn === undefined && typeof checkIn === "string") raw.checkIn = checkIn;
+    if (raw.checkOut === undefined && typeof checkOut === "string") raw.checkOut = checkOut;
+    if (raw.guests === undefined && typeof guests === "number") raw.guests = guests;
   }
   if (toolId === "hms.getQuote" || toolId === "hms.createReservation") {
     const selectedRoomIds = canonicalSelectedRoomIds(state);
+    const checkIn = authoritativeStayValue("checkIn");
+    const checkOut = authoritativeStayValue("checkOut");
     if (raw.roomId === undefined && selectedRoomIds.length === 1) raw.roomId = selectedRoomIds[0];
-    if (raw.checkIn === undefined && state.stay.checkIn) raw.checkIn = state.stay.checkIn;
-    if (raw.checkOut === undefined && state.stay.checkOut) raw.checkOut = state.stay.checkOut;
+    if (raw.checkIn === undefined && typeof checkIn === "string") raw.checkIn = checkIn;
+    if (raw.checkOut === undefined && typeof checkOut === "string") raw.checkOut = checkOut;
   }
   if (toolId === "hms.cancelReservation" && raw.bookingId === undefined && state.activeBookingId) {
     raw.bookingId = state.activeBookingId;
@@ -1208,6 +1222,12 @@ function userConflict(current: ConversationState, field: keyof StayState, candid
   if (meta?.source !== "user") return false;
   if (meta.cleared) return candidate !== undefined;
   if (candidate === undefined) return false;
+  return factValue(current, field) !== candidate;
+}
+
+function authoritativeAvailabilityConflict(current: ConversationState, field: keyof StayState, candidate: string | number | undefined): boolean {
+  const meta = current.semanticMemory.stay[field];
+  if ((meta?.source !== "tool" && meta?.source !== "server") || meta.cleared || candidate === undefined) return false;
   return factValue(current, field) !== candidate;
 }
 
@@ -1225,7 +1245,15 @@ export function updateConversationStateFromTool(
   const guests = validGuests(rawInput.guests) ? Number(rawInput.guests) : undefined;
   const stale = userConflict(normalized, "checkIn", checkIn)
     || userConflict(normalized, "checkOut", checkOut)
-    || userConflict(normalized, "guests", guests);
+    || userConflict(normalized, "guests", guests)
+    || (toolId === "hms.checkAvailability" && (authoritativeAvailabilityConflict(normalized, "checkIn", checkIn)
+      || authoritativeAvailabilityConflict(normalized, "checkOut", checkOut)
+      || authoritativeAvailabilityConflict(normalized, "guests", guests)));
+  const completedAvailabilityQuery = toolId === "hms.checkAvailability"
+    && validIsoDate(checkIn)
+    && validIsoDate(checkOut)
+    && guests !== undefined
+    && !stale;
 
   const patch: ConversationStatePatch = {};
   if (validIsoDate(checkIn)) patch.checkIn = checkIn;
@@ -1234,6 +1262,7 @@ export function updateConversationStateFromTool(
   const intent = conversationIntentForTool(toolId);
   const next = applyConversationStatePatch(normalized, patch, {
     semanticSource: "tool",
+    ...(completedAvailabilityQuery ? { allowToolOverrideUserStay: true } : {}),
     ...(intent ? { activeIntent: intent, activeIntentSource: "server" as const } : {}),
   });
 

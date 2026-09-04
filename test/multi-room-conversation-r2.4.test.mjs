@@ -103,7 +103,7 @@ test("concurrent equal-revision room selections conflict once and stale replay c
   assert.equal(replay.roomSelectionRevision, merged.roomSelectionRevision);
 });
 
-test("single-room plan enrichment remains compatible while multi-room selection never collapses", () => {
+test("read plan enrichment remains compatible while write plans never recover stale stay facts", () => {
   const single = applyConversationStatePatch(groundedAvailability(2), { selectedRoomNumbers: ["101"] });
   assert.deepEqual(enrichPlanInputFromState("hms.getQuote", {}, single), { roomId: room101, checkIn: "2027-01-15", checkOut: "2027-01-17" });
   const multi = applyConversationStatePatch(groundedAvailability(4), { selectedRoomNumbers: ["101", "102"] });

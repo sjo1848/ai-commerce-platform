@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { AgentCoreRuntime } from "../dist/core/runtime.js";
 import { ApprovalRequiredError } from "../dist/core/errors.js";
-import { emptyConversationState } from "../dist/core/conversation-state.js";
+import { emptyConversationState, updateConversationStateFromTool } from "../dist/core/conversation-state.js";
 import { RESERVATION_GROUP_STATE_TOOL_ID } from "../dist/core/reservation-group-state.js";
 
 const actor = { id: "visitor-1", type: "customer", roles: ["customer"], permissions: ["hms.availability.read", "hms.reservation.write", "hms.cancellation.write"] };
@@ -20,16 +20,18 @@ async function setup(route, allowedToolIds = baseTools.map((tool) => tool.id), t
     tenants: [{ id: "hotel-a", slug: "hotel-a", status: "active", allowedToolIds, toolPolicies }],
     responder: responder(),
     now: () => new Date("2026-08-29T13:00:00.000Z"),
-    model: { async route() { return route; } },
+    model: { async route(...args) { return typeof route === "function" ? route(...args) : route; } },
   });
   const context = await runtime.createContext({ tenantId: "hotel-a", actor, channel: "webchat" });
   return { runtime, context };
 }
 function stateWithRooms() {
-  const state = emptyConversationState();
-  state.availabilityRoomIds = ["room-a"];
-  state.availabilityRooms = [{ id: "room-a", roomNumber: "101" }];
-  return state;
+  return updateConversationStateFromTool(
+    emptyConversationState(),
+    "hms.checkAvailability",
+    { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 2 },
+    { rooms: [{ id: "room-a", roomNumber: "101" }] },
+  );
 }
 
 test("read route without mutation grounding enriches mechanical dates and guests post-route", async () => {
@@ -39,16 +41,19 @@ test("read route without mutation grounding enriches mechanical dates and guests
   assert.deepEqual(state.stay, { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 2 });
 });
 
-test("write route without grounding clarifies and leaves state and executor untouched", async () => {
+test("write route without grounding clarifies without mutating mutation state or executing", async () => {
   const { runtime, context } = await setup({ kind: "tool", plan: { toolId: "hms.createReservation", input: {} }, statePatch: {} }, ["hms.createReservation"]);
   const before = await runtime.conversationState.get(context.session.id);
   const result = await runtime.orchestrator.chat("reservá", context);
   assert.equal(result.outcome, "clarification");
-  assert.deepEqual(await runtime.conversationState.get(context.session.id), before);
+  const after = await runtime.conversationState.get(context.session.id);
+  assert.deepEqual(after.stay, before.stay);
+  assert.deepEqual(after.availabilityRoomIds, before.availabilityRoomIds);
+  assert.deepEqual(after.selectedRoomIds, before.selectedRoomIds);
   assert.equal(runtime.audit.events.some((event) => event.status === "succeeded"), false);
 });
 
-test("unknown room and tool/kind mismatch fail closed without execution or state mutation", async () => {
+test("unknown room and tool/kind mismatch fail closed without execution or mutation-state changes", async () => {
   for (const route of [
     { kind: "tool", plan: { toolId: "hms.createReservation", input: {} }, statePatch: {}, mutationGrounding: { kind: "reservation", checkIn: "2027-01-15", checkOut: "2027-01-17", roomIds: ["room-forged"] } },
     { kind: "tool", plan: { toolId: "hms.createReservation", input: {} }, statePatch: {}, mutationGrounding: { kind: "cancellation", scope: "all" } },
@@ -58,7 +63,10 @@ test("unknown room and tool/kind mismatch fail closed without execution or state
     const before = await runtime.conversationState.get(context.session.id);
     const result = await runtime.orchestrator.chat("hacelo", context);
     assert.equal(result.outcome, "clarification");
-    assert.deepEqual(await runtime.conversationState.get(context.session.id), before);
+    const after = await runtime.conversationState.get(context.session.id);
+    assert.deepEqual(after.stay, before.stay);
+    assert.deepEqual(after.availabilityRoomIds, before.availabilityRoomIds);
+    assert.deepEqual(after.selectedRoomIds, before.selectedRoomIds);
     assert.equal(runtime.audit.events.some((event) => event.status === "succeeded"), false);
   }
 });
@@ -66,14 +74,37 @@ test("unknown room and tool/kind mismatch fail closed without execution or state
 test("valid reservation grounding canonicalizes state before approval", async () => {
   const route = { kind: "tool", plan: { toolId: "hms.createReservation", input: { roomId: "forged", checkIn: "1900-01-01", checkOut: "1900-01-02" } }, statePatch: {}, mutationGrounding: { kind: "reservation", checkIn: "2027-01-15", checkOut: "2027-01-17", roomIds: ["room-a"] } };
   const { runtime, context } = await setup(route, ["hms.createReservation"], { "hms.createReservation": "approval" });
-  const seeded = stateWithRooms();
-  seeded.stay = { checkIn: "2027-01-15", checkOut: "2027-01-17" };
-  await runtime.conversationState.put(context.session.id, seeded);
+  await runtime.conversationState.put(context.session.id, stateWithRooms());
   await assert.rejects(() => runtime.orchestrator.chat("reservá la 101", context), ApprovalRequiredError);
   const state = await runtime.conversationState.get(context.session.id);
   assert.equal(state.stay.checkIn, "2027-01-15");
   assert.equal(state.stay.checkOut, "2027-01-17");
   assert.deepEqual(state.selectedRoomIds, ["room-a"]);
+});
+
+test("successful availability promotes its exact query for reservation HITL while stale corrections fail closed", async () => {
+  const routes = [
+    { kind: "tool", plan: { toolId: "hms.checkAvailability", input: { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 2 } }, statePatch: {}, mutationGrounding: null },
+    { kind: "tool", plan: { toolId: "hms.createReservation", input: {} }, statePatch: {}, mutationGrounding: { kind: "reservation", checkIn: "2027-01-15", checkOut: "2027-01-17", roomIds: ["room-a"] } },
+    { kind: "tool", plan: { toolId: "hms.createReservation", input: {} }, statePatch: {}, mutationGrounding: { kind: "reservation", checkIn: "2027-01-15", checkOut: "2027-01-17", roomIds: ["room-a"] } },
+  ];
+  let routeIndex = 0;
+  const { runtime, context } = await setup(() => routes[routeIndex++], ["hms.checkAvailability", "hms.createReservation"], { "hms.createReservation": "approval" });
+
+  await runtime.orchestrator.chat("Somos dos del 15 al 17 de enero de 2027", context);
+  const available = await runtime.conversationState.get(context.session.id);
+  assert.equal(available.semanticMemory.stay.checkIn?.source, "tool");
+  assert.equal(available.semanticMemory.stay.checkOut?.source, "tool");
+  assert.equal(available.semanticMemory.stay.guests?.source, "tool");
+
+  await assert.rejects(() => runtime.orchestrator.chat("reservá la 101", context), ApprovalRequiredError);
+  const approvalsBeforeCorrection = runtime.audit.events.filter((event) => event.status === "approval_required").length;
+  const result = await runtime.orchestrator.chat("mejor del 20 al 22 de enero de 2027", context);
+  assert.equal(result.outcome, "clarification");
+  assert.equal(runtime.audit.events.filter((event) => event.status === "approval_required").length, approvalsBeforeCorrection);
+  const corrected = await runtime.conversationState.get(context.session.id);
+  assert.deepEqual(corrected.availabilityRoomIds, []);
+  assert.deepEqual(corrected.selectedRoomIds, []);
 });
 
 test("route clarification is observable as outcome and missing fields", async () => {
