@@ -184,9 +184,9 @@ test("R2.5 grounds multi-room create from durable state, requires one exact appr
   const pending = await first.json();
   assert.equal(first.status, 409);
   assert.equal(pending.error.code, "APPROVAL_REQUIRED");
-  assert.match(pending.approvalSummary, /2 habitaciones/);
-  assert.match(pending.approvalSummary, new RegExp(roomA));
-  assert.match(pending.approvalSummary, new RegExp(roomB));
+  assert.match(pending.approvalSummary, /habitaciones 101 y 102/i);
+  assert.doesNotMatch(pending.approvalSummary, new RegExp(roomA));
+  assert.doesNotMatch(pending.approvalSummary, new RegExp(roomB));
   assert.match(pending.approvalSummary, /2027-02-10/);
   assert.equal(env.mock.calls.filter((call) => call.method === "createReservation").length, 0);
   assert.equal(env.routeCount(), 1);
