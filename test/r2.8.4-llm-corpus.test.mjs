@@ -9,7 +9,7 @@ test("R2.8.4 LLM language corpus has bounded structured outcomes", () => {
   assert.equal(corpus.cases.length, 15);
   assert.deepEqual(corpus.cases.find((item) => item.id === "L08")?.expected.roomNumbers, ["101", "102", "103"]);
   assert.ok(corpus.cases.filter((item) => item.setupGuests !== undefined).every((item) => Number.isInteger(item.setupGuests) && item.setupGuests >= 1 && item.setupGuests <= 20));
-  assert.match(llmSource, /Quantities explicitly attached to personas/); assert.match(llmSource, /For 'X en vez de Y'/);
+  assert.match(llmSource, /Quantities explicitly attached to personas/); assert.match(llmSource, /For 'X en vez de Y'/); assert.match(llmSource, /La 101, en vez de la 102/); assert.match(llmSource, /Do not add room 103 or any other available room/);
   const runner = readFileSync(new URL("../scripts/r2.8.4-llm-language-corpus.mjs", import.meta.url), "utf8");
   assert.match(runner, /expected/); assert.match(runner, /Idempotency-Key/); assert.match(runner, /Reservá la selección actual/);
   assert.match(runner, /approvalSummary/); assert.match(runner, /approvalConsumed/); assert.match(runner, /authoritative/); assert.match(runner, /roomNumbers/); assert.match(runner, /setupValid/); assert.match(runner, /mutationSignals/); assert.match(runner, /initial/); assert.match(runner, /final/);
