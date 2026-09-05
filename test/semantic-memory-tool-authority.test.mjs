@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyUserSemanticTurn, InMemoryConversationStateStore } from "../dist/core/conversation-state.js";
+import { applyUserSemanticTurn, InMemoryConversationStateStore, updateConversationStateFromTool } from "../dist/core/conversation-state.js";
 import { AgentCoreRuntime } from "../dist/core/runtime.js";
 
 const tenant = {
@@ -47,7 +47,7 @@ function availabilityTool() {
   };
 }
 
-test("an older approved/tool plan cannot roll back newer user-owned stay memory or ground old rooms", async () => {
+test("an older approved/tool plan cannot roll back newer authoritative availability or ground old rooms", async () => {
   const stateStore = new InMemoryConversationStateStore();
   const runtime = new AgentCoreRuntime({
     tenants: [tenant],
@@ -61,9 +61,12 @@ test("an older approved/tool plan cannot roll back newer user-owned stay memory 
     "No, pará: somos tres del 15 al 17 de enero de 2027",
     scope,
   );
-  corrected.availabilityRoomIds = ["room-current-stay"];
-  corrected.selectedRoomId = "room-current-stay";
-  await stateStore.put(context.session.id, corrected);
+  await stateStore.put(context.session.id, updateConversationStateFromTool(
+    corrected,
+    "hms.checkAvailability",
+    { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 3 },
+    { rooms: [{ id: "room-current-stay", roomNumber: "101" }] },
+  ));
 
   await runtime.orchestrator.executeApprovedPlan(
     { toolId: "hms.checkAvailability", input: { checkIn: "2027-01-10", checkOut: "2027-01-12", guests: 2 } },
@@ -73,9 +76,9 @@ test("an older approved/tool plan cannot roll back newer user-owned stay memory 
 
   const stored = await stateStore.get(context.session.id);
   assert.deepEqual(stored.stay, { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 3 });
-  assert.equal(stored.semanticMemory.stay.checkIn.source, "user");
-  assert.equal(stored.semanticMemory.stay.checkOut.source, "user");
-  assert.equal(stored.semanticMemory.stay.guests.source, "user");
+  assert.equal(stored.semanticMemory.stay.checkIn.source, "tool");
+  assert.equal(stored.semanticMemory.stay.checkOut.source, "tool");
+  assert.equal(stored.semanticMemory.stay.guests.source, "tool");
   assert.deepEqual(stored.availabilityRoomIds, []);
   assert.equal(stored.selectedRoomId, undefined);
 });

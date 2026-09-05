@@ -9,10 +9,12 @@ import type {
   ModelConversationTurn,
   ModelMessagePurpose,
   ModelRouteResult,
+  ModelRoutingState,
   ModelRouter,
   ToolDescriptor,
 } from "./types.js";
 import type { UsageSink } from "./usage.js";
+import { validateMutationGrounding, type MutationGrounding } from "./mutation-grounding.js";
 
 const TRUSTED_FIELDS = new Set([
   "tenantid", "hotelid", "actorid", "guestid", "roles", "permissions",
@@ -67,8 +69,19 @@ const ROUTE_SCHEMA: JsonSchema = {
     clarificationReason: { type: "string", enum: CLARIFICATION_REASONS },
     missing: { type: "array", items: { type: "string", enum: CLARIFICATION_FIELDS }, maxItems: 5 },
     statePatch: STATE_PATCH_SCHEMA,
+    mutationGrounding: {
+      type: ["object", "null"], additionalProperties: false,
+      properties: {
+        kind: { type: "string", enum: ["reservation", "cancellation"] },
+        checkIn: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
+        checkOut: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
+        roomIds: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 10 },
+        scope: { type: "string", enum: ["single", "all"] },
+        bookingId: { type: "string" },
+      }, required: ["kind"],
+    },
   },
-  required: ["kind", "toolId", "input", "clarificationReason", "missing", "statePatch"],
+  required: ["kind", "toolId", "input", "clarificationReason", "missing", "statePatch", "mutationGrounding"],
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -124,6 +137,7 @@ function sanitizedConversation(conversation: readonly ModelConversationTurn[]): 
  */
 function modelVisibleState(state: Readonly<ConversationState>): Record<string, unknown> {
   const semanticMemory = (state as Readonly<ConversationState> & { semanticMemory?: ConversationState["semanticMemory"] }).semanticMemory;
+  const activeBookings = (state as Readonly<ConversationState> & { activeBookings?: readonly { bookingId: string; roomNumber?: string }[] }).activeBookings;
   return {
     stay: state.stay,
     preferences: semanticMemory?.preferences.slice(-8).map((item) => item.value) ?? [],
@@ -139,6 +153,7 @@ function modelVisibleState(state: Readonly<ConversationState>): Record<string, u
     ...((state.roomOccupancy?.length ?? 0) > 0 ? { roomOccupancy: state.roomOccupancy } : {}),
     ...(state.activeBookingId ? { activeBookingId: state.activeBookingId } : {}),
     ...(state.bookingStatus ? { bookingStatus: state.bookingStatus } : {}),
+    ...(activeBookings ? { activeBookings: activeBookings.map((booking) => ({ bookingId: booking.bookingId, ...(booking.roomNumber ? { roomNumber: booking.roomNumber } : {}) })) } : {}),
   };
 }
 
@@ -224,6 +239,22 @@ function parseStatePatch(value: unknown): ConversationStatePatch | undefined {
     }
   }
   return patch;
+}
+
+function parseMutationGrounding(value: unknown, tool: ToolDescriptor | undefined, state: Readonly<ConversationState>): MutationGrounding | null | undefined {
+  if (value === null) return null;
+  if (!tool || tool.risk !== "write") return undefined;
+  const rooms = state.availabilityRoomIds;
+  const ephemeralBookings = (state as Readonly<ConversationState> & { activeBookings?: readonly { bookingId: string }[] }).activeBookings;
+  const bookings = ephemeralBookings?.map((booking) => booking.bookingId)
+    ?? (state.activeBookingId ? [state.activeBookingId] : undefined);
+  const result = validateMutationGrounding(value, {
+    rooms,
+    ...(bookings ? { bookings } : {}),
+    ...(state.stay.checkIn ? { checkIn: state.stay.checkIn } : {}),
+    ...(state.stay.checkOut ? { checkOut: state.stay.checkOut } : {}),
+  });
+  return result.ok ? result.grounding : undefined;
 }
 
 function isReservationIntent(message: string): boolean {
@@ -332,11 +363,23 @@ export class LLMModelRouter implements ModelRouter {
     context: ExecutionContext,
     availableTools: readonly ToolDescriptor[],
     conversation: readonly ModelConversationTurn[],
-    state: Readonly<ConversationState>,
+    state: Readonly<ModelRoutingState>,
     failureCategory?: string,
   ): Promise<ModelRouteResult> {
     await recordModelFallback(this.usage, context, "agent_core_route", reason, failureCategory);
-    return this.fallback.route(message, context, availableTools, conversation, state);
+    const fallbackResult = await this.fallback.route(message, context, availableTools, conversation, state);
+    if (fallbackResult.kind === "message") {
+      const { statePatch: _discardedStatePatch, mutationGrounding: _discardedMutationGrounding, ...safeMessage } = fallbackResult;
+      if (safeMessage.purpose === "clarification" && (!safeMessage.missing || safeMessage.missing.length === 0)) {
+        return { ...safeMessage, missing: ["selection"] };
+      }
+      return safeMessage;
+    }
+    const tool = availableTools.find((candidate) => candidate.id === fallbackResult.plan.toolId);
+    if (!tool || tool.risk !== "read") {
+      return { kind: "message", purpose: "clarification", message: "No pude procesar la solicitud con seguridad. ¿Podés reformularla?", missing: ["selection"] };
+    }
+    return { kind: "tool", plan: fallbackResult.plan };
   }
 
   private async repairContradictoryToolRoute(
@@ -345,6 +388,8 @@ export class LLMModelRouter implements ModelRouter {
     message: string,
     context: ExecutionContext,
     availableTools: readonly ToolDescriptor[],
+    state: Readonly<ConversationState>,
+    onProviderFailure?: (category: string | undefined) => void,
   ): Promise<ModelRouteResult | undefined> {
     let repairResult;
     try {
@@ -364,7 +409,8 @@ export class LLMModelRouter implements ModelRouter {
         temperature: 0,
         label: "agent_core_route_repair",
       });
-    } catch {
+    } catch (error) {
+      onProviderFailure?.(safeProviderFailureCategory(error));
       return undefined;
     }
 
@@ -372,7 +418,7 @@ export class LLMModelRouter implements ModelRouter {
     const repaired = repairResult.value;
     if (!isRecord(repaired)) return undefined;
     const keys = Object.keys(repaired);
-    if (keys.some((key) => !["kind", "toolId", "input", "clarificationReason", "missing", "statePatch"].includes(key))) return undefined;
+    if (keys.some((key) => !["kind", "toolId", "input", "clarificationReason", "missing", "statePatch", "mutationGrounding"].includes(key))) return undefined;
     if (hasTrustedField(repaired)) return undefined;
     const clarification = clarificationDecision(repaired);
     const statePatch = parseStatePatch(repaired.statePatch);
@@ -380,9 +426,11 @@ export class LLMModelRouter implements ModelRouter {
     if (repaired.kind !== "tool" || typeof repaired.toolId !== "string" || !isRecord(repaired.input) || clarification.reason !== "none" || clarification.missing.length !== 0) return undefined;
     const tool = availableTools.find((candidate) => candidate.id === repaired.toolId);
     if (!tool) return undefined;
+    const mutationGrounding = parseMutationGrounding(repaired.mutationGrounding, tool, state);
+    if (tool.risk === "write" && !mutationGrounding) return undefined;
     if (hasUnknownTopLevelInput(repaired.input, tool)) return undefined;
     if (JSON.stringify(repaired.input).length > 8_000) return undefined;
-    return { kind: "tool", plan: { toolId: tool.id, input: repaired.input }, statePatch };
+    return { kind: "tool", plan: { toolId: tool.id, input: repaired.input }, statePatch, mutationGrounding: mutationGrounding ?? null };
   }
 
   async route(
@@ -390,7 +438,7 @@ export class LLMModelRouter implements ModelRouter {
     context: ExecutionContext,
     availableTools: readonly ToolDescriptor[],
     conversation: readonly ModelConversationTurn[] = [],
-    state: Readonly<ConversationState> = emptyConversationState(),
+    state: Readonly<ModelRoutingState> = emptyConversationState(),
   ): Promise<ModelRouteResult> {
     const toolText = availableTools.map(renderTool).join("\n");
     const requirements = capabilityRequirements(availableTools);
@@ -409,16 +457,21 @@ export class LLMModelRouter implements ModelRouter {
       "Server scope, provenance and revision metadata are intentionally not model-visible and must never be inferred or requested.",
       "statePatch records only facts learned or explicitly changed in the CURRENT user message. For dates/guest count it is only a routing hint: Core independently owns durable semantic persistence and ignores ungrounded model memory patches.",
       "For dates and guest count, combine the current message with CURRENT_CONVERSATION_STATE. Never ask again for a value already present there unless the user explicitly changed it ambiguously.",
+      "Quantities explicitly attached to personas, huéspedes or pax are guest/occupancy quantities, never room counts or room references.",
+      "For 'X en vez de Y', include X, exclude Y, and never add unrelated candidates; preserve prior rooms only when state explicitly identifies unaffected selections.",
       "For one displayed option by position, selectedRoomIndex is the ONE-BASED list position/index. For several ordinals such as 'las dos primeras', use selectedRoomIndexes=[1,2]. Core resolves every index server-side.",
       "For natural room numbers such as 'la 101 y la 102', use selectedRoomNumbers=['101','102']. They must come from CURRENT_CONVERSATION_STATE.availabilityRooms. Never derive a roomId from the number yourself.",
       "Natural relational references are explicit too: if exactly TWO current candidates exist, 'las dos' => selectedRoomRelation='both'. If exactly one room is selected and exactly one other candidate exists, 'la otra' => selectedRoomRelation='other'. Otherwise these references are ambiguous and you must ask which room(s), never choose arbitrarily.",
       "selectedRoomIds may only copy exact IDs already present in CURRENT_CONVERSATION_STATE.availabilityRoomIds. Core rejects unknown IDs, numbers and out-of-range ordinals.",
       "selectedRoomIds/Indexes/Numbers represent the FINAL desired selected set for this turn. A correction like 'cambiá la 102 por la 103' must preserve unaffected 101 and emit the final set 101+103.",
+      "An explicit room-count declaration must match the final explicit room reference set. If they differ, ask for selection clarification; never acknowledge or route a write.",
       "For 'quiero dos habitaciones' or 'reservame dos' without exact rooms, set requestedRoomCount=2 and ask only which rooms/selection. Never choose arbitrary candidates.",
       "For explicit room allocation, use roomOccupancy entries with exactly one roomNumber/roomIndex/roomId plus guests. Never invent missing allocations. If allocations conflict with known total guests, ask only how to repart/distribute occupancy.",
       "A selection-only or correction-only turn that is complete and needs no tool => kind=message, clarificationReason=acknowledgement, missing=[], toolId='', input={}, with the bounded statePatch.",
       "When more than one room is selected and hms.createMultiReservation is visible, multi-room reservation intent must route to hms.createMultiReservation. Never collapse several rooms into one roomId. Core server-grounds the exact selected room set and dates; external policy owns approval.",
       "Booking grounding is server-owned: use the current active booking from state for cancellation planning, never invent or mutate booking IDs in statePatch.",
+      "Every message/read route MUST set mutationGrounding=null. Every write route MUST include mutationGrounding: reservation requires explicit checkIn, checkOut and exact roomIds; cancellation requires scope=single plus exact visible bookingId, or scope=all. Core validates it all-or-nothing; statePatch never substitutes for it.",
+      "For reservation grounding, reaffirm dates and exact room IDs even when they already exist in state. For cancellation, reaffirm the exact booking ID or explicit whole-group scope. Never infer mutation grounding from raw text in Core.",
       "FIRST identify current intent. THEN apply only requirements for that capability.",
       "Pure greeting with no operational request => kind=message, clarificationReason=greeting, missing=[], toolId='', input={}, statePatch={}.",
       "Pure thanks/social acknowledgement with no operational request => kind=message, clarificationReason=social, missing=[], toolId='', input={}, statePatch={}.",
@@ -436,12 +489,13 @@ export class LLMModelRouter implements ModelRouter {
       "Example with exactly two availability candidates 101 and 102: 'Me quedo con las dos' => kind=message, clarificationReason=acknowledgement, statePatch={selectedRoomRelation:'both'}, missing=[].",
       "Example with exactly two candidates and 101 currently selected: 'Mejor la otra' => kind=message, clarificationReason=acknowledgement, statePatch={selectedRoomRelation:'other'}, missing=[]. With three or more candidates, ask which one instead.",
       "Example after availabilityRooms=[{id:roomA,roomNumber:'101'},{id:roomB,roomNumber:'102'},{id:roomC,roomNumber:'103'}]: 'Quiero la 101 y la 102' => kind=message, clarificationReason=acknowledgement, statePatch={selectedRoomNumbers:['101','102']}, missing=[].",
-      "Example with that same state and known dates: 'Quiero reservar la 101 y la 102' => kind=tool, toolId=hms.createMultiReservation, input={}, statePatch={selectedRoomNumbers:['101','102']}, clarificationReason=none, missing=[]. Core resolves both room IDs and dates server-side.",
-      "Example when CURRENT_CONVERSATION_STATE already has known dates and selectedRoomIds=[roomA,roomB]: 'reservá esas dos' => kind=tool, toolId=hms.createMultiReservation, input={}, statePatch={}, clarificationReason=none, missing=[]. Never re-ask dates/guests/selection solely because the request refers to the already-selected pair.",
+      "Example after availabilityRooms=[{id:roomA,roomNumber:'101'},{id:roomB,roomNumber:'102'},{id:roomC,roomNumber:'103'}] with no current selection: 'La 101, en vez de la 102' => kind=message, clarificationReason=acknowledgement, statePatch={selectedRoomNumbers:['101']}, missing=[]. Do not add room 103 or any other available room.",
+      "Example with availabilityRooms=[{id:roomA,roomNumber:'101'},{id:roomB,roomNumber:'102'},{id:roomC,roomNumber:'103'}] and known dates checkIn=2027-01-15/checkOut=2027-01-17: 'Quiero reservar la 101 y la 102' => kind=tool, toolId=hms.createMultiReservation, input={}, statePatch={selectedRoomNumbers:['101','102']}, mutationGrounding={kind:'reservation',checkIn:'2027-01-15',checkOut:'2027-01-17',roomIds:['roomA','roomB']}, clarificationReason=none, missing=[]. Core validates both explicit room IDs and dates server-side.",
+      "Example when CURRENT_CONVERSATION_STATE has checkIn=2027-01-15/checkOut=2027-01-17 and selectedRoomIds=[roomA,roomB]: 'reservá esas dos' => kind=tool, toolId=hms.createMultiReservation, input={}, statePatch={}, mutationGrounding={kind:'reservation',checkIn:'2027-01-15',checkOut:'2027-01-17',roomIds:['roomA','roomB']}, clarificationReason=none, missing=[]. Never re-ask dates/guests/selection solely because the request refers to the already-selected pair.",
       "Example with that same state: 'Mejor cambiá la 102 por la 103' => kind=message, clarificationReason=acknowledgement, statePatch={selectedRoomNumbers:['101','103']}, missing=[].",
       "Example: total guests=5, selected 101+102, 'la 101 para dos y la 102 para dos' => kind=message, clarificationReason=ambiguous, missing=['occupancy'], statePatch includes both selections and both explicit allocations; never assign the fifth guest yourself.",
-      "Example after availabilityRoomIds=[roomA,roomB,roomC]: 'me quedo con la segunda, reservámela' => kind=tool, toolId=hms.createReservation, input={}, statePatch={selectedRoomIndex:2}, clarificationReason=none, missing=[].",
-      "Example: state already has dates and guests, user says '¿puedo reservar?' => do not ask dates or guests. Ask only for a room/selection if none is grounded; if exactly one selected room exists route hms.createReservation; if a complete multi-room selection exists route hms.createMultiReservation when visible.",
+      "Example with availabilityRoomIds=[roomA,roomB,roomC] and known dates checkIn=2027-01-15/checkOut=2027-01-17: 'me quedo con la segunda, reservámela' => kind=tool, toolId=hms.createReservation, input={}, statePatch={selectedRoomIndex:2}, mutationGrounding={kind:'reservation',checkIn:'2027-01-15',checkOut:'2027-01-17',roomIds:['roomB']}, clarificationReason=none, missing=[].",
+      "Example: state already has dates and guests, user says '¿puedo reservar?' => do not ask dates or guests. Ask only for a room/selection if none is grounded; otherwise apply the complete mutationGrounding rule above before any write route (reservation must reaffirm exact checkIn, checkOut and roomIds), using hms.createReservation for exactly one selected room or hms.createMultiReservation for a complete multi-room selection when visible.",
       "Example: user says 'para las que te dije ya' when dates exist in state => preserve/use those dates; never ask them again.",
       "For kind=tool: choose one visible tool and grounded business arguments; clarificationReason=none, missing=[]. The server may fill omitted arguments from durable state.",
       "For kind=message: do not answer operational facts. Classify missing/ambiguous/unsupported/greeting/social/help; toolId='', input={}.",
@@ -467,7 +521,7 @@ export class LLMModelRouter implements ModelRouter {
       if (!isRecord(value)) return this.fallbackRoute("invalid_response_shape", message, context, availableTools, conversation, state);
 
       const keys = Object.keys(value);
-      if (keys.some((key) => !["kind", "toolId", "input", "clarificationReason", "missing", "statePatch"].includes(key))) {
+      if (keys.some((key) => !["kind", "toolId", "input", "clarificationReason", "missing", "statePatch", "mutationGrounding"].includes(key))) {
         return this.fallbackRoute("unexpected_top_level_field", message, context, availableTools, conversation, state);
       }
       if (hasTrustedField(value)) return this.fallbackRoute("trusted_field_attempt", message, context, availableTools, conversation, state);
@@ -476,7 +530,8 @@ export class LLMModelRouter implements ModelRouter {
       if (!clarification || !statePatch) return this.fallbackRoute("invalid_route_state_shape", message, context, availableTools, conversation, state);
 
       if (value.kind === "message") {
-        if (value.toolId !== "" || !isRecord(value.input) || Object.keys(value.input).length !== 0 || clarification.reason === "none") {
+        if (value.mutationGrounding !== null) return this.fallbackRoute("message_mutation_grounding", message, context, availableTools, conversation, state);
+        if (value.toolId !== "" || !isRecord(value.input) || Object.keys(value.input).length !== 0 || clarification.reason === "none" || (clarification.missing.length !== 0 && clarification.reason !== "missing" && clarification.reason !== "ambiguous")) {
           return this.fallbackRoute("invalid_message_route", message, context, availableTools, conversation, state);
         }
         if (isSocialReason(clarification.reason) && (clarification.missing.length !== 0 || Object.keys(statePatch).length !== 0)) {
@@ -494,19 +549,23 @@ export class LLMModelRouter implements ModelRouter {
           purpose: messagePurpose(clarification.reason),
           ...(clarification.missing.length ? { missing: clarification.missing as readonly ModelClarificationField[] } : {}),
           statePatch,
+          mutationGrounding: null,
         };
       }
 
       if (value.kind !== "tool" || typeof value.toolId !== "string" || !isRecord(value.input) || clarification.reason !== "none" || clarification.missing.length !== 0) {
-        const repaired = await this.repairContradictoryToolRoute(value, system, message, context, availableTools);
+        let repairFailureCategory: string | undefined;
+        const repaired = await this.repairContradictoryToolRoute(value, system, message, context, availableTools, state, (category) => { repairFailureCategory = category; });
         if (repaired) return repaired;
-        return this.fallbackRoute("invalid_tool_plan_shape", message, context, availableTools, conversation, state);
+        return this.fallbackRoute("invalid_tool_plan_shape", message, context, availableTools, conversation, state, repairFailureCategory);
       }
       const tool = availableTools.find((candidate) => candidate.id === value.toolId);
       if (!tool) return this.fallbackRoute("non_visible_tool", message, context, availableTools, conversation, state);
+      const mutationGrounding = parseMutationGrounding(value.mutationGrounding, tool, state);
+      if (tool.risk === "write" && !mutationGrounding) return this.fallbackRoute("missing_mutation_grounding", message, context, availableTools, conversation, state);
       if (hasUnknownTopLevelInput(value.input, tool)) return this.fallbackRoute("unknown_tool_argument", message, context, availableTools, conversation, state);
       if (JSON.stringify(value.input).length > 8_000) return this.fallbackRoute("tool_input_too_large", message, context, availableTools, conversation, state);
-      return { kind: "tool", plan: { toolId: tool.id, input: value.input }, statePatch };
+      return { kind: "tool", plan: { toolId: tool.id, input: value.input }, statePatch, mutationGrounding: mutationGrounding ?? null };
     } catch (error) {
       return this.fallbackRoute(
         "provider_failure",

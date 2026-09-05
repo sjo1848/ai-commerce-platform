@@ -3,7 +3,7 @@
 Phase: `ACP INTEGRATION — PHASE 2.6`
 Task: `ACP-2.6.9-R2-NATURAL-RECEPTIONIST`
 Status: `IN PROGRESS — R2.7 TECHNICAL_PASS / CLOSED`
-Current sub-stage: `2.6.9-R2.8 — REAL-MODEL RECEPTIONIST STAGING E2E — ACTIVE`
+Current sub-stage: `2.6.9-R2.8.4 — NLU BOUNDARY REWORK — ACTIVE / ARCHITECTURAL_REWORK`
 Last closed sub-stage: `2.6.9-R2.7 — ADVERSARIAL QA + INDEPENDENT CRITIC — TECHNICAL_PASS / CLOSED`
 
 ## Why R2 remains open
@@ -55,6 +55,8 @@ Closed R2.7 invariants:
 
 ## R2.8 active scope
 `2.6.9-R2.8 — Real-Model Receptionist Staging E2E` is now the only active R2 substage.
+
+R2.8.4 is currently in `ACTIVE / ARCHITECTURAL_REWORK` under `.orchestration/contracts/ACP-2.6.9-R2.8.4-NLU-BOUNDARY-REWORK.md`. R2.8.5 remains blocked. This rework does not declare R2.8.4 or R2.8 technically closed.
 
 It must exercise the authorized baseline model on real staging with natural language rather than parser-shaped commands, including:
 - greeting/social continuity;

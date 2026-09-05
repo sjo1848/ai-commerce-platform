@@ -5,8 +5,8 @@
   "active_task": "ACP-2.6.9-R2-NATURAL-RECEPTIONIST",
   "last_completed_task": "ACP-2.6.9-R2.7-ADVERSARIAL-QA-AND-INDEPENDENT-CRITIC",
   "last_completed_head": "c42f1c8354dbba8ae13b442872349430739f3796",
-  "current_substage": "2.6.9-R2.8_REAL_MODEL_RECEPTIONIST_STAGING_E2E_ACTIVE",
-  "next_action": "FREEZE_AND_EXECUTE_R2_8_REAL_MODEL_RECEPTIONIST_STAGING_E2E",
+  "current_substage": "2.6.9-R2.8.4_NLU_BOUNDARY_REWORK_ACTIVE_ARCHITECTURAL_REWORK",
+  "next_action": "IMPLEMENT_AND_VERIFY_R2_8_4_NLU_BOUNDARY_REWORK",
   "stop_reason": null,
   "product_decision": {
     "id": "DEC-002",
@@ -144,7 +144,10 @@
     "evidence": ".orchestration/evidence/ACP-2.6.9-R2.7-ADVERSARIAL-QA-CLOSURE.md"
   },
   "r2_8": {
-    "status": "IN_PROGRESS_ACTIVE",
+    "status": "IN_PROGRESS_ARCHITECTURAL_REWORK",
+    "current_block": "R2.8.4_NLU_BOUNDARY_REWORK",
+    "contract": ".orchestration/contracts/ACP-2.6.9-R2.8.4-NLU-BOUNDARY-REWORK.md",
+    "r2_8_5_blocked": true,
     "mandatory_quality_probes": [
       "REAL_MODEL_MULTI_ROOM_FLOW_MUST_IGNORE_STALE_R2_4_PROMPT_ASSUMPTION",
       "NATURAL_PARA_DOS_MUST_NOT_REASK_GUEST_COUNT",

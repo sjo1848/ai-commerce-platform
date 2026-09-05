@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
+      - feature/r2.8.4-nlu-boundary-rework
       - feat/acp-2.6.9-r2.8.4-multi-room-dialogue
 
 permissions:
@@ -48,17 +49,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test -n "$CLOUDFLARE_API_TOKEN"
           test -n "$CLOUDFLARE_ACCOUNT_ID"
           command -v script
-          npx wrangler whoami
+          ./node_modules/.bin/wrangler whoami
 
       - name: Deploy exact R2.8.4 head to staging
         shell: bash
         run: |
           set -euo pipefail
-          npx wrangler deploy --dry-run
-          npx wrangler deploy | tee /tmp/r28-r4-deploy.log
+          ./node_modules/.bin/wrangler deploy --dry-run
+          ./node_modules/.bin/wrangler deploy --tag "$GITHUB_SHA" --message "R2.8.4 exact $GITHUB_SHA" | tee /tmp/r28-r4-deploy.log
           version_id="$(node - <<'NODE'
           const fs = require('fs');
           const text = fs.readFileSync('/tmp/r28-r4-deploy.log', 'utf8');
@@ -71,6 +73,12 @@ jobs:
           test -n "$version_id"
           echo "R28_VERSION_ID=$version_id" >> "$GITHUB_ENV"
           echo "Exact staging Version ID: $version_id"
+
+      - name: Verify exact active deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$WORKER_NAME/deployments" | R28_VERSION_ID="$R28_VERSION_ID" node -e 'const fs=require("fs");const p=JSON.parse(fs.readFileSync(0,"utf8"));const v=process.env.R28_VERSION_ID;const d=p?.result?.deployments?.[0];if(!p.success||!d||!Array.isArray(d.versions)||d.versions.length!==1||d.versions[0].version_id!==v||d.versions[0].percentage!==100)throw Error("latest deployment is not exact 100% version");'
 
       - name: Resolve workers.dev URL
         shell: bash
@@ -106,46 +114,67 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Phase A: prove that a foreground Wrangler tail really receives an event.
-          probe_path="/__r28-tail-probe?run=${GITHUB_RUN_ID}"
+          # Phase A: attach tail first, then prove that the live stream receives an event.
+          # `script` may emit "<not executed on terminal>"; that is only PTY metadata.
+          probe_path=""
           rm -f /tmp/r28-r4-probe-tail.log /tmp/r28-r4-tail-probe.txt /tmp/r28-r4-probe-status.txt
-          (
-            sleep 4
-            status="$(curl -sS --max-time 10 -X POST \
-              -o /tmp/r28-r4-tail-probe.txt \
-              -w '%{http_code}' \
-              "$AI_COMMERCE_STAGING_URL$probe_path" || true)"
+          timeout 45s script -qefc \
+            "./node_modules/.bin/wrangler tail '$WORKER_NAME' --version-id '$R28_VERSION_ID' --format=json --method POST" \
+            /tmp/r28-r4-probe-tail.log &
+          PROBE_TAIL_PID=$!
+
+          PROBE_CAPTURED=false
+          PROBE_FAILURE=""
+          for attempt in $(seq 1 2); do
+            if ! kill -0 "$PROBE_TAIL_PID" 2>/dev/null; then
+              PROBE_FAILURE="tail exited before probe attachment"
+              break
+            fi
+            probe_path="/__r28-tail-probe?run=${GITHUB_RUN_ID}-${attempt}"
+            status="$(curl -sS --max-time 10 -X POST -o /tmp/r28-r4-tail-probe.txt -w '%{http_code}' "$AI_COMMERCE_STAGING_URL$probe_path" || true)"
             printf '%s' "$status" > /tmp/r28-r4-probe-status.txt
-          ) &
-          PROBE_PID=$!
+            if [[ "$status" != "404" ]]; then
+              PROBE_FAILURE="probe returned HTTP $status instead of expected 404"
+              break
+            fi
 
-          set +e
-          timeout 15s script -qefc \
-            "npx wrangler tail '$WORKER_NAME' --format=json --method POST" \
-            /tmp/r28-r4-probe-tail.log
-          PROBE_TAIL_CODE=$?
-          set -e
-          wait "$PROBE_PID"
+            # The request and tail are asynchronous observations. Keep the
+            # probe path immutable while the live, exact-version tail catches
+            # up; only a wholly uncaptured probe may use a new path.
+            for poll in $(seq 1 10); do
+              if ! kill -0 "$PROBE_TAIL_PID" 2>/dev/null; then
+                PROBE_FAILURE="tail exited while waiting to capture probe $probe_path"
+                break 2
+              fi
+              if grep -Fq "$probe_path" /tmp/r28-r4-probe-tail.log; then
+                PROBE_CAPTURED=true
+                break 2
+              fi
+              sleep 2
+            done
+          done
+          kill -INT "$PROBE_TAIL_PID" 2>/dev/null || true
+          set +e; wait "$PROBE_TAIL_PID"; PROBE_TAIL_CODE=$?; set -e
 
-          if [[ ! -f /tmp/r28-r4-probe-status.txt || "$(cat /tmp/r28-r4-probe-status.txt)" != "404" ]]; then
-            echo "R2.8.4 OBSERVABILITY_INVALID: foreground attachment probe did not return expected 404" >&2
+          if [[ -n "$PROBE_FAILURE" ]]; then
+            echo "R2.8.4 OBSERVABILITY_INVALID: $PROBE_FAILURE" >&2
             cat /tmp/r28-r4-tail-probe.txt >&2 || true
             exit 1
           fi
-          if [[ "$PROBE_TAIL_CODE" -ne 0 && "$PROBE_TAIL_CODE" -ne 124 ]]; then
+          if [[ "$PROBE_TAIL_CODE" -ne 0 && "$PROBE_TAIL_CODE" -ne 124 && "$PROBE_TAIL_CODE" -ne 130 && "$PROBE_TAIL_CODE" -ne 143 ]]; then
             echo "R2.8.4 OBSERVABILITY_INVALID: foreground wrangler tail exited unexpectedly ($PROBE_TAIL_CODE)" >&2
             cat /tmp/r28-r4-probe-tail.log >&2 || true
             exit 1
           fi
-          if ! grep -Fq "$probe_path" /tmp/r28-r4-probe-tail.log; then
-            echo "R2.8.4 OBSERVABILITY_INVALID: foreground wrangler tail did not capture the non-LLM POST probe" >&2
+          if [[ "$PROBE_CAPTURED" != "true" ]]; then
+            echo "R2.8.4 OBSERVABILITY_INVALID: foreground tail did not capture 404 probe $probe_path within bounded interval" >&2
             cat /tmp/r28-r4-probe-tail.log >&2 || true
             exit 1
           fi
           echo "Foreground live-tail transport proved before any model inference."
 
           # Phase B: with the transport proved, capture the complete real-model corpus.
-          rm -f /tmp/r28-r4-tail.log /tmp/r28-r4-report.json /tmp/r28-r4-dialogue-code.txt
+          rm -f /tmp/r28-r4-tail.log /tmp/r28-r4-report.json /tmp/r28-r4-dialogue-code.txt /tmp/r28-r4-llm-corpus-report.json /tmp/r28-r4-llm-corpus-code.txt
           (
             sleep 4
             set +e
@@ -153,12 +182,17 @@ jobs:
             code=$?
             set -e
             printf '%s' "$code" > /tmp/r28-r4-dialogue-code.txt
+            set +e
+            node scripts/r2.8.4-llm-language-corpus.mjs > /tmp/r28-r4-llm-corpus-report.json 2>&1
+            corpus_code=$?
+            set -e
+            printf '%s' "$corpus_code" > /tmp/r28-r4-llm-corpus-code.txt
           ) &
           DIALOGUE_PID=$!
 
           set +e
-          timeout 35s script -qefc \
-            "npx wrangler tail '$WORKER_NAME' --format=json --method POST" \
+          timeout 600s script -qefc \
+            "./node_modules/.bin/wrangler tail '$WORKER_NAME' --version-id '$R28_VERSION_ID' --format=json --method POST" \
             /tmp/r28-r4-tail.log
           DIALOGUE_TAIL_CODE=$?
           set -e
@@ -174,6 +208,7 @@ jobs:
             exit 1
           fi
           DIALOGUE_CODE="$(cat /tmp/r28-r4-dialogue-code.txt)"
+          CORPUS_CODE="$(cat /tmp/r28-r4-llm-corpus-code.txt)"
 
           echo '--- multi-room dialogue report ---'
           cat /tmp/r28-r4-report.json || true
@@ -196,6 +231,12 @@ jobs:
           NODE
 
           if [[ "$DIALOGUE_CODE" -ne 0 ]]; then exit "$DIALOGUE_CODE"; fi
+          if [[ "$CORPUS_CODE" -ne 0 ]]; then exit "$CORPUS_CODE"; fi
+
+          EXPECTED_MODEL="$EXPECTED_MODEL" CORPUS_REPORT=/tmp/r28-r4-llm-corpus-report.json MODEL_TELEMETRY="$MODEL_TELEMETRY" AUDIT_TELEMETRY="$AUDIT_TELEMETRY" node - <<'NODE'
+          const fs=require('fs'); const report=JSON.parse(fs.readFileSync(process.env.CORPUS_REPORT,'utf8')); const model=JSON.parse(process.env.MODEL_TELEMETRY); const audit=JSON.parse(process.env.AUDIT_TELEMETRY);
+          for (const item of report.transcript ?? []) { const ids=[item.initial?.body?.sessionId,item.final?.body?.sessionId].filter(Boolean); const sessionId=ids[0]; if(!sessionId) throw Error(`missing corpus session: ${item.id}`); const inf=model.inferences.filter(x=>x.sessionId===sessionId&&x.label==='agent_core_route'); if(inf.length<2||!model.models.includes(process.env.EXPECTED_MODEL)) throw Error(`invalid corpus telemetry: ${item.id}`); const events=audit.events.filter(x=>x.sessionId===sessionId); if(!events.some(x=>x.toolId==='hms.checkAvailability'&&x.status==='succeeded')) throw Error(`missing availability audit: ${item.id}`); if(events.some(x=>/create|cancel/i.test(String(x.toolId))&&['succeeded','replayed'].includes(x.status))) throw Error(`corpus mutation: ${item.id}`); }
+          NODE
 
           EXPECTED_MODEL="$EXPECTED_MODEL" MODEL_TELEMETRY="$MODEL_TELEMETRY" REPORT_PATH=/tmp/r28-r4-report.json node - <<'NODE'
           const fs = require('fs');
@@ -251,6 +292,14 @@ jobs:
           grep -q 'ACP_R2_8_MULTI_ROOM_DIALOGUE_PASS' /tmp/r28-r4-report.json
           echo 'ACP_R2_8_4_MULTI_ROOM_DIALOGUE_PASS'
 
+      - name: Verify exact active deployment after corpus
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${R28_VERSION_ID:-}"
+          curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$WORKER_NAME/deployments" | R28_VERSION_ID="$R28_VERSION_ID" node -e 'const fs=require("fs");const p=JSON.parse(fs.readFileSync(0,"utf8"));const v=process.env.R28_VERSION_ID;const d=p?.result?.deployments?.[0];if(!p.success||!d||!Array.isArray(d.versions)||d.versions.length!==1||d.versions[0].version_id!==v||d.versions[0].percentage!==100)throw Error("post-corpus latest deployment verification failed");'
+
       - name: Preserve R2.8.4 evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -260,9 +309,11 @@ jobs:
             /tmp/r28-r4-deploy.log
             /tmp/r28-r4-probe-tail.log
             /tmp/r28-r4-tail-probe.txt
+            /tmp/r28-r4-probe-status.txt
             /tmp/r28-r4-tail.log
             /tmp/r28-r4-report.json
             /tmp/r28-r4-model-telemetry.json
             /tmp/r28-r4-audit-telemetry.json
+            /tmp/r28-r4-llm-corpus-report.json
           if-no-files-found: warn
           retention-days: 14

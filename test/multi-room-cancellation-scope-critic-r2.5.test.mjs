@@ -74,8 +74,9 @@ async function setup() {
     tools: hmsAgentTools(adapter, { guestIdByTenantActor: { "hotel-demo": { "visitor-demo": guestId } } }),
     now,
     model: {
-      async route() {
-        return { kind: "tool", plan: { toolId: "hms.cancelReservation", input: { bookingId: "model-forged-booking" } } };
+      async route(message) {
+        if (/menos/.test(message)) return { kind: "message", purpose: "clarification", message: "¿Qué reserva específica del grupo querés cancelar?", missing: ["booking"], statePatch: {}, mutationGrounding: null };
+        return { kind: "tool", plan: { toolId: "hms.cancelReservation", input: { bookingId: bookingA } }, mutationGrounding: { kind: "cancellation", scope: "single", bookingId: bookingA } };
       },
     },
   });
@@ -136,6 +137,8 @@ test("Independent Critic P1: unsupported all-except-one scope clarifies instead 
   const body = await response.json();
 
   assert.equal(response.status, 200);
+  assert.equal(body.outcome, "clarification");
+  assert.deepEqual(body.missing, ["booking"]);
   assert.match(body.message, /específica|grupo|todas/i);
   assert.equal(body.approvalToken, undefined);
   assert.equal(env.calls.length, 0);

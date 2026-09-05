@@ -40,7 +40,7 @@ function toolRoute(input, toolId = "hms.checkAvailability", statePatch = {}) {
   return { kind: "tool", toolId, input, clarificationReason: "none", missing: [], statePatch };
 }
 function messageRoute(reason, missing, statePatch = {}) {
-  return { kind: "message", toolId: "", input: {}, clarificationReason: reason, missing, statePatch };
+  return { kind: "message", toolId: "", input: {}, clarificationReason: reason, missing, statePatch, mutationGrounding: null };
 }
 
 test("LLM router accepts a visible tool with schema-bounded business arguments", async () => {
@@ -51,7 +51,7 @@ test("LLM router accepts a visible tool with schema-bounded business arguments",
   assert.deepEqual(result, {
     kind: "tool",
     plan: { toolId: "hms.checkAvailability", input: { checkIn: "2034-02-10", checkOut: "2034-02-12", guests: 2 } },
-    statePatch: {},
+    statePatch: {}, mutationGrounding: null,
   });
   assert.equal(fb.calls, 0);
   const prompt = p.request.messages.map((item) => item.content).join("\n");
@@ -72,7 +72,7 @@ test("LLM router accepts a one-based ordinal selection as state, not as a room i
     stay: { checkIn: "2034-02-10", checkOut: "2034-02-12", guests: 2 },
     availabilityRoomIds: ["room-a", "room-b"],
   });
-  assert.deepEqual(result, { kind: "tool", plan: { toolId: "hms.getQuote", input: {} }, statePatch: { selectedRoomIndex: 2 } });
+  assert.deepEqual(result, { kind: "tool", plan: { toolId: "hms.getQuote", input: {} }, statePatch: { selectedRoomIndex: 2 }, mutationGrounding: null });
   assert.equal(fb.calls, 0);
   assert.match(p.request.messages[0].content, /ONE-BASED list position/i);
 });
@@ -86,7 +86,7 @@ test("LLM router converts structured missing-field decision into bounded clarifi
     message: "¿Para qué fechas sería?",
     purpose: "clarification",
     missing: ["dates"],
-    statePatch: {},
+    statePatch: {}, mutationGrounding: null,
   });
   assert.equal(fb.calls, 0);
 });
@@ -155,6 +155,15 @@ test("inconsistent message/tool clarification state fails to fallback", async ()
   const router = new LLMModelRouter(provider({ kind: "message", toolId: "hms.checkAvailability", input: {}, clarificationReason: "missing", missing: ["dates"], statePatch: {} }), fb);
   assert.deepEqual(await router.route("consulta", context, tools), { kind: "message", message: "fallback" });
   assert.equal(fb.calls, 1);
+});
+
+test("fallback message discards state patch and mutation grounding", async () => {
+  const p = provider({ kind: "message", toolId: "", input: {}, clarificationReason: "missing", missing: [], statePatch: { activeBookingId: "forged" }, mutationGrounding: { kind: "cancellation", scope: "all" } });
+  const fb = fallback({ kind: "message", purpose: "clarification", message: "Necesito más datos", missing: [], statePatch: { selectedRoomNumbers: ["101"] }, mutationGrounding: { kind: "reservation", checkIn: "1900-01-01", checkOut: "1900-01-02", roomIds: ["forged"] } });
+  const result = await new LLMModelRouter(p, fb).route("reservá", context, tools);
+  assert.deepEqual(result, { kind: "message", purpose: "clarification", message: "Necesito más datos", missing: ["selection"] });
+  assert.equal("statePatch" in result, false);
+  assert.equal("mutationGrounding" in result, false);
 });
 
 test("provider failure degrades to deterministic fallback without changing policy", async () => {

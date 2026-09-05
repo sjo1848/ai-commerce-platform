@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { HmsServiceBindingAdapter } from "../dist/adapters/hms-service-binding.js";
 import { hmsAgentTools } from "../dist/adapters/hms-agent-tools.js";
-import { emptyConversationState } from "../dist/core/conversation-state.js";
+import { emptyConversationState, updateConversationStateFromTool } from "../dist/core/conversation-state.js";
 import { InMemoryReservationOperationStore } from "../dist/core/reservation-operation-store.js";
 import { AgentCoreRuntime } from "../dist/core/runtime.js";
 import { InMemoryApprovalStore } from "../dist/webchat/approval.js";
@@ -107,18 +107,23 @@ function mockService() {
 async function setup() {
   let routeCount = 0;
   const model = {
-    async route(message) {
+    async route(message, _context, _tools, _conversation, state) {
       routeCount += 1;
       if (/cancel|anul/i.test(message)) {
-        if (/primera|101/i.test(message)) {
-          return { kind: "tool", plan: { toolId: "hms.cancelReservation", input: { bookingId: bookingA } } };
+        const active = state?.activeBookings ?? [];
+        if (/primera|101/i.test(message) && active.some((b) => b.bookingId === bookingA)) {
+          return { kind: "tool", plan: { toolId: "hms.cancelReservation", input: { bookingId: bookingA } }, mutationGrounding: { kind: "cancellation", scope: "single", bookingId: bookingA } };
         }
-        return { kind: "tool", plan: { toolId: "hms.cancelReservation", input: { bookingId: "attacker-booking" } } };
+        if (/todas las reservas|todas/.test(message) && !/una reserva$/.test(message)) {
+          if (active.length === 1) return { kind: "tool", plan: { toolId: "hms.cancelReservation", input: { bookingId: active[0].bookingId } }, mutationGrounding: { kind: "cancellation", scope: "single", bookingId: active[0].bookingId } };
+          return { kind: "tool", plan: { toolId: "hms.cancelMultiReservation", input: {} }, mutationGrounding: { kind: "cancellation", scope: "all" } };
+        }
+        return { kind: "message", purpose: "clarification", message: "¿Querés cancelar una reserva específica o todas?", missing: ["booking"], statePatch: {}, mutationGrounding: null };
       }
       return {
         kind: "tool",
         plan: {
-          toolId: "hms.createReservation",
+          toolId: "hms.createMultiReservation",
           input: {
             roomId: attackerRoom,
             guestId: "attacker-guest",
@@ -126,6 +131,7 @@ async function setup() {
             checkOut: "2099-01-02",
           },
         },
+        mutationGrounding: { kind: "reservation", checkIn: "2027-02-10", checkOut: "2027-02-12", roomIds: [roomA, roomB] },
       };
     },
   };
@@ -141,13 +147,15 @@ async function setup() {
   const approvalStore = new InMemoryApprovalStore(now);
   const handler = createWebchatHandler(runtime, { fixedTenantId: "hotel-demo", fixedActorId: "visitor-demo", approvalStore });
   const context = await runtime.createContext({ tenantId: "hotel-demo", actor: actor(), channel: "webchat", requestId: "seed-r2.5" });
-  const state = emptyConversationState();
-  state.stay = { checkIn: "2027-02-10", checkOut: "2027-02-12", guests: 2 };
-  state.availabilityRoomIds = [roomA, roomB];
-  state.availabilityRooms = [
-    { id: roomA, roomNumber: "101", roomType: "DOUBLE" },
-    { id: roomB, roomNumber: "102", roomType: "DOUBLE" },
-  ];
+  const state = updateConversationStateFromTool(
+    emptyConversationState(),
+    "hms.checkAvailability",
+    { checkIn: "2027-02-10", checkOut: "2027-02-12", guests: 2 },
+    { rooms: [
+      { id: roomA, roomNumber: "101", roomType: "DOUBLE" },
+      { id: roomB, roomNumber: "102", roomType: "DOUBLE" },
+    ] },
+  );
   state.selectedRoomIds = [roomA, roomB];
   state.requestedRoomCount = 2;
   state.roomSelectionRevision = 1;
@@ -259,6 +267,8 @@ test("R2.5 ambiguous cancellation scope asks one-vs-all instead of letting the m
   const response = await request(env.handler, "/api/chat", { message: "cancelá una reserva", sessionId: env.sessionId }, "multi-ambiguous-cancel");
   const body = await response.json();
   assert.equal(response.status, 200);
+  assert.equal(body.data?.outcome ?? body.outcome, "clarification");
+  assert.deepEqual(body.data?.missing ?? body.missing, ["booking"]);
   assert.match(body.message, /una reserva específica o todas/i);
   assert.equal(body.approvalToken, undefined);
   assert.equal(env.mock.calls.filter((call) => call.method === "cancelReservation").length, cancelsBefore);

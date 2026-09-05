@@ -1,4 +1,5 @@
 import type { ConversationState, ConversationStatePatch } from "./conversation-state.js";
+import type { MutationGrounding } from "./mutation-grounding.js";
 
 export type TenantStatus = "active" | "suspended";
 export type Channel = "webchat" | "whatsapp" | "email";
@@ -94,14 +95,16 @@ export type ModelMessagePurpose = "clarification" | "unsupported" | "greeting" |
 export type ModelClarificationField = "dates" | "guests" | "room" | "booking" | "selection" | "occupancy";
 
 export type ModelRouteResult =
-  | { kind: "tool"; plan: ToolPlan; statePatch?: ConversationStatePatch }
+  | { kind: "tool"; plan: ToolPlan; statePatch?: ConversationStatePatch; mutationGrounding?: MutationGrounding | null }
   | {
       kind: "message";
       message: string;
       purpose?: ModelMessagePurpose;
       missing?: readonly ModelClarificationField[];
       statePatch?: ConversationStatePatch;
-    };
+      mutationGrounding?: null;
+  };
+export type ModelRoutingState = ConversationState & { activeBookings?: readonly { bookingId: string; roomNumber?: string }[] };
 
 export type ModelConversationTurn = {
   role: "user" | "assistant" | "tool";
@@ -115,7 +118,7 @@ export interface ModelRouter {
     context: ExecutionContext,
     availableTools: readonly ToolDescriptor[],
     conversation?: readonly ModelConversationTurn[],
-    state?: Readonly<ConversationState>,
+    state?: Readonly<ModelRoutingState>,
   ): Promise<ModelRouteResult>;
 }
 

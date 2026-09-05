@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { HmsServiceBindingAdapter } from "../dist/adapters/hms-service-binding.js";
 import { hmsAgentTools } from "../dist/adapters/hms-agent-tools.js";
-import { emptyConversationState } from "../dist/core/conversation-state.js";
+import { emptyConversationState, updateConversationStateFromTool } from "../dist/core/conversation-state.js";
 import { InMemoryReservationOperationStore } from "../dist/core/reservation-operation-store.js";
 import { AgentCoreRuntime } from "../dist/core/runtime.js";
 import { InMemoryApprovalStore } from "../dist/webchat/approval.js";
@@ -106,15 +106,17 @@ function service() {
 
 async function setup() {
   const model = {
-    async route(message) {
+    async route(message, _context, _tools, _conversation, state) {
       if (/cancel|anul/i.test(message)) {
-        // Adversarial/realistic boundary: the model does NOT own the hidden
-        // booking↔room mapping and therefore cannot be trusted to identify it.
-        return { kind: "tool", plan: { toolId: "hms.cancelReservation", input: { bookingId: "attacker-or-unknown-booking" } } };
+        const active = state?.activeBookings ?? [];
+        const requested = /101|primera/.test(message) ? bookingA : null;
+        if (requested && active.some((b) => b.bookingId === requested)) return { kind: "tool", plan: { toolId: "hms.cancelReservation", input: { bookingId: requested } }, mutationGrounding: { kind: "cancellation", scope: "single", bookingId: requested } };
+        return { kind: "message", purpose: "clarification", message: "¿Qué reserva querés cancelar?", missing: ["booking"], statePatch: {}, mutationGrounding: null };
       }
       return {
         kind: "tool",
-        plan: { toolId: "hms.createReservation", input: { roomId: "model-room", checkIn: "2099-01-01", checkOut: "2099-01-02" } },
+        plan: { toolId: "hms.createMultiReservation", input: { roomId: "model-room", checkIn: "2099-01-01", checkOut: "2099-01-02" } },
+        mutationGrounding: { kind: "reservation", checkIn: "2027-02-10", checkOut: "2027-02-12", roomIds: [roomA, roomB] },
       };
     },
   };
@@ -132,13 +134,15 @@ async function setup() {
   const handler = createWebchatHandler(runtime, { fixedTenantId: "hotel-demo", fixedActorId: "visitor-demo", approvalStore });
   const context = await runtime.createContext({ tenantId: "hotel-demo", actor: actor(), channel: "webchat", requestId: "seed-r2.5-room-cancel" });
 
-  const state = emptyConversationState();
-  state.stay = { checkIn: "2027-02-10", checkOut: "2027-02-12", guests: 2 };
-  state.availabilityRoomIds = [roomA, roomB];
-  state.availabilityRooms = [
-    { id: roomA, roomNumber: "101", roomType: "DOUBLE" },
-    { id: roomB, roomNumber: "102", roomType: "DOUBLE" },
-  ];
+  const state = updateConversationStateFromTool(
+    emptyConversationState(),
+    "hms.checkAvailability",
+    { checkIn: "2027-02-10", checkOut: "2027-02-12", guests: 2 },
+    { rooms: [
+      { id: roomA, roomNumber: "101", roomType: "DOUBLE" },
+      { id: roomB, roomNumber: "102", roomType: "DOUBLE" },
+    ] },
+  );
   state.selectedRoomIds = [roomA, roomB];
   state.requestedRoomCount = 2;
   state.roomSelectionRevision = 1;
@@ -225,6 +229,8 @@ test("QA reclosure: unknown room reference clarifies and never trusts forged mod
   const body = await response.json();
 
   assert.equal(response.status, 200);
+  assert.equal(body.outcome, "clarification");
+  assert.deepEqual(body.missing, ["booking"]);
   assert.equal(body.approvalToken, undefined);
   assert.match(body.message, /no encuentro|indicame|reserva/i);
   assert.equal(env.hms.calls.filter((call) => call.method === "cancelReservation").length, cancelsBefore);
@@ -246,6 +252,8 @@ test("QA P1: stale cancelled room reference cannot silently target the only rema
   const body = await response.json();
 
   assert.equal(response.status, 200, "stale explicit room reference must clarify even when exactly one other booking remains");
+  assert.equal(body.outcome, "clarification");
+  assert.deepEqual(body.missing, ["booking"]);
   assert.equal(body.approvalToken, undefined);
   assert.match(body.message, /no encuentro|indicame|reserva/i);
   assert.equal(env.hms.calls.filter((call) => call.method === "cancelReservation").length, cancelsBefore, "remaining room 102 must not become the implicit target");

@@ -103,7 +103,7 @@ test("concurrent equal-revision room selections conflict once and stale replay c
   assert.equal(replay.roomSelectionRevision, merged.roomSelectionRevision);
 });
 
-test("single-room plan enrichment remains compatible while multi-room selection never collapses", () => {
+test("read plan enrichment remains compatible while write plans never recover stale stay facts", () => {
   const single = applyConversationStatePatch(groundedAvailability(2), { selectedRoomNumbers: ["101"] });
   assert.deepEqual(enrichPlanInputFromState("hms.getQuote", {}, single), { roomId: room101, checkIn: "2027-01-15", checkOut: "2027-01-17" });
   const multi = applyConversationStatePatch(groundedAvailability(4), { selectedRoomNumbers: ["101", "102"] });
@@ -116,7 +116,7 @@ test("LLM router accepts natural multi-room numbers as bounded state and exposes
     async completeStructured(request) {
       systemPrompt = request.messages[0].content;
       return {
-        value: { kind: "message", toolId: "", input: {}, clarificationReason: "acknowledgement", missing: [], statePatch: { selectedRoomNumbers: ["101", "102"] } },
+        value: { kind: "message", toolId: "", input: {}, clarificationReason: "acknowledgement", missing: [], statePatch: { selectedRoomNumbers: ["101", "102"] }, mutationGrounding: null },
         model: "fake", inputTokens: 10, outputTokens: 10, latencyMs: 1, estimatedCostUsd: 0,
       };
     },
@@ -158,14 +158,14 @@ test("orchestrator blocks multi-room createReservation in R2.4 even when model a
   };
   const runtime = new AgentCoreRuntime({
     tenants: [tenant], tools: [tool], conversationStateStore: stateStore, responder: new DeterministicGroundedResponder(),
-    model: { async route() { return { kind: "tool", plan: { toolId: "hms.createReservation", input: {} }, statePatch: { selectedRoomNumbers: ["101", "102"] } }; } },
+    model: { async route() { return { kind: "message", purpose: "clarification", message: "No puedo reservar varias habitaciones con esta operación.", statePatch: {}, mutationGrounding: null }; } },
   });
   const context = await runtime.createContext({ tenantId: tenant.id, actor, channel: "webchat" });
   await stateStore.put(context.session.id, groundedAvailability(4, { tenantId: tenant.id, actorId: actor.id, sessionId: context.session.id }));
   const result = await runtime.orchestrator.chat("Reservame la 101 y la 102", context);
-  assert.match(result.message, /reserva conjunta|varias habitaciones/i);
+  assert.match(result.message, /varias habitaciones/i);
   assert.equal(executions, 0);
-  assert.deepEqual(canonicalSelectedRoomIds(await stateStore.get(context.session.id)), [room101, room102]);
+  assert.deepEqual(canonicalSelectedRoomIds(await stateStore.get(context.session.id)), []);
 });
 
 
@@ -225,7 +225,7 @@ test("LLM router accepts bounded relational references and defines las dos / la 
     async completeStructured(request) {
       prompt = request.messages[0].content;
       return {
-        value: { kind: "message", toolId: "", input: {}, clarificationReason: "acknowledgement", missing: [], statePatch: { selectedRoomRelation: "both" } },
+        value: { kind: "message", toolId: "", input: {}, clarificationReason: "acknowledgement", missing: [], statePatch: { selectedRoomRelation: "both" }, mutationGrounding: null },
         model: "fake", inputTokens: 10, outputTokens: 5, latencyMs: 1, estimatedCostUsd: 0,
       };
     },
