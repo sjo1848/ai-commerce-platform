@@ -1,5 +1,7 @@
 /** Credential accepted only by a validation deployment's outer admission boundary. */
 export const VALIDATION_RUN_TOKEN_HEADER = "x-acp-validation-run-token";
+/** Server-owned format used for validation experiment budget durable-object names. */
+export const VALIDATION_EXPERIMENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 export type ValidationAdmissionConfig = {
   ACP_VALIDATION_NEURON_BUDGET?: string;
@@ -7,25 +9,82 @@ export type ValidationAdmissionConfig = {
   ACP_VALIDATION_RUN_TOKEN?: string;
 };
 
-type ValidationAdmission =
+export type ValidationConfiguration =
+  | { status: "disabled" }
+  | { status: "invalid" }
+  | {
+    status: "valid";
+    budget: {
+      maxNeuronsPerRun: number;
+      configuredAvailableBudget: number;
+      configuredReserve: number;
+      conservativeExpectedCost: number;
+      observedLocalDayNeurons?: number;
+    };
+    experimentId: string;
+    expectedToken: string;
+  };
+
+export type ValidationAdmission =
   | { active: false }
   | { active: true; expectedToken?: string };
+
+function isFiniteNonNegative(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+/**
+ * Parses the complete validation-only configuration once at the outer boundary.
+ * Invalid configuration deliberately has no details: it is only ever admitted
+ * as a generic 403 and cannot reach application construction.
+ */
+export function parseValidationConfiguration(config: ValidationAdmissionConfig): ValidationConfiguration {
+  const budgetValue = config.ACP_VALIDATION_NEURON_BUDGET;
+  const experimentId = config.ACP_VALIDATION_EXPERIMENT_ID;
+  const expectedToken = config.ACP_VALIDATION_RUN_TOKEN;
+  if (budgetValue === undefined && experimentId === undefined && expectedToken === undefined) return { status: "disabled" };
+  if (typeof budgetValue !== "string" || !budgetValue.trim()
+    || typeof experimentId !== "string" || !VALIDATION_EXPERIMENT_ID_PATTERN.test(experimentId)
+    || typeof expectedToken !== "string" || !expectedToken.trim()) return { status: "invalid" };
+
+  let parsed: unknown;
+  try { parsed = JSON.parse(budgetValue); } catch { return { status: "invalid" }; }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { status: "invalid" };
+  const raw = parsed as Record<string, unknown>;
+  const maxNeuronsPerRun = raw.maxNeuronsPerRun;
+  const configuredAvailableBudget = raw.configuredAvailableBudget;
+  const configuredReserve = raw.configuredReserve;
+  const conservativeExpectedCost = raw.conservativeExpectedCost;
+  const observedLocalDayNeurons = raw.observedLocalDayNeurons;
+  if (!isFiniteNonNegative(maxNeuronsPerRun)
+    || !isFiniteNonNegative(configuredAvailableBudget)
+    || !isFiniteNonNegative(configuredReserve)
+    || !isFiniteNonNegative(conservativeExpectedCost)
+    || (observedLocalDayNeurons !== undefined && !isFiniteNonNegative(observedLocalDayNeurons))) return { status: "invalid" };
+  const budget = {
+    maxNeuronsPerRun,
+    configuredAvailableBudget,
+    configuredReserve,
+    conservativeExpectedCost,
+  };
+  return observedLocalDayNeurons === undefined
+    ? { status: "valid", budget, experimentId, expectedToken }
+    : { status: "valid", budget: { ...budget, observedLocalDayNeurons }, experimentId, expectedToken };
+}
 
 /**
  * Any validation configuration enables the boundary. A partially configured
  * validation deployment deliberately has no expected token and is denied.
  */
 export function validationAdmission(config: ValidationAdmissionConfig): ValidationAdmission {
-  const values = [
-    config.ACP_VALIDATION_NEURON_BUDGET,
-    config.ACP_VALIDATION_EXPERIMENT_ID,
-    config.ACP_VALIDATION_RUN_TOKEN,
-  ];
-  if (values.every((value) => value === undefined)) return { active: false };
-  if (values.some((value) => !value)) return { active: true };
-  const expectedToken = config.ACP_VALIDATION_RUN_TOKEN;
-  if (!expectedToken) return { active: true };
-  return { active: true, expectedToken };
+  return validationAdmissionFor(parseValidationConfiguration(config));
+}
+
+function validationAdmissionFor(configuration: ValidationConfiguration): ValidationAdmission {
+  if (configuration.status === "disabled") return { active: false };
+  return configuration.status === "valid"
+    ? { active: true, expectedToken: configuration.expectedToken }
+    : { active: true };
 }
 
 function tokensMatch(actual: string | null, expected: string): boolean {
@@ -52,10 +111,11 @@ function withoutValidationToken(request: Request): Request {
  */
 export function admitValidationRequest(
   request: Request,
-  config: ValidationAdmissionConfig,
+  config: ValidationAdmissionConfig | ValidationConfiguration,
   next: (admittedRequest: Request) => Promise<Response>,
 ): Promise<Response> {
-  const admission = validationAdmission(config);
+  const configuration = "status" in config ? config : parseValidationConfiguration(config);
+  const admission = validationAdmissionFor(configuration);
   if (!admission.active) return next(request);
   if (!admission.expectedToken || !tokensMatch(request.headers.get(VALIDATION_RUN_TOKEN_HEADER), admission.expectedToken)) {
     return Promise.resolve(new Response("Forbidden", { status: 403 }));

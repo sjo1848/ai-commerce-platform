@@ -3,6 +3,7 @@ import type { ConversationStore } from "../core/conversation.js";
 import type { ReservationOperationBinding, ReservationOperationLookup, ReservationOperationStore } from "../core/reservation-operation-store.js";
 import type { SessionStore } from "../core/session.js";
 import type { ModelConversationTurn, Session, ToolPlan } from "../core/types.js";
+import { VALIDATION_EXPERIMENT_ID_PATTERN } from "../validation-admission.js";
 import {
   experimentBudgetSnapshot,
   parseExperimentBudgetSnapshot,
@@ -40,7 +41,7 @@ const EXPERIMENT_BUDGET_RELEASE_URL = "https://session.internal/experiment-budge
 const EXPERIMENT_BUDGET_KEY = "experiment-budget";
 
 export function experimentBudgetDurableObjectName(experimentId: string): string {
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(experimentId)) throw new Error("Invalid validation experiment id");
+  if (!VALIDATION_EXPERIMENT_ID_PATTERN.test(experimentId)) throw new Error("Invalid validation experiment id");
   return `experiment-budget:${experimentId}`;
 }
 function isFiniteNonNegative(value: unknown): value is number { return typeof value === "number" && Number.isFinite(value) && value >= 0; }
