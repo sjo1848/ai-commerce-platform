@@ -4,6 +4,7 @@ import { WorkersAiModelProvider, type WorkersAiBinding } from "./adapters/cloudf
 import {
   DurableObjectApprovalStore,
   DurableObjectConversationStore,
+  DurableObjectExperimentNeuronBudgetStore,
   DurableObjectReservationOperationStore,
   DurableObjectSessionStore,
   SessionDurableObject,
@@ -13,7 +14,7 @@ import { ConversationBackedStateStore } from "./core/conversation-state.js";
 import { DeterministicModelRouter } from "./core/deterministic-model.js";
 import { LLMModelRouter } from "./core/llm-model.js";
 import { LLMGroundedResponder } from "./core/model-responder.js";
-import { ValidationNeuronBudgetProvider, type ValidationNeuronBudgetConfig } from "./core/neuron-budget.js";
+import { DurableExperimentBudgetProvider, type ValidationNeuronBudgetConfig } from "./core/neuron-budget.js";
 import { AgentCoreRuntime } from "./core/runtime.js";
 import { ConsoleUsageSink } from "./core/usage.js";
 import { createWebchatHandler } from "./webchat/handler.js";
@@ -28,6 +29,10 @@ type Env = {
   ACP_MODEL_ID?: string;
   /** Validation-harness-only JSON configuration. It is intentionally absent from normal deployments. */
   ACP_VALIDATION_NEURON_BUDGET?: string;
+  /** Server-owned validation ledger key; never derived from a conversation session. */
+  ACP_VALIDATION_EXPERIMENT_ID?: string;
+  /** Opt-in Gateway affinity for validation only; absent/false preserves production behavior. */
+  ACP_VALIDATION_SESSION_AFFINITY?: string;
 };
 
 const tenant = {
@@ -84,6 +89,13 @@ function validationNeuronBudget(value: string | undefined): ValidationNeuronBudg
   return observedLocalDayNeurons === undefined ? required : { ...required, observedLocalDayNeurons };
 }
 
+function validationSessionAffinity(value: string | undefined): boolean {
+  if (value === undefined || value === "") return false;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  throw new Error("ACP_VALIDATION_SESSION_AFFINITY must be true or false");
+}
+
 function handler(env: Env): (request: Request) => Promise<Response> {
   if (handle) return handle;
   const reservationOperations = new DurableObjectReservationOperationStore(env.SESSIONS);
@@ -92,11 +104,19 @@ function handler(env: Env): (request: Request) => Promise<Response> {
   }, reservationOperations);
   const usage = new ConsoleUsageSink();
   const audit = new ConsoleAuditSink();
-  const workersAiProvider = new WorkersAiModelProvider(env.AI, env.ACP_MODEL_ID ? { model: env.ACP_MODEL_ID } : {});
-  // Only an explicitly configured validation deployment is admitted through this guard.
+  const workersAiProvider = new WorkersAiModelProvider(env.AI, {
+    ...(env.ACP_MODEL_ID ? { model: env.ACP_MODEL_ID } : {}),
+    enableSessionAffinity: validationSessionAffinity(env.ACP_VALIDATION_SESSION_AFFINITY),
+  });
+  // Only an explicitly configured validation deployment uses this durable, experiment-scoped guard.
   const validationBudget = validationNeuronBudget(env.ACP_VALIDATION_NEURON_BUDGET);
-  const provider = validationBudget
-    ? new ValidationNeuronBudgetProvider(workersAiProvider, validationBudget)
+  if (Boolean(validationBudget) !== Boolean(env.ACP_VALIDATION_EXPERIMENT_ID)) throw new Error("ACP_VALIDATION_NEURON_BUDGET and ACP_VALIDATION_EXPERIMENT_ID must be configured together");
+  const provider = validationBudget && env.ACP_VALIDATION_EXPERIMENT_ID
+    ? new DurableExperimentBudgetProvider(workersAiProvider, new DurableObjectExperimentNeuronBudgetStore(env.SESSIONS, env.ACP_VALIDATION_EXPERIMENT_ID), {
+      configuredMaxNeurons: validationBudget.maxNeuronsPerRun,
+      configuredReserve: validationBudget.configuredReserve,
+      conservativeNextCallAllowance: validationBudget.conservativeExpectedCost,
+    })
     : workersAiProvider;
   const model = new LLMModelRouter(provider, new DeterministicModelRouter(), usage);
   const responder = new LLMGroundedResponder(provider, undefined, usage);

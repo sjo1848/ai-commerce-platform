@@ -9,6 +9,35 @@ export type ValidationNeuronBudgetConfig = {
   observedLocalDayNeurons?: number;
 };
 
+/** A validation experiment limit, not an account quota or a conversation limit. */
+export type ValidationExperimentBudgetConfig = {
+  configuredMaxNeurons: number;
+  configuredReserve: number;
+  conservativeNextCallAllowance: number;
+};
+
+export type ExperimentBudgetStatus = "ACTIVE" | "BUDGET_EXHAUSTED" | "COMPLETE";
+export type ExperimentBudgetSnapshot = Readonly<{
+  experimentId: string;
+  configuredMaxNeurons: number;
+  configuredReserve: number;
+  observedProviderNeurons: number;
+  inferenceCount: number;
+  updatedAt: string;
+  status: ExperimentBudgetStatus;
+}>;
+export type ExperimentBudgetReservation = Readonly<{ token: string }>;
+
+/**
+ * Implementations must make reserve atomic for one experiment. The Durable Object
+ * implementation serializes this check-and-reserve transition at its single name.
+ */
+export interface ExperimentNeuronBudgetStore {
+  reserve(config: ValidationExperimentBudgetConfig): Promise<ExperimentBudgetReservation | null>;
+  settle(token: string, providerNeurons: number | undefined): Promise<ExperimentBudgetSnapshot>;
+  release(token: string): Promise<ExperimentBudgetSnapshot>;
+}
+
 function nonNegative(name: string, value: number): number {
   if (!Number.isFinite(value) || value < 0) throw new Error(`${name} must be a finite non-negative number`);
   return value;
@@ -45,5 +74,34 @@ export class ValidationNeuronBudgetProvider implements ModelProvider {
       this.observedLocalDayNeurons += result.providerNeurons;
     }
     return result;
+  }
+}
+
+/** Validation-only provider wrapper backed by one durable experiment ledger. */
+export class DurableExperimentBudgetProvider implements ModelProvider {
+  constructor(
+    private readonly provider: ModelProvider,
+    private readonly store: ExperimentNeuronBudgetStore,
+    private readonly config: ValidationExperimentBudgetConfig,
+  ) {
+    nonNegative("configuredMaxNeurons", config.configuredMaxNeurons);
+    nonNegative("configuredReserve", config.configuredReserve);
+    nonNegative("conservativeNextCallAllowance", config.conservativeNextCallAllowance);
+    if (config.configuredReserve > config.configuredMaxNeurons) throw new Error("configuredReserve must not exceed configuredMaxNeurons");
+  }
+
+  async completeStructured(request: StructuredModelRequest): Promise<StructuredModelResult> {
+    const reservation = await this.store.reserve(this.config);
+    if (!reservation) throw new ModelProviderError("Validation experiment neuron budget exceeded", "NEURON_BUDGET_EXCEEDED");
+    try {
+      const result = await this.provider.completeStructured(request);
+      await this.store.settle(reservation.token, result.providerNeurons);
+      return result;
+    } catch (error) {
+      // No provider result means no consumption can be truthfully recorded. Release
+      // the conservative allowance so a failed local/provider call does not strand it.
+      await this.store.release(reservation.token);
+      throw error;
+    }
   }
 }
