@@ -44,7 +44,8 @@ test("successful LLM routing records model, token, latency and cost telemetry", 
   const route = await router.route("Somos dos, ¿qué hay?", context, tools);
   assert.equal(route.kind, "tool");
   assert.equal(usage.events.length, 1);
-  assert.deepEqual(usage.events[0], {
+  const { promptTelemetry, ...event } = usage.events[0];
+  assert.deepEqual(event, {
     timestamp: context.now,
     tenantId: "hotel-demo",
     sessionId: "session-telemetry",
@@ -57,6 +58,12 @@ test("successful LLM routing records model, token, latency and cost telemetry", 
     outputTokens: 30,
     latencyMs: 85,
     logId: "gateway-log-1",
+  });
+  assert.deepEqual(promptTelemetry, {
+    routeOrdinal: 1, inferenceOrdinal: 1, repairTrigger: false, initialValidity: "valid",
+    systemBytes: 11109, systemRulesBytes: 5147, capabilityRequirementsBytes: 94,
+    toolTextBytes: 254, modelVisibleStateBytes: 76, historyTextBytes: 0,
+    examplesAndInstructionsBytes: 5593, userMessageBytes: 22,
   });
 });
 

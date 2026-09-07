@@ -12,6 +12,7 @@ export async function recordModelInference(
   context: ExecutionContext,
   label: string,
   result: StructuredModelResult,
+  promptTelemetry?: import("./model-provider.js").ModelPromptTelemetry,
 ): Promise<void> {
   if (!usage) return;
   await usage.record({
@@ -25,6 +26,9 @@ export async function recordModelInference(
     ...(result.model ? { model: result.model } : {}),
     ...(result.inputTokens !== undefined ? { inputTokens: result.inputTokens } : {}),
     ...(result.outputTokens !== undefined ? { outputTokens: result.outputTokens } : {}),
+    ...(result.providerNeurons !== undefined ? { providerNeurons: result.providerNeurons } : {}),
+    ...(result.cachedInputTokens !== undefined ? { cachedInputTokens: result.cachedInputTokens } : {}),
+    ...(promptTelemetry ? { promptTelemetry } : {}),
     ...(result.latencyMs !== undefined ? { latencyMs: result.latencyMs } : {}),
     ...(result.logId ? { logId: result.logId } : {}),
   });

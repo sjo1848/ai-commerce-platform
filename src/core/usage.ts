@@ -1,3 +1,5 @@
+import type { ModelPromptTelemetry } from "./model-provider.js";
+
 export type UsageKind = "message" | "model_route" | "tool_call" | "model_inference" | "model_fallback";
 export type UsageEvent = {
   timestamp: string;
@@ -10,6 +12,9 @@ export type UsageEvent = {
   model?: string;
   inputTokens?: number;
   outputTokens?: number;
+  providerNeurons?: number;
+  cachedInputTokens?: number;
+  promptTelemetry?: ModelPromptTelemetry;
   latencyMs?: number;
   logId?: string;
   fallbackReason?: string;

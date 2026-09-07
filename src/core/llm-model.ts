@@ -14,6 +14,7 @@ import type {
   ToolDescriptor,
 } from "./types.js";
 import type { UsageSink } from "./usage.js";
+import type { ModelPromptTelemetry } from "./model-provider.js";
 import { validateMutationGrounding, type MutationGrounding } from "./mutation-grounding.js";
 
 const TRUSTED_FIELDS = new Set([
@@ -350,7 +351,27 @@ function capabilityRequirements(tools: readonly ToolDescriptor[]): string {
   return rules.join("\n");
 }
 
+function utf8Bytes(value: string): number {
+  return new TextEncoder().encode(value).byteLength;
+}
+
+function initialRouteValidation(value: unknown): Pick<ModelPromptTelemetry, "initialValidity" | "validationErrorFamily" | "repairTrigger"> {
+  if (!isRecord(value)) return { initialValidity: "invalid", validationErrorFamily: "invalid_response_shape", repairTrigger: false };
+  const keys = Object.keys(value);
+  if (keys.some((key) => !["kind", "toolId", "input", "clarificationReason", "missing", "statePatch", "mutationGrounding"].includes(key))) return { initialValidity: "invalid", validationErrorFamily: "unexpected_top_level_field", repairTrigger: false };
+  if (hasTrustedField(value)) return { initialValidity: "invalid", validationErrorFamily: "trusted_field_attempt", repairTrigger: false };
+  const clarification = clarificationDecision(value);
+  if (!clarification || !parseStatePatch(value.statePatch)) return { initialValidity: "invalid", validationErrorFamily: "invalid_route_state_shape", repairTrigger: false };
+  if (value.kind === "message") return { initialValidity: "valid", repairTrigger: false };
+  if (value.kind !== "tool" || typeof value.toolId !== "string" || !isRecord(value.input) || clarification.reason !== "none" || clarification.missing.length !== 0) {
+    return { initialValidity: "invalid", validationErrorFamily: "invalid_tool_plan_shape", repairTrigger: true };
+  }
+  return { initialValidity: "valid", repairTrigger: false };
+}
+
 export class LLMModelRouter implements ModelRouter {
+  private routeOrdinal = 0;
+  private inferenceOrdinal = 0;
   public constructor(
     private readonly provider: ModelProvider,
     private readonly fallback: ModelRouter,
@@ -389,6 +410,7 @@ export class LLMModelRouter implements ModelRouter {
     context: ExecutionContext,
     availableTools: readonly ToolDescriptor[],
     state: Readonly<ConversationState>,
+    promptTelemetry: ModelPromptTelemetry,
     onProviderFailure?: (category: string | undefined) => void,
   ): Promise<ModelRouteResult | undefined> {
     let repairResult;
@@ -408,13 +430,15 @@ export class LLMModelRouter implements ModelRouter {
         maxTokens: 280,
         temperature: 0,
         label: "agent_core_route_repair",
+        sessionAffinity: context.session?.id,
+        promptTelemetry,
       });
     } catch (error) {
       onProviderFailure?.(safeProviderFailureCategory(error));
       return undefined;
     }
 
-    await recordModelInference(this.usage, context, "agent_core_route_repair", repairResult);
+    await recordModelInference(this.usage, context, "agent_core_route_repair", repairResult, promptTelemetry);
     const repaired = repairResult.value;
     if (!isRecord(repaired)) return undefined;
     const keys = Object.keys(repaired);
@@ -440,6 +464,7 @@ export class LLMModelRouter implements ModelRouter {
     conversation: readonly ModelConversationTurn[] = [],
     state: Readonly<ModelRoutingState> = emptyConversationState(),
   ): Promise<ModelRouteResult> {
+    const routeOrdinal = ++this.routeOrdinal;
     const toolText = availableTools.map(renderTool).join("\n");
     const requirements = capabilityRequirements(availableTools);
     const history = sanitizedConversation(conversation);
@@ -508,6 +533,26 @@ export class LLMModelRouter implements ModelRouter {
       toolText || "(none)",
       historyText,
     ].join("\n");
+    // Measurement-only: all values above remain the existing assembly inputs.
+    const capabilityText = requirements || "(no capabilities)";
+    const capabilityMarker = `Capability-specific routing rules:\n${capabilityText}`;
+    const capabilityStart = system.indexOf(capabilityMarker);
+    const instructionsStart = capabilityStart + capabilityMarker.length + 1;
+    const toolsMarker = "\nAvailable tools:\n";
+    const instructionsEnd = system.indexOf(toolsMarker, instructionsStart);
+    const promptTelemetry: ModelPromptTelemetry = {
+      routeOrdinal,
+      inferenceOrdinal: ++this.inferenceOrdinal,
+      repairTrigger: false,
+      systemBytes: utf8Bytes(system),
+      systemRulesBytes: utf8Bytes(system.slice(0, capabilityStart + "Capability-specific routing rules:".length)),
+      capabilityRequirementsBytes: utf8Bytes(capabilityText),
+      toolTextBytes: utf8Bytes(toolText || "(none)"),
+      modelVisibleStateBytes: utf8Bytes(stateText),
+      historyTextBytes: utf8Bytes(historyText),
+      examplesAndInstructionsBytes: utf8Bytes(system.slice(instructionsStart, instructionsEnd)),
+      userMessageBytes: utf8Bytes(message),
+    };
 
     try {
       const result = await this.provider.completeStructured({
@@ -516,9 +561,12 @@ export class LLMModelRouter implements ModelRouter {
         maxTokens: 360,
         temperature: 0.1,
         label: "agent_core_route",
+        sessionAffinity: context.session?.id,
+        promptTelemetry,
       });
-      await recordModelInference(this.usage, context, "agent_core_route", result);
       const value = result.value;
+      const initialValidation = initialRouteValidation(value);
+      await recordModelInference(this.usage, context, "agent_core_route", result, { ...promptTelemetry, ...initialValidation });
       if (!isRecord(value)) return this.fallbackRoute("invalid_response_shape", message, context, availableTools, conversation, state);
 
       const keys = Object.keys(value);
@@ -556,7 +604,12 @@ export class LLMModelRouter implements ModelRouter {
 
       if (value.kind !== "tool" || typeof value.toolId !== "string" || !isRecord(value.input) || clarification.reason !== "none" || clarification.missing.length !== 0) {
         let repairFailureCategory: string | undefined;
-        const repaired = await this.repairContradictoryToolRoute(value, system, message, context, availableTools, state, (category) => { repairFailureCategory = category; });
+        const repairPromptTelemetry = {
+          ...promptTelemetry,
+          inferenceOrdinal: ++this.inferenceOrdinal,
+          repairTrigger: true,
+        };
+        const repaired = await this.repairContradictoryToolRoute(value, system, message, context, availableTools, state, repairPromptTelemetry, (category) => { repairFailureCategory = category; });
         if (repaired) return repaired;
         return this.fallbackRoute("invalid_tool_plan_shape", message, context, availableTools, conversation, state, repairFailureCategory);
       }

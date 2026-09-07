@@ -312,6 +312,7 @@ export class LLMGroundedResponder implements ModelResponder {
         maxTokens: 100,
         temperature: 0.4,
         label: "agent_core_conversational_response",
+        sessionAffinity: input.context.session.id,
       });
       await recordModelInference(this.usage, input.context, "agent_core_conversational_response", result);
       const text = validateConversationalDraft(input, result.value);
@@ -350,6 +351,7 @@ export class LLMGroundedResponder implements ModelResponder {
         maxTokens: 300,
         temperature: 0.4,
         label: "agent_core_grounded_response",
+        sessionAffinity: input.context.session.id,
       });
       await recordModelInference(this.usage, input.context, "agent_core_grounded_response", result);
       const draft = validateGroundedDraft(result.value, envelope);

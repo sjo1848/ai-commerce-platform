@@ -13,6 +13,7 @@ import { ConversationBackedStateStore } from "./core/conversation-state.js";
 import { DeterministicModelRouter } from "./core/deterministic-model.js";
 import { LLMModelRouter } from "./core/llm-model.js";
 import { LLMGroundedResponder } from "./core/model-responder.js";
+import { ValidationNeuronBudgetProvider, type ValidationNeuronBudgetConfig } from "./core/neuron-budget.js";
 import { AgentCoreRuntime } from "./core/runtime.js";
 import { ConsoleUsageSink } from "./core/usage.js";
 import { createWebchatHandler } from "./webchat/handler.js";
@@ -25,6 +26,8 @@ type Env = {
   SESSIONS: DurableObjectNamespace<SessionDurableObject>;
   /** Evaluation-only deployment override. Omit in normal staging/production config to retain the default model. */
   ACP_MODEL_ID?: string;
+  /** Validation-harness-only JSON configuration. It is intentionally absent from normal deployments. */
+  ACP_VALIDATION_NEURON_BUDGET?: string;
 };
 
 const tenant = {
@@ -59,6 +62,28 @@ const stagingIdentity = {
 
 let handle: ((request: Request) => Promise<Response>) | undefined;
 
+function validationNeuronBudget(value: string | undefined): ValidationNeuronBudgetConfig | undefined {
+  if (!value) return undefined;
+  let parsed: unknown;
+  try { parsed = JSON.parse(value); } catch { throw new Error("ACP_VALIDATION_NEURON_BUDGET must be valid JSON"); }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("ACP_VALIDATION_NEURON_BUDGET must be an object");
+  const config = parsed as Record<string, unknown>;
+  const number = (key: string, optional = false): number | undefined => {
+    const raw = config[key];
+    if (raw === undefined && optional) return undefined;
+    if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0) throw new Error(`ACP_VALIDATION_NEURON_BUDGET.${key} must be a finite non-negative number`);
+    return raw;
+  };
+  const required = {
+    maxNeuronsPerRun: number("maxNeuronsPerRun")!,
+    configuredAvailableBudget: number("configuredAvailableBudget")!,
+    configuredReserve: number("configuredReserve")!,
+    conservativeExpectedCost: number("conservativeExpectedCost")!,
+  };
+  const observedLocalDayNeurons = number("observedLocalDayNeurons", true);
+  return observedLocalDayNeurons === undefined ? required : { ...required, observedLocalDayNeurons };
+}
+
 function handler(env: Env): (request: Request) => Promise<Response> {
   if (handle) return handle;
   const reservationOperations = new DurableObjectReservationOperationStore(env.SESSIONS);
@@ -67,7 +92,12 @@ function handler(env: Env): (request: Request) => Promise<Response> {
   }, reservationOperations);
   const usage = new ConsoleUsageSink();
   const audit = new ConsoleAuditSink();
-  const provider = new WorkersAiModelProvider(env.AI, env.ACP_MODEL_ID ? { model: env.ACP_MODEL_ID } : {});
+  const workersAiProvider = new WorkersAiModelProvider(env.AI, env.ACP_MODEL_ID ? { model: env.ACP_MODEL_ID } : {});
+  // Only an explicitly configured validation deployment is admitted through this guard.
+  const validationBudget = validationNeuronBudget(env.ACP_VALIDATION_NEURON_BUDGET);
+  const provider = validationBudget
+    ? new ValidationNeuronBudgetProvider(workersAiProvider, validationBudget)
+    : workersAiProvider;
   const model = new LLMModelRouter(provider, new DeterministicModelRouter(), usage);
   const responder = new LLMGroundedResponder(provider, undefined, usage);
   const conversationStore = new DurableObjectConversationStore(env.SESSIONS);
