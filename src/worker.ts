@@ -17,6 +17,7 @@ import { LLMGroundedResponder } from "./core/model-responder.js";
 import { DurableExperimentBudgetProvider, type ExperimentBudgetTelemetry, type ValidationNeuronBudgetConfig } from "./core/neuron-budget.js";
 import { AgentCoreRuntime } from "./core/runtime.js";
 import { ConsoleUsageSink } from "./core/usage.js";
+import { admitValidationRequest } from "./validation-admission.js";
 import { createWebchatHandler } from "./webchat/handler.js";
 
 export { SessionDurableObject };
@@ -31,6 +32,8 @@ type Env = {
   ACP_VALIDATION_NEURON_BUDGET?: string;
   /** Server-owned validation ledger key; never derived from a conversation session. */
   ACP_VALIDATION_EXPERIMENT_ID?: string;
+  /** Server-owned credential admitting a request to a validation deployment. */
+  ACP_VALIDATION_RUN_TOKEN?: string;
   /** Opt-in Gateway affinity for validation only; absent/false preserves production behavior. */
   ACP_VALIDATION_SESSION_AFFINITY?: string;
 };
@@ -147,5 +150,7 @@ function handler(env: Env): (request: Request) => Promise<Response> {
 }
 
 export default {
-  fetch(request: Request, env: Env): Promise<Response> { return handler(env)(request); },
+  fetch(request: Request, env: Env): Promise<Response> {
+    return admitValidationRequest(request, env, (admittedRequest) => handler(env)(admittedRequest));
+  },
 };
