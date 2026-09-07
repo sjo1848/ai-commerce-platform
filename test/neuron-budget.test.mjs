@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { DurableExperimentBudgetProvider, ValidationNeuronBudgetProvider } from "../dist/core/neuron-budget.js";
+import { DurableExperimentBudgetProvider, ValidationNeuronBudgetProvider, experimentBudgetSnapshot, parseExperimentBudgetSnapshot, parseStoredExperimentBudget } from "../dist/core/neuron-budget.js";
 
 const request = { messages: [{ role: "user", content: "local fixture" }], schema: { type: "object" } };
 
@@ -44,7 +44,7 @@ class FakeSerializedExperimentLedger {
       if (this.state.observedProviderNeurons + reserved + config.conservativeNextCallAllowance > config.configuredMaxNeurons - config.configuredReserve) { this.state.status = "BUDGET_EXHAUSTED"; return null; }
       const token = `server-${++this.sequence}`;
       this.state.reservations.set(token, { allowance: config.conservativeNextCallAllowance, state: "reserved" });
-      return { token };
+      return { token, snapshot: this.snapshot() };
     });
   }
   settle(token, providerNeurons) { return this.serialized(() => this.transition(token, "settled", providerNeurons)); }
@@ -58,7 +58,11 @@ class FakeSerializedExperimentLedger {
     }
     return this.snapshot();
   }
-  snapshot() { const { reservations, ...snapshot } = this.state; return snapshot; }
+  snapshot() {
+    const { reservations, ...snapshot } = this.state;
+    const active = [...reservations.values()].filter((item) => item.state === "reserved");
+    return { ...snapshot, activeReservationCount: active.length, totalReservedAllowance: active.reduce((sum, item) => sum + item.allowance, 0) };
+  }
 }
 
 const experimentConfig = { configuredMaxNeurons: 10, configuredReserve: 1, conservativeNextCallAllowance: 6 };
@@ -72,31 +76,97 @@ test("durable experiment ledger serializes concurrent isolate admission and sett
   assert.equal(outcomes.filter((result) => result.status === "fulfilled").length, 1, "one serialized reservation prevents concurrent overspend");
   assert.equal(outcomes.find((result) => result.status === "rejected")?.reason.causeName, "NEURON_BUDGET_EXCEEDED");
   assert.equal(calls, 1);
-  assert.deepEqual(ledger.snapshot(), { experimentId: "exp-a", configuredMaxNeurons: 10, configuredReserve: 1, observedProviderNeurons: 4, inferenceCount: 1, updatedAt: "offline", status: "BUDGET_EXHAUSTED" });
+  assert.deepEqual(ledger.snapshot(), { experimentId: "exp-a", configuredMaxNeurons: 10, configuredReserve: 1, observedProviderNeurons: 4, inferenceCount: 1, updatedAt: "offline", status: "BUDGET_EXHAUSTED", activeReservationCount: 0, totalReservedAllowance: 0 });
   await assert.rejects(first.completeStructured(request), (error) => error?.causeName === "NEURON_BUDGET_EXCEEDED");
 });
 
-test("durable experiment ledger releases unknown usage without inventing consumption and isolates experiments from sessions", async () => {
+test("successful provider results without provider usage retain their reservation and fail closed", async () => {
+  const a = new FakeSerializedExperimentLedger("exp-a");
+  const noUsage = { async completeStructured() { return { value: {} }; } };
+  await assert.rejects(
+    new DurableExperimentBudgetProvider(noUsage, a, experimentConfig).completeStructured({ ...request, sessionAffinity: "unrelated-session" }),
+    (error) => error?.causeName === "EXPERIMENT_BUDGET_SETTLEMENT_UNCERTAIN" ,
+  );
+  assert.equal(a.snapshot().observedProviderNeurons, 0);
+  assert.equal(a.snapshot().inferenceCount, 0);
+  assert.equal(a.snapshot().activeReservationCount, 1);
+  assert.equal(a.snapshot().totalReservedAllowance, 6);
+});
+
+test("durable experiment ledgers isolate experiments from sessions", async () => {
   const a = new FakeSerializedExperimentLedger("exp-a");
   const b = new FakeSerializedExperimentLedger("exp-b");
-  const noUsage = { async completeStructured() { return { value: {} }; } };
-  await new DurableExperimentBudgetProvider(noUsage, a, experimentConfig).completeStructured({ ...request, sessionAffinity: "unrelated-session" });
-  assert.equal(a.snapshot().observedProviderNeurons, 0);
-  assert.equal(a.snapshot().inferenceCount, 1);
   await new DurableExperimentBudgetProvider({ async completeStructured() { return { value: {}, providerNeurons: 5 }; } }, b, experimentConfig).completeStructured(request);
-  assert.equal(a.snapshot().observedProviderNeurons, 0);
+  assert.equal(a.state, undefined);
   assert.equal(b.snapshot().observedProviderNeurons, 5);
 });
 
-test("durable experiment reservation tokens settle idempotently and provider failures release their allowance", async () => {
+test("experiment budget public snapshots round-trip without private reservation state and reject malformed state", () => {
+  const stored = JSON.stringify({ experimentId: "exp-snapshot", configuredMaxNeurons: 10, configuredReserve: 1, observedProviderNeurons: 3, inferenceCount: 1, updatedAt: "2026-09-07T00:00:00.000Z", status: "ACTIVE", conservativeNextCallAllowance: 6, reservations: { "00000000-0000-4000-8000-000000000001": { allowance: 6, state: "settled" } } });
+  const snapshot = experimentBudgetSnapshot(parseStoredExperimentBudget(stored));
+  assert.deepEqual(parseExperimentBudgetSnapshot(JSON.stringify(snapshot)), snapshot);
+  assert.deepEqual(Object.keys(snapshot).sort(), ["activeReservationCount", "configuredMaxNeurons", "configuredReserve", "experimentId", "inferenceCount", "observedProviderNeurons", "status", "totalReservedAllowance", "updatedAt"]);
+  assert.equal(JSON.stringify(snapshot).includes("reservation"), false);
+  assert.throws(() => parseExperimentBudgetSnapshot(JSON.stringify({ ...snapshot, reservations: {} })), /Invalid experiment budget snapshot/);
+  assert.throws(() => parseExperimentBudgetSnapshot(JSON.stringify({ ...snapshot, inferenceCount: -1 })), /Invalid experiment budget snapshot/);
+  assert.throws(() => parseStoredExperimentBudget(JSON.stringify({ ...JSON.parse(stored), reservations: { "00000000-0000-0000-0000-000000000001": { allowance: 6, state: "reserved" } } })), /Invalid stored experiment budget/);
+  assert.throws(() => parseStoredExperimentBudget(JSON.stringify({ ...JSON.parse(stored), reservations: { "00000000-0000-4000-8000-000000000001": { allowance: 5, state: "reserved" } } })), /Invalid stored experiment budget/);
+  assert.throws(() => parseStoredExperimentBudget(JSON.stringify({ ...JSON.parse(stored), reservations: { "00000000-0000-4000-8000-000000000001": { allowance: 6, state: "reserved", extra: true } } })), /Invalid stored experiment budget/);
+  assert.throws(() => parseStoredExperimentBudget(JSON.stringify(snapshot)), /Invalid stored experiment budget/);
+});
+
+test("durable experiment reservation tokens settle and release idempotently and provider failures release their allowance", async () => {
   const ledger = new FakeSerializedExperimentLedger("exp-token");
   const reservation = await ledger.reserve(experimentConfig);
   assert.match(reservation.token, /^server-\d+$/, "the ledger, not the caller, creates the token");
   await ledger.settle(reservation.token, 3);
   await ledger.settle(reservation.token, 3);
   assert.equal(ledger.snapshot().observedProviderNeurons, 3, "replayed settlement cannot double count");
+  const releaseReservation = await ledger.reserve(experimentConfig);
+  await ledger.release(releaseReservation.token);
+  await ledger.release(releaseReservation.token);
+  assert.equal(ledger.state.reservations.get(releaseReservation.token).state, "released");
   await assert.rejects(new DurableExperimentBudgetProvider({ async completeStructured() { throw new Error("offline failure"); } }, ledger, experimentConfig).completeStructured(request));
   const failedReservation = [...ledger.state.reservations.values()].find((item) => item.state === "released");
   assert.ok(failedReservation, "a call with no result releases its conservative allowance");
   assert.equal(ledger.snapshot().observedProviderNeurons, 3);
+});
+
+test("provider and release failures surface uncertain cause, return no result, and retain reservation", async () => {
+  const ledger = new FakeSerializedExperimentLedger("exp-release-uncertain");
+  ledger.release = async () => { throw new Error("durable transport unavailable"); };
+  const provider = new DurableExperimentBudgetProvider({ async completeStructured() { throw new Error("provider unavailable"); } }, ledger, experimentConfig);
+  const outcome = await Promise.allSettled([provider.completeStructured(request)]);
+  assert.equal(outcome[0].status, "rejected");
+  assert.equal(outcome[0].reason?.causeName, "EXPERIMENT_BUDGET_RELEASE_UNCERTAIN");
+  assert.equal(outcome[0].value, undefined, "failure must not return a successful result");
+  assert.equal([...ledger.state.reservations.values()].filter((item) => item.state === "reserved").length, 1, "uncertain release retains the reservation");
+});
+
+test("settlement failure remains uncertain, retains the reservation, and emits no successful result", async () => {
+  const ledger = new FakeSerializedExperimentLedger("exp-settlement");
+  const telemetry = [];
+  ledger.settle = async () => { throw new Error("durable transport unavailable"); };
+  const provider = new DurableExperimentBudgetProvider({ async completeStructured() { return { value: { accepted: true }, providerNeurons: 4 }; } }, ledger, experimentConfig, (snapshot) => telemetry.push(snapshot));
+  await assert.rejects(provider.completeStructured(request), (error) => error?.causeName === "EXPERIMENT_BUDGET_SETTLEMENT_UNCERTAIN");
+  assert.equal([...ledger.state.reservations.values()].filter((item) => item.state === "reserved").length, 1, "uncertain settlement retains its conservative reservation");
+  assert.equal(telemetry.length, 1, "reserve remains observable even when settlement is uncertain");
+  assert.equal(telemetry[0].activeReservationCount, 1);
+});
+
+test("durable provider emits token-free reconciliation telemetry after reserve, settlement, and provider-failure release", async () => {
+  const ledger = new FakeSerializedExperimentLedger("exp-telemetry");
+  const telemetry = [];
+  const telemetryConfig = { configuredMaxNeurons: 20, configuredReserve: 1, conservativeNextCallAllowance: 6 };
+  const provider = new DurableExperimentBudgetProvider({ async completeStructured() { return { value: {}, providerNeurons: 4 }; } }, ledger, telemetryConfig, (snapshot) => telemetry.push(snapshot));
+  await provider.completeStructured(request);
+  await assert.rejects(new DurableExperimentBudgetProvider({ async completeStructured() { throw new Error("offline failure"); } }, ledger, telemetryConfig, (snapshot) => telemetry.push(snapshot)).completeStructured(request));
+  assert.equal(telemetry.length, 4);
+  assert.deepEqual(telemetry[1], ledger.snapshot());
+  assert.deepEqual(telemetry[0].activeReservationCount, 1);
+  assert.deepEqual(telemetry[0].totalReservedAllowance, 6);
+  assert.deepEqual(telemetry[1].activeReservationCount, 0);
+  assert.deepEqual(telemetry[2].activeReservationCount, 1);
+  assert.deepEqual(telemetry[3].activeReservationCount, 0);
+  assert.equal(JSON.stringify(telemetry).includes("server-"), false);
 });

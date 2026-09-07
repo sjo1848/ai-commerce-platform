@@ -14,7 +14,7 @@ import { ConversationBackedStateStore } from "./core/conversation-state.js";
 import { DeterministicModelRouter } from "./core/deterministic-model.js";
 import { LLMModelRouter } from "./core/llm-model.js";
 import { LLMGroundedResponder } from "./core/model-responder.js";
-import { DurableExperimentBudgetProvider, type ValidationNeuronBudgetConfig } from "./core/neuron-budget.js";
+import { DurableExperimentBudgetProvider, type ExperimentBudgetTelemetry, type ValidationNeuronBudgetConfig } from "./core/neuron-budget.js";
 import { AgentCoreRuntime } from "./core/runtime.js";
 import { ConsoleUsageSink } from "./core/usage.js";
 import { createWebchatHandler } from "./webchat/handler.js";
@@ -96,6 +96,12 @@ function validationSessionAffinity(value: string | undefined): boolean {
   throw new Error("ACP_VALIDATION_SESSION_AFFINITY must be true or false");
 }
 
+function recordExperimentBudgetTelemetry(telemetry: ExperimentBudgetTelemetry): void {
+  // Validation-only, token-free reconciliation record. This is not an API and
+  // exposes no mutable ledger capability.
+  console.log(JSON.stringify({ event: "agent_core_experiment_budget", ...telemetry }));
+}
+
 function handler(env: Env): (request: Request) => Promise<Response> {
   if (handle) return handle;
   const reservationOperations = new DurableObjectReservationOperationStore(env.SESSIONS);
@@ -116,7 +122,7 @@ function handler(env: Env): (request: Request) => Promise<Response> {
       configuredMaxNeurons: validationBudget.maxNeuronsPerRun,
       configuredReserve: validationBudget.configuredReserve,
       conservativeNextCallAllowance: validationBudget.conservativeExpectedCost,
-    })
+    }, recordExperimentBudgetTelemetry)
     : workersAiProvider;
   const model = new LLMModelRouter(provider, new DeterministicModelRouter(), usage);
   const responder = new LLMGroundedResponder(provider, undefined, usage);
