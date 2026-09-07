@@ -7,6 +7,7 @@ import {
   experimentBudgetSnapshot,
   parseExperimentBudgetSnapshot,
   parseStoredExperimentBudget,
+  reconcileExperimentBudgetStatus,
 } from "../core/neuron-budget.js";
 import type {
   ExperimentBudgetReservation,
@@ -112,11 +113,13 @@ export class SessionDurableObject extends DurableObject<Env> {
       // performs check+reserve as one serialized storage transition.
       if (!this.ctx.id.name?.startsWith("experiment-budget:")) return new Response(null, { status: 409 });
       const experimentId = this.ctx.id.name.slice("experiment-budget:".length);
-      const persist = (state: StoredExperimentBudget): Response => {
+      const persist = (state: StoredExperimentBudget): ExperimentBudgetSnapshot => {
+        state.status = reconcileExperimentBudgetStatus(state);
         state.updatedAt = new Date().toISOString();
         this.ctx.storage.kv.put(EXPERIMENT_BUDGET_KEY, JSON.stringify(state));
-        return new Response(JSON.stringify(experimentBudgetSnapshot(state)), { status: 200, headers: { "content-type": "application/json; charset=utf-8" } });
+        return experimentBudgetSnapshot(state);
       };
+      const snapshotResponse = (snapshot: ExperimentBudgetSnapshot): Response => new Response(JSON.stringify(snapshot), { status: 200, headers: { "content-type": "application/json; charset=utf-8" } });
       if (request.method !== "POST") return new Response(null, { status: 405 });
       const bodyValue = await request.json() as unknown;
       if (!bodyValue || typeof bodyValue !== "object" || Array.isArray(bodyValue)) return new Response(null, { status: 400 });
@@ -130,18 +133,15 @@ export class SessionDurableObject extends DurableObject<Env> {
           ? { experimentId, configuredMaxNeurons: config.configuredMaxNeurons, configuredReserve: config.configuredReserve, conservativeNextCallAllowance: config.conservativeNextCallAllowance, observedProviderNeurons: 0, inferenceCount: 0, updatedAt: new Date().toISOString(), status: "ACTIVE", reservations: {} }
           : parseStoredExperimentBudget(raw);
         if (state.experimentId !== experimentId || state.configuredMaxNeurons !== config.configuredMaxNeurons || state.configuredReserve !== config.configuredReserve || state.conservativeNextCallAllowance !== config.conservativeNextCallAllowance) return new Response(null, { status: 409 });
-        const reserved = Object.values(state.reservations).reduce((total, reservation) => total + (reservation.state === "reserved" ? reservation.allowance : 0), 0);
-        const allowed = state.configuredMaxNeurons - state.configuredReserve;
-        if (state.status === "COMPLETE" || state.observedProviderNeurons + reserved + state.conservativeNextCallAllowance > allowed) {
-          if (state.status !== "COMPLETE") state.status = "BUDGET_EXHAUSTED";
+        const admissionStatus = reconcileExperimentBudgetStatus(state);
+        if (admissionStatus !== "ACTIVE") {
+          state.status = admissionStatus;
           persist(state);
           return new Response(null, { status: 409 });
         }
         const token = crypto.randomUUID();
         state.reservations[token] = { allowance: state.conservativeNextCallAllowance, state: "reserved" };
-        state.status = "ACTIVE";
-        this.ctx.storage.kv.put(EXPERIMENT_BUDGET_KEY, JSON.stringify(state));
-        return new Response(JSON.stringify({ token, snapshot: experimentBudgetSnapshot(state) }), { status: 200, headers: { "content-type": "application/json; charset=utf-8" } });
+        return new Response(JSON.stringify({ token, snapshot: persist(state) }), { status: 200, headers: { "content-type": "application/json; charset=utf-8" } });
       }
       const raw = this.ctx.storage.kv.get<string>(EXPERIMENT_BUDGET_KEY);
       if (raw === undefined) return new Response(null, { status: 404 });
@@ -158,16 +158,12 @@ export class SessionDurableObject extends DurableObject<Env> {
           reservation.state = "settled";
           state.inferenceCount += 1;
           state.observedProviderNeurons += providerNeurons;
-          const allowed = state.configuredMaxNeurons - state.configuredReserve;
-          if (state.observedProviderNeurons >= allowed) state.status = "BUDGET_EXHAUSTED";
         }
-        return persist(state);
+        return snapshotResponse(persist(state));
       }
       if (url.pathname === "/experiment-budget/release") {
         if (reservation.state === "reserved") reservation.state = "released";
-        const reserved = Object.values(state.reservations).reduce((total, item) => total + (item.state === "reserved" ? item.allowance : 0), 0);
-        if (state.status !== "COMPLETE" && state.observedProviderNeurons + reserved + state.conservativeNextCallAllowance <= state.configuredMaxNeurons - state.configuredReserve) state.status = "ACTIVE";
-        return persist(state);
+        return snapshotResponse(persist(state));
       }
       return new Response(null, { status: 404 });
     }

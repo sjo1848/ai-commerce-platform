@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { DurableExperimentBudgetProvider, ValidationNeuronBudgetProvider, experimentBudgetSnapshot, parseExperimentBudgetSnapshot, parseStoredExperimentBudget } from "../dist/core/neuron-budget.js";
+import { DurableExperimentBudgetProvider, ValidationNeuronBudgetProvider, experimentBudgetSnapshot, parseExperimentBudgetSnapshot, parseStoredExperimentBudget, reconcileExperimentBudgetStatus } from "../dist/core/neuron-budget.js";
 
 const request = { messages: [{ role: "user", content: "local fixture" }], schema: { type: "object" } };
 
@@ -38,12 +38,13 @@ class FakeSerializedExperimentLedger {
   }
   reserve(config) {
     return this.serialized(() => {
-      if (!this.state) this.state = { experimentId: this.experimentId, configuredMaxNeurons: config.configuredMaxNeurons, configuredReserve: config.configuredReserve, observedProviderNeurons: 0, inferenceCount: 0, updatedAt: "offline", status: "ACTIVE", reservations: new Map() };
+      if (!this.state) this.state = { experimentId: this.experimentId, configuredMaxNeurons: config.configuredMaxNeurons, configuredReserve: config.configuredReserve, conservativeNextCallAllowance: config.conservativeNextCallAllowance, observedProviderNeurons: 0, inferenceCount: 0, updatedAt: "offline", status: "ACTIVE", reservations: new Map() };
       assert.deepEqual([this.state.configuredMaxNeurons, this.state.configuredReserve], [config.configuredMaxNeurons, config.configuredReserve]);
       const reserved = [...this.state.reservations.values()].filter((item) => item.state === "reserved").reduce((sum, item) => sum + item.allowance, 0);
-      if (this.state.observedProviderNeurons + reserved + config.conservativeNextCallAllowance > config.configuredMaxNeurons - config.configuredReserve) { this.state.status = "BUDGET_EXHAUSTED"; return null; }
+      if (this.state.status === "COMPLETE" || this.state.observedProviderNeurons + reserved + config.conservativeNextCallAllowance > config.configuredMaxNeurons - config.configuredReserve) { this.reconcileStatus(); return null; }
       const token = `server-${++this.sequence}`;
       this.state.reservations.set(token, { allowance: config.conservativeNextCallAllowance, state: "reserved" });
+      this.reconcileStatus();
       return { token, snapshot: this.snapshot() };
     });
   }
@@ -56,10 +57,18 @@ class FakeSerializedExperimentLedger {
       reservation.state = state;
       if (state === "settled") { this.state.inferenceCount += 1; if (providerNeurons !== undefined) this.state.observedProviderNeurons += providerNeurons; }
     }
+    this.reconcileStatus();
     return this.snapshot();
   }
+  reconcileStatus() {
+    this.state.status = reconcileExperimentBudgetStatus({
+      ...this.state,
+      conservativeNextCallAllowance: this.state.conservativeNextCallAllowance,
+      reservations: Object.fromEntries(this.state.reservations),
+    });
+  }
   snapshot() {
-    const { reservations, ...snapshot } = this.state;
+    const { reservations, conservativeNextCallAllowance: _allowance, ...snapshot } = this.state;
     const active = [...reservations.values()].filter((item) => item.state === "reserved");
     return { ...snapshot, activeReservationCount: active.length, totalReservedAllowance: active.reduce((sum, item) => sum + item.allowance, 0) };
   }
@@ -78,6 +87,27 @@ test("durable experiment ledger serializes concurrent isolate admission and sett
   assert.equal(calls, 1);
   assert.deepEqual(ledger.snapshot(), { experimentId: "exp-a", configuredMaxNeurons: 10, configuredReserve: 1, observedProviderNeurons: 4, inferenceCount: 1, updatedAt: "offline", status: "BUDGET_EXHAUSTED", activeReservationCount: 0, totalReservedAllowance: 0 });
   await assert.rejects(first.completeStructured(request), (error) => error?.causeName === "NEURON_BUDGET_EXCEEDED");
+});
+
+test("durable-ledger snapshots report whether another conservative admission fits after settlement and release", async () => {
+  const ledger = new FakeSerializedExperimentLedger("exp-admission-status");
+  const config = { configuredMaxNeurons: 20, configuredReserve: 1, conservativeNextCallAllowance: 6 };
+  const first = await ledger.reserve(config);
+  const second = await ledger.reserve(config);
+  assert.equal(first.snapshot.status, "ACTIVE");
+  assert.equal(second.snapshot.status, "ACTIVE");
+
+  const settled = await ledger.settle(first.token, 8);
+  assert.equal(settled.status, "BUDGET_EXHAUSTED", "8 observed + 6 reserved + 6 next allowance exceeds the 19-neuron allowance");
+  assert.equal((await ledger.reserve(config)), null, "the status agrees with the next admission decision");
+
+  const released = await ledger.release(second.token);
+  assert.equal(released.status, "ACTIVE", "8 observed + no reservation + 6 next allowance fits the allowance");
+  const reservedAgain = await ledger.reserve(config);
+  assert.equal(reservedAgain.snapshot.status, "BUDGET_EXHAUSTED", "the newly held reservation makes a further admission unavailable");
+
+  ledger.state.status = "COMPLETE";
+  assert.equal((await ledger.release(reservedAgain.token)).status, "COMPLETE", "an explicit terminal status remains terminal");
 });
 
 test("successful provider results without provider usage retain their reservation and fail closed", async () => {

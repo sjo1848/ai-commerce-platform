@@ -150,6 +150,22 @@ export function experimentBudgetSnapshot(state: StoredExperimentBudget): Experim
   };
 }
 
+/**
+ * Reconciles the public admission status from durable usage and held allowances.
+ * COMPLETE is an explicit terminal state; every other status describes whether a
+ * further conservative admission currently fits.
+ */
+export function reconcileExperimentBudgetStatus(state: Pick<StoredExperimentBudget, "status" | "configuredMaxNeurons" | "configuredReserve" | "observedProviderNeurons" | "conservativeNextCallAllowance" | "reservations">): ExperimentBudgetStatus {
+  if (state.status === "COMPLETE") return "COMPLETE";
+  const activeReservedAllowance = Object.values(state.reservations)
+    .filter((reservation) => reservation.state === "reserved")
+    .reduce((total, reservation) => total + reservation.allowance, 0);
+  const allowed = state.configuredMaxNeurons - state.configuredReserve;
+  return state.observedProviderNeurons + activeReservedAllowance + state.conservativeNextCallAllowance > allowed
+    ? "BUDGET_EXHAUSTED"
+    : "ACTIVE";
+}
+
 function nonNegative(name: string, value: number): number {
   if (!Number.isFinite(value) || value < 0) throw new Error(`${name} must be a finite non-negative number`);
   return value;
