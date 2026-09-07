@@ -58,6 +58,10 @@ Closed R2.7 invariants:
 
 R2.8.4 is currently in `ACTIVE / ARCHITECTURAL_REWORK` under `.orchestration/contracts/ACP-2.6.9-R2.8.4-NLU-BOUNDARY-REWORK.md`. R2.8.5 remains blocked. This rework does not declare R2.8.4 or R2.8 technically closed.
 
+Candidate/evidence checkpoint: exact current candidate head `519801ffa2ce4595c31aa1df03e5d0990c60595c`; parent `4f85d9d690c5f5d4b906cfd3340a2f5c891d61d3`. CH-1.2 completed offline with `npm test` / `npm run qa` at `268/268 PASS`, typecheck, Wrangler dry-run, and git diff check PASS; Engineering QA PASS and Independent Critic PASS. No provider, Workers AI, staging, deployment, HMS, or approval calls occurred. CH-2B1 remains the historical `DURABLE_BUDGET_E2E_FAIL`; no retry is authorized without a new Human Gate. R2.8.4 remains ACTIVE, closure is not marked, and R2.8.5 remains blocked. Evidence: `.orchestration/evidence/ACP-2.6.9-R2.8.4-CH1.2-SETTLEMENT-RECONCILIATION.md`.
+
+Resume handoff backup bookkeeping: external Google Drive fileId `1PpyZ_gmKIsHgglntb7snYsKXm6svETOB`; backed-up snapshot SHA-256 `d3e9b8566fa4ea5be97693beec95e43b4593a3224a9ca493a0abaeb756746924`. The handoff's runtime consumption record is at `.orchestration/evidence/ACP-2.6.9-R2.8.4-RESUME-HANDOFF.md#runtime-consumption-record`. The local handoff was subsequently extended; current local SHA-256 is `37b019bb3f201f6c659e41733c4e6ba70d09c9d1b9f1d14fd25736042625b270`. This bookkeeping does not change the active/rework status or declare technical closure.
+
 It must exercise the authorized baseline model on real staging with natural language rather than parser-shaped commands, including:
 - greeting/social continuity;
 - `habitaciones para dos` without redundant guest clarification;
