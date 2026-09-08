@@ -23,7 +23,7 @@
     "evidence": ".orchestration/evidence/ACP-2.6.9-R2.8.4-RUN1-READINESS-REWORK.md"
   },
   "observability_recovery": {
-    "status": "READY_FOR_EXTERNAL_SECRET_CREATION",
+    "status": "OBSERVABILITY_READY_FOR_RUN_1",
     "query_script": "scripts/query-workers-observability.mjs",
     "endpoint": "POST /accounts/{account_id}/workers/observability/telemetry/query",
     "endpoint_classification": "DOCUMENTED_AND_MATCHING",
@@ -39,15 +39,19 @@
       "WORKER_NAME": "absent"
     },
     "classification": "EXTERNAL_CREDENTIAL_SCOPE_OR_AUTHORIZATION_BLOCKED",
-    "harness_hardening": "LOCAL_UNCOMMITTED_SANITIZED_403_METADATA",
+    "harness_hardening": "COMMITTED_SANITIZED_403_METADATA",
     "engineering_qa": "QA_PASS",
-    "remote_verification": "NOT_ATTEMPTED_NO_CREDENTIALS",
-    "credential_separation": "IMPLEMENTED_LOCAL_UNCOMMITTED",
+    "remote_verification": "PASS_HTTP_2XX_SANITIZED_JSON",
+    "remote_verification_workflow_run": 34255621797,
+    "remote_verification_head": "effcd8c887ca0115a62e03f5ab9c8f5f0c5cf68d",
+    "remote_verification_result": "OBJECT_KEYS_EVENTS_RUN_STATISTICS",
+    "first_remote_evidence_operation": "POST /accounts/{account_id}/workers/observability/telemetry/query",
+    "credential_separation": "COMMITTED_AND_PUSHED",
     "deployment_token_unchanged": true,
     "dedicated_secret_name": "CLOUDFLARE_OBSERVABILITY_API_TOKEN",
     "dedicated_secret_scope": "WORKERS_OBSERVABILITY_WRITE_TARGET_ACCOUNT_ONLY",
     "local_tests": "DEDICATED_CREDENTIALS_5/5_BOUNDARY_31/31_SYNTAX_PASS",
-    "ci_dispatched": false,
+    "ci_dispatched": true,
     "provider_calls_this_block": 0,
     "evidence": ".orchestration/evidence/ACP-2.6.9-R2.8.4-OBSERVABILITY-AUTH-DIAGNOSIS.md"
   },

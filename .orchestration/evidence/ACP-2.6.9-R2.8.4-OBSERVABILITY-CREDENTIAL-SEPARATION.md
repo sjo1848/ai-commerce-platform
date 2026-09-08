@@ -1,13 +1,12 @@
 # R2.8.4 — Dedicated historical observability credential separation
 
-Status: `READY_FOR_EXTERNAL_SECRET_CREATION`
+Status: `OBSERVABILITY_READY_FOR_RUN_1`
 
 ## Scope and safety
 
-Bounded technical REWORK only. Exact authoritative HEAD remains
-`0ee9324cdcf26094413c9e9059b934cc390e0d2d`; the working tree is intentionally
-dirty and no commit, push, deployment, Worker request, provider inference,
-HMS call, approval call, or workflow dispatch was performed.
+Bounded technical REWORK only. The credential-separation changes were committed
+and pushed as `bd74a29`, `9bc098a`, and `effcd8c`. The historical verification
+ran at exact candidate `effcd8c887ca0115a62e03f5ab9c8f5f0c5cf68d`.
 
 ## Separation implemented
 
@@ -17,8 +16,10 @@ HMS call, approval call, or workflow dispatch was performed.
 - The helper fails closed when the dedicated token is missing and preserves
   sanitized endpoint/status/primitive error metadata, including
   `documentation_url` when supplied.
-- The workflow injects the dedicated secret only into two historical-query-only
-  steps: preflight query and broad reconciliation query.
+- The full workflow injects the dedicated secret only into two
+  historical-query-only steps: preflight query and broad reconciliation query.
+- The same registered workflow has a manual `historical-observability-only`
+  mode whose sole Cloudflare operation is the existing sanitized helper.
 - The tail/probe step has no dedicated observability secret.
 - Dialogue, corpus, validation-header, application, and provider inputs do not
   receive the dedicated token.
@@ -41,18 +42,22 @@ Do not replace or broaden `CLOUDFLARE_API_TOKEN`.
 - Node syntax checks: PASS
 - `git diff --check`: PASS
 - Engineering QA: `QA_PASS`
-- No CI was dispatched because the authoritative candidate was not changed or
-  pushed.
+- Offline full QA: `320/320 PASS`.
+- Focused credential/workflow tests: `5/5 PASS`.
+- GitHub `core-ci` run `34255556038`: `success` at exact head.
+- Node syntax and `git diff --check`: PASS.
 
-## Required Human Action / next verification
+## Remote verification
 
-The Human/credential owner must create the dedicated GitHub secret without
-revealing its value. After that external change, the first remote operation
-must be only the historical observability query. It must verify a sanitized
-successful JSON response (including an empty result set) or retain sanitized
-403 metadata. No deployment, Worker call, provider inference, RUN 1, RUN 2,
-approval, or HMS mutation is authorized by this change.
+- External secret creation completed without exposing its value.
+- GitHub workflow run `34255621797` used mode `historical-observability-only`.
+- The first Cloudflare evidence operation was exactly
+  `POST /accounts/{account_id}/workers/observability/telemetry/query` through
+  `scripts/query-workers-observability.mjs`.
+- Sanitized result: `OBSERVABILITY_HISTORICAL_QUERY_HTTP_2XX`, `success: true`,
+  result object keys `events`, `run`, `statistics`.
+- No deployment, Worker request, Workers AI inference, RUN 1, RUN 2, approval,
+  or HMS mutation occurred.
 
-Only after that query succeeds may the system report
-`OBSERVABILITY_READY_FOR_RUN_1`; a new RUN 1 still requires a new explicit
-Human Gate.
+`OBSERVABILITY_READY_FOR_RUN_1` is now reported. A new RUN 1 still requires a
+new explicit Human Gate.
