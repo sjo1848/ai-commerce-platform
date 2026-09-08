@@ -10,7 +10,7 @@
   "stop_reason": "R2_8_4_FUNCTIONAL_EVIDENCE_HUMAN_GATE",
   "technical_rework_checkpoint": {
     "status": "READY_FOR_EXACT_HEAD_CI_AND_HUMAN_GATE",
-    "candidate_worktree": "pending_commit_sha",
+    "candidate_worktree": "1467965b50ecdeb892a71691683d89f69d878390",
     "local_npm_qa": "315/315_PASS",
     "wrangler_dry_run": "PASS",
     "workflow_provider_trigger": "MANUAL_ONLY",
