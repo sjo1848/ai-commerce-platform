@@ -226,7 +226,7 @@
     "qa": "PASS",
     "open_p0_p1_p2": null,
     "local_npm_qa": "321/321_PASS",
-    "engineering_qa": "QA_PASS_STATE_RECONCILED_PENDING_EXACT_HEAD_REVIEW",
+    "engineering_qa": "QA_PASS",
     "ch1_zero_inference": {
       "status": "COMPLETE_QA_PASS",
       "head": "e2f6839c6990033d9f40859659a2678dec6e6012",
