@@ -1,7 +1,7 @@
 # R2.8.4 — Pre-RUN-1 technical readiness REWORK
 
 Status: IN_PROGRESS — no provider run authorized or executed.
-Baseline reviewed Git/PR artifact: `856ab7637901b628680ba6fbf4104ce1b4147585`.
+Baseline reviewed Git/PR artifact: `856ab7637901b628680ba6fbf4104ce1b4147585`. Final pushed substantive candidate: `e31d8c857154bba6ecd44e5501e85cedfe3d3072`.
 Scope: the Product Owner authorized bounded implementation, offline tests, independent QA/verification, durable convergence and safe commit/push. RUN 1, deployment, inference, approval, mutation, merge, closure and R2.8.5 remain gated.
 
 ## Recovered discrepancies
@@ -18,3 +18,7 @@ Scope: the Product Owner authorized bounded implementation, offline tests, indep
 Two regressions were frozen RED before budget implementation: a timeout freed its reservation, and zero allowance was accepted. The bounded fix retains every reservation after a provider rejection because the provider interface supplies no proof of pre-dispatch non-consumption. Positive allowance is enforced by admission, provider, DO reserve and stored-state parsing. Worker admission uses the lesser of the run cap and configured daily remainder. The unused in-memory wrapper is not the deployed validation guard.
 
 Historical CH2B1-R3 PASS remains historical proof, not current exact-SHA staging acceptance. No CH-1.4 or cache/prompt/model/affinity optimization was opened. No provider quota was consumed by this REWORK.
+
+## Exact-head convergence
+
+The substantive candidate was pushed once after the workflow was proven manual-only. GitHub runs `34241858978` and `34241864626` completed SUCCESS for exact head `e31d8c8`. No R2.8 dialogue workflow run was created by the push. Local `npm test` and `npm run qa` completed `315/315 PASS`; targeted harness, preflight, budget and core regression tests passed. This is technical readiness evidence only; it does not assert staging GREEN or product acceptance.
