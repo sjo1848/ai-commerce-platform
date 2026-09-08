@@ -4,13 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "Use historical-observability-only for the zero-inference credential check"
+        description: "Select full RUN 1, historical query only, or validation admission only"
         required: false
         default: "full"
         type: choice
         options:
           - full
           - historical-observability-only
+          - validation-admission-only
 
 permissions:
   contents: read
@@ -64,8 +65,288 @@ jobs:
             }));
           '
 
+  validation-admission:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'validation-admission-only'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      WORKER_NAME: ai-commerce-agent-core
+      EXPECTED_MODEL: '@cf/meta/llama-3.3-70b-instruct-fp8-fast'
+      R28_PRIOR_VERSION: fcb24c21-f818-402c-98ac-3af11252a33b
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install locked toolchain
+        run: npm ci
+
+      - name: Build exact candidate without remote application traffic
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          npm run build
+          node --check scripts/r2.8-validation-preflight.mjs
+          node --check scripts/query-workers-observability.mjs
+
+      - name: Inspect prior immutable version binding metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$WORKER_NAME/versions/$R28_PRIOR_VERSION" \
+            > /tmp/r28-prior-version.json
+          PRIOR_VERSION="$R28_PRIOR_VERSION" node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from "node:fs";
+          const payload = JSON.parse(readFileSync("/tmp/r28-prior-version.json", "utf8"));
+          const version = payload.result ?? payload;
+          if (payload.success === false || version?.id !== process.env.PRIOR_VERSION) throw new Error("prior immutable version metadata mismatch");
+          const bindings = version?.resources?.bindings;
+          if (!Array.isArray(bindings)) throw new Error("prior immutable version binding metadata unavailable");
+          const summary = bindings.map(({ name, type }) => ({ name, type })).sort((a, b) => a.name.localeCompare(b.name));
+          const byName = new Map(summary.map((binding) => [binding.name, binding.type]));
+          for (const name of ["ACP_VALIDATION_NEURON_BUDGET", "ACP_VALIDATION_EXPERIMENT_ID", "ACP_VALIDATION_RUN_TOKEN"]) {
+            if (!byName.has(name)) throw new Error(`prior version missing binding name: ${name}`);
+          }
+          if (byName.get("ACP_VALIDATION_RUN_TOKEN") !== "secret_text") throw new Error("prior validation token is not secret_text");
+          if (byName.get("ACP_VALIDATION_NEURON_BUDGET") !== "plain_text" || byName.get("ACP_VALIDATION_EXPERIMENT_ID") !== "plain_text") {
+            throw new Error("prior validation vars have unexpected binding types");
+          }
+          writeFileSync("/tmp/r28-prior-binding-summary.json", JSON.stringify({ event: "PRIOR_VERSION_BINDINGS", versionId: version.id, tag: version.annotations?.["workers/tag"] ?? null, bindings: summary }));
+          NODE
+
+      - name: Prepare fresh validation admission configuration
+        shell: bash
+        env:
+          ACP_VALIDATION_RUN_TOKEN: ${{ secrets.ACP_VALIDATION_RUN_TOKEN }}
+          ACP_VALIDATION_NEURON_BUDGET: ${{ vars.ACP_VALIDATION_NEURON_BUDGET }}
+        run: |
+          set -euo pipefail
+          test -n "${ACP_VALIDATION_RUN_TOKEN//[[:space:]]/}"
+          test -n "${ACP_VALIDATION_NEURON_BUDGET//[[:space:]]/}"
+          R28_VALIDATION_EXPERIMENT_ID="r28-admission-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          R28_VALIDATION_SECRETS_FILE="$(mktemp /tmp/r28-validation-secrets.XXXXXX.json)"
+          trap 'rm -f "$R28_VALIDATION_SECRETS_FILE"' EXIT INT TERM
+          echo "R28_VALIDATION_EXPERIMENT_ID=$R28_VALIDATION_EXPERIMENT_ID" >> "$GITHUB_ENV"
+          echo "R28_VALIDATION_SECRETS_FILE=$R28_VALIDATION_SECRETS_FILE" >> "$GITHUB_ENV"
+          R28_VALIDATION_EXPERIMENT_ID="$R28_VALIDATION_EXPERIMENT_ID" R28_VALIDATION_SECRETS_FILE="$R28_VALIDATION_SECRETS_FILE" ACP_VALIDATION_NEURON_BUDGET="$ACP_VALIDATION_NEURON_BUDGET" node --input-type=module <<'NODE'
+          import { chmodSync, writeFileSync } from "node:fs";
+          import { parseValidationConfiguration } from "./dist/validation-admission.js";
+          const configuration = parseValidationConfiguration({
+            ACP_VALIDATION_NEURON_BUDGET: process.env.ACP_VALIDATION_NEURON_BUDGET,
+            ACP_VALIDATION_EXPERIMENT_ID: process.env.R28_VALIDATION_EXPERIMENT_ID,
+            ACP_VALIDATION_RUN_TOKEN: process.env.ACP_VALIDATION_RUN_TOKEN,
+          });
+          if (configuration.status !== "valid") throw new Error("invalid validation admission configuration");
+          const approvedBudget = { maxNeuronsPerRun: 7000, configuredAvailableBudget: 7000, configuredReserve: 0, conservativeExpectedCost: 180 };
+          const suppliedBudget = JSON.parse(process.env.ACP_VALIDATION_NEURON_BUDGET);
+          if (Object.keys(suppliedBudget).length !== 4 || Object.entries(approvedBudget).some(([key, value]) => suppliedBudget[key] !== value)) throw new Error("budget differs from authorized validation budget");
+          writeFileSync(process.env.R28_VALIDATION_SECRETS_FILE, JSON.stringify({ ACP_VALIDATION_RUN_TOKEN: process.env.ACP_VALIDATION_RUN_TOKEN }));
+          chmodSync(process.env.R28_VALIDATION_SECRETS_FILE, 0o600);
+          NODE
+          trap - EXIT INT TERM
+
+      - name: Deploy fresh exact candidate for admission proof only
+        shell: bash
+        env:
+          ACP_VALIDATION_NEURON_BUDGET: ${{ vars.ACP_VALIDATION_NEURON_BUDGET }}
+        run: |
+          set -euo pipefail
+          test -n "${R28_VALIDATION_EXPERIMENT_ID:-}"
+          test -r "${R28_VALIDATION_SECRETS_FILE:-}"
+          ./node_modules/.bin/wrangler deploy --dry-run \
+            --var "ACP_MODEL_ID:$EXPECTED_MODEL" \
+            --var "ACP_VALIDATION_SESSION_AFFINITY:false" \
+            --var "ACP_VALIDATION_NEURON_BUDGET:$ACP_VALIDATION_NEURON_BUDGET" \
+            --var "ACP_VALIDATION_EXPERIMENT_ID:$R28_VALIDATION_EXPERIMENT_ID" \
+            --secrets-file "$R28_VALIDATION_SECRETS_FILE"
+          echo "R28_VALIDATION_DEPLOY_ATTEMPTED=true" >> "$GITHUB_ENV"
+          ./node_modules/.bin/wrangler deploy --tag "$GITHUB_SHA" --message "R2.8.4 admission proof $GITHUB_SHA" \
+            --var "ACP_MODEL_ID:$EXPECTED_MODEL" \
+            --var "ACP_VALIDATION_SESSION_AFFINITY:false" \
+            --var "ACP_VALIDATION_NEURON_BUDGET:$ACP_VALIDATION_NEURON_BUDGET" \
+            --var "ACP_VALIDATION_EXPERIMENT_ID:$R28_VALIDATION_EXPERIMENT_ID" \
+            --secrets-file "$R28_VALIDATION_SECRETS_FILE" | tee /tmp/r28-admission-deploy.log
+          version_id="$(node -e 'const fs=require("fs");const text=fs.readFileSync("/tmp/r28-admission-deploy.log","utf8");const m=[...text.matchAll(/Current Version ID:\s*([0-9a-f-]{36})/gi)].at(-1)?.[1];if(!m)process.exit(2);process.stdout.write(m)')"
+          test -n "$version_id"
+          echo "R28_VERSION_ID=$version_id" >> "$GITHUB_ENV"
+
+      - name: Verify fresh exact version metadata and active deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$WORKER_NAME/deployments" \
+            > /tmp/r28-admission-deployments.json
+          R28_VERSION_ID="$R28_VERSION_ID" node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from "node:fs";
+          const payload = JSON.parse(readFileSync("/tmp/r28-admission-deployments.json", "utf8"));
+          const deployment = payload?.result?.deployments?.[0];
+          if (!payload.success || !deployment || !Array.isArray(deployment.versions) || deployment.versions.length !== 1 || deployment.versions[0].version_id !== process.env.R28_VERSION_ID || deployment.versions[0].percentage !== 100) throw new Error("fresh validation version is not exact 100% active deployment");
+          writeFileSync("/tmp/r28-admission-active-summary.json", JSON.stringify({ event: "EXACT_ACTIVE_VALIDATION_VERSION", versionId: process.env.R28_VERSION_ID, percentage: 100 }));
+          NODE
+          curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$WORKER_NAME/versions/$R28_VERSION_ID" \
+            > /tmp/r28-admission-version.json
+          VERSION_ID="$R28_VERSION_ID" CANDIDATE_SHA="$GITHUB_SHA" node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from "node:fs";
+          const payload = JSON.parse(readFileSync("/tmp/r28-admission-version.json", "utf8"));
+          const version = payload.result ?? payload;
+          if (payload.success === false || version?.id !== process.env.VERSION_ID) throw new Error("fresh immutable version metadata mismatch");
+          if (version.annotations?.["workers/tag"] !== process.env.CANDIDATE_SHA) throw new Error("fresh version tag does not match candidate SHA");
+          const bindings = version?.resources?.bindings;
+          if (!Array.isArray(bindings)) throw new Error("fresh immutable version binding metadata unavailable");
+          const summary = bindings.map(({ name, type }) => ({ name, type })).sort((a, b) => a.name.localeCompare(b.name));
+          const byName = new Map(summary.map((binding) => [binding.name, binding.type]));
+          for (const name of ["ACP_MODEL_ID", "ACP_VALIDATION_SESSION_AFFINITY", "ACP_VALIDATION_NEURON_BUDGET", "ACP_VALIDATION_EXPERIMENT_ID", "ACP_VALIDATION_RUN_TOKEN"]) {
+            if (!byName.has(name)) throw new Error(`fresh version missing binding name: ${name}`);
+          }
+          if (byName.get("ACP_VALIDATION_RUN_TOKEN") !== "secret_text") throw new Error("fresh validation token is not secret_text");
+          if (["ACP_MODEL_ID", "ACP_VALIDATION_SESSION_AFFINITY", "ACP_VALIDATION_NEURON_BUDGET", "ACP_VALIDATION_EXPERIMENT_ID"].some((name) => byName.get(name) !== "plain_text")) throw new Error("fresh validation plain-text binding type mismatch");
+          writeFileSync("/tmp/r28-admission-binding-summary.json", JSON.stringify({ event: "FRESH_VERSION_BINDINGS", versionId: version.id, candidateSha: process.env.CANDIDATE_SHA, tag: version.annotations?.["workers/tag"], bindings: summary }));
+          NODE
+
+      - name: Prove exact-version unauthenticated 403 admission and zero activity
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain")"
+          subdomain="$(printf '%s' "$payload" | node -e 'const fs=require("fs");const p=JSON.parse(fs.readFileSync(0,"utf8"));if(!p?.success||!p?.result?.subdomain)process.exit(2);process.stdout.write(p.result.subdomain)')"
+          AI_COMMERCE_STAGING_URL="https://$WORKER_NAME.$subdomain.workers.dev"
+          echo "AI_COMMERCE_STAGING_URL=$AI_COMMERCE_STAGING_URL" >> "$GITHUB_ENV"
+          : > /tmp/r28-admission-tail.log
+          timeout 75s script -qefc "./node_modules/.bin/wrangler tail '$WORKER_NAME' --version-id '$R28_VERSION_ID' --format=json --method POST" /tmp/r28-admission-tail.log > /dev/null 2>&1 &
+          TAIL_PID=$!
+          cleanup_tail() { kill -INT "$TAIL_PID" 2>/dev/null || true; wait "$TAIL_PID" 2>/dev/null || true; }
+          trap cleanup_tail EXIT INT TERM
+          sleep 4
+          if ! kill -0 "$TAIL_PID" 2>/dev/null; then echo "exact-version tail exited before unauthenticated checks" >&2; exit 1; fi
+          root_status="$(curl -sS --max-time 10 -o /tmp/r28-admission-root-body.txt -w '%{http_code}' "$AI_COMMERCE_STAGING_URL/" || true)"
+          if [[ "$root_status" != "403" ]]; then echo "validation root returned HTTP ${root_status:-curl-error}; expected exactly 403" >&2; exit 1; fi
+          probe_path="/__r28-admission-probe?run=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          probe_status="$(curl -sS --max-time 10 -X POST -o /tmp/r28-admission-probe-body.txt -w '%{http_code}' "$AI_COMMERCE_STAGING_URL$probe_path" || true)"
+          if [[ "$probe_status" != "403" ]]; then echo "validation probe returned HTTP ${probe_status:-curl-error}; expected exactly 403" >&2; exit 1; fi
+          captured=false
+          for poll in $(seq 1 15); do
+            if grep -Fq "$probe_path" /tmp/r28-admission-tail.log; then captured=true; break; fi
+            sleep 2
+          done
+          if [[ "$captured" != "true" ]]; then echo "exact-version tail did not capture the unauthenticated probe" >&2; exit 1; fi
+          cleanup_tail
+          trap - EXIT INT TERM
+          node scripts/redact-validation-tail.mjs /tmp/r28-admission-tail.log
+          R28_PROBE_PATH="$probe_path" R28_VERSION_ID="$R28_VERSION_ID" node scripts/r2.8-validation-preflight.mjs /tmp/r28-admission-tail.log > /tmp/r28-admission-probe-proof.json
+          R28_ROOT_STATUS="$root_status" R28_VERSION_ID="$R28_VERSION_ID" node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from "node:fs";
+          import { completeTailEvents } from "./scripts/r2.8-validation-turn-proof.mjs";
+          const events = completeTailEvents(readFileSync("/tmp/r28-admission-tail.log", "utf8")).filter((event) => {
+            try { const url = new URL(event.event?.request?.url); return url.pathname === "/" && event.event?.request?.method === "GET"; } catch { return false; }
+          });
+          if (events.length !== 1) throw new Error("UNKNOWN: expected one exact-version root event");
+          const event = events[0];
+          if (event.truncated !== false || event.outcome !== "ok" || event.scriptVersion?.id !== process.env.R28_VERSION_ID || event.event?.response?.status !== 403 || !Array.isArray(event.logs) || event.logs.length || !Array.isArray(event.exceptions) || event.exceptions.length) throw new Error("root admission event did not prove exact-version zero activity");
+          if (process.env.R28_ROOT_STATUS !== "403") throw new Error("root HTTP result was not 403");
+          writeFileSync("/tmp/r28-admission-root-proof.json", JSON.stringify({ event: "ROOT_ADMISSION_PROOF", versionId: process.env.R28_VERSION_ID, status: 403, modelInferences: 0, providerActivity: 0, hmsActivity: 0, approvalActivity: 0 }));
+          NODE
+          echo "R28_ROOT_STATUS=403" >> "$GITHUB_ENV"
+          echo "R28_PROBE_STATUS=403" >> "$GITHUB_ENV"
+
+      - name: Execute dedicated historical observability query
+        env:
+          CLOUDFLARE_OBSERVABILITY_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVABILITY_API_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${CLOUDFLARE_OBSERVABILITY_API_TOKEN//[[:space:]]/}"
+          from_ms="$(( $(date +%s%3N) - 120000 ))"
+          to_ms="$(date +%s%3N)"
+          node scripts/query-workers-observability.mjs "$from_ms" "$to_ms" > /tmp/r28-admission-historical.json
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from "node:fs";
+          const payload = JSON.parse(readFileSync("/tmp/r28-admission-historical.json", "utf8"));
+          if (payload?.success !== true) throw new Error("historical query did not return success=true");
+          const result = payload.result;
+          writeFileSync("/tmp/r28-admission-observability-summary.json", JSON.stringify({ event: "OBSERVABILITY_HISTORICAL_QUERY_HTTP_2XX", success: true, resultType: Array.isArray(result) ? "array" : typeof result, resultCount: Array.isArray(result) ? result.length : undefined, resultKeys: result && typeof result === "object" && !Array.isArray(result) ? Object.keys(result).sort() : undefined }));
+          NODE
+
+      - name: Reconcile zero inference and zero side-effect evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          MODEL_TELEMETRY="$(node scripts/count-model-telemetry.mjs /tmp/r28-admission-tail.log)"
+          AUDIT_TELEMETRY="$(node scripts/count-audit-events.mjs /tmp/r28-admission-tail.log)"
+          MODEL_TELEMETRY="$MODEL_TELEMETRY" AUDIT_TELEMETRY="$AUDIT_TELEMETRY" node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from "node:fs";
+          const model = JSON.parse(process.env.MODEL_TELEMETRY);
+          const audit = JSON.parse(process.env.AUDIT_TELEMETRY);
+          const tail = readFileSync("/tmp/r28-admission-tail.log", "utf8");
+          if (model.modelInferences !== 0 || model.modelFallbacks !== 0 || audit.auditEvents !== 0) throw new Error("non-zero model or audit telemetry in zero-inference proof");
+          if (/agent_core_experiment_budget|model_inference|model_fallback|audit_event|provider|reserve|settle|release|hms\.|approval/i.test(tail)) throw new Error("forbidden provider/budget/HMS/approval evidence in zero-inference tail");
+          writeFileSync("/tmp/r28-admission-zero-activity-summary.json", JSON.stringify({ event: "ZERO_INFERENCE_RECONCILIATION", modelInferences: 0, modelFallbacks: 0, auditEvents: 0, providerReserveSettlement: 0, hmsActivity: 0, approvalActivity: 0 }));
+          NODE
+
+      - name: Remove validation-only deployment configuration
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${R28_VALIDATION_DEPLOY_ATTEMPTED:-}" != "true" ]]; then
+            echo "No validation deployment attempted; cleanup not required."
+            exit 0
+          fi
+          ./node_modules/.bin/wrangler deploy --message "R2.8.4 admission proof cleanup $GITHUB_SHA" | tee /tmp/r28-admission-cleanup.log
+          printf 'y\n' | ./node_modules/.bin/wrangler secret delete ACP_VALIDATION_RUN_TOKEN --name "$WORKER_NAME"
+          cleanup_version="$(node -e 'const fs=require("fs");const text=fs.readFileSync("/tmp/r28-admission-cleanup.log","utf8");const m=[...text.matchAll(/Current Version ID:\s*([0-9a-f-]{36})/gi)].at(-1)?.[1];if(!m)process.exit(2);process.stdout.write(m)')"
+          echo "R28_CLEANUP_VERSION_ID=$cleanup_version" >> "$GITHUB_ENV"
+          curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$WORKER_NAME/versions/$cleanup_version" > /tmp/r28-admission-cleanup-version.json
+          ./node_modules/.bin/wrangler secret list --name "$WORKER_NAME" --format json > /tmp/r28-admission-cleanup-secrets.json
+          CLEANUP_VERSION="$cleanup_version" node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from "node:fs";
+          const payload = JSON.parse(readFileSync("/tmp/r28-admission-cleanup-version.json", "utf8"));
+          const version = payload.result ?? payload;
+          if (payload.success === false || version?.id !== process.env.CLEANUP_VERSION) throw new Error("cleanup version metadata mismatch");
+          const bindings = Array.isArray(version?.resources?.bindings) ? version.resources.bindings : [];
+          const names = bindings.map(({ name }) => name).sort();
+          if (names.some((name) => /^ACP_VALIDATION_/.test(name))) throw new Error("validation vars remain after cleanup");
+          const secrets = JSON.parse(readFileSync("/tmp/r28-admission-cleanup-secrets.json", "utf8"));
+          const secretNames = (secrets.result ?? secrets).map((entry) => entry.name).filter(Boolean);
+          if (secretNames.includes("ACP_VALIDATION_RUN_TOKEN")) throw new Error("validation secret remains after cleanup");
+          writeFileSync("/tmp/r28-admission-cleanup-summary.json", JSON.stringify({ event: "VALIDATION_CLEANUP_PASS", versionId: version.id, validationBindingsRemaining: [], validationSecretRemaining: false }));
+          NODE
+
+      - name: Remove sensitive temporary files
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f /tmp/r28-prior-version.json /tmp/r28-admission-version.json /tmp/r28-admission-deployments.json /tmp/r28-admission-cleanup-version.json /tmp/r28-admission-cleanup-secrets.json /tmp/r28-admission-historical.json "${R28_VALIDATION_SECRETS_FILE:-}"
+
+      - name: Preserve sanitized zero-inference evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r2.8-validation-admission-${{ github.run_id }}
+          path: |
+            /tmp/r28-prior-binding-summary.json
+            /tmp/r28-admission-active-summary.json
+            /tmp/r28-admission-binding-summary.json
+            /tmp/r28-admission-root-proof.json
+            /tmp/r28-admission-probe-proof.json
+            /tmp/r28-admission-observability-summary.json
+            /tmp/r28-admission-zero-activity-summary.json
+            /tmp/r28-admission-cleanup-summary.json
+            /tmp/r28-admission-tail.log
+          if-no-files-found: warn
+          retention-days: 14
+
   dialogue:
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode != 'historical-observability-only'
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'full'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:

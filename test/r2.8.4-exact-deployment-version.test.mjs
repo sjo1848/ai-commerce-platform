@@ -48,6 +48,21 @@ test("validation deployment readiness rejects 2xx and 404 instead of treating th
   assert.doesNotMatch(readiness, /\$status" == 2\*/);
 });
 
+test("validation-admission-only mode is provider-free and correlates bindings, version, and 403 proofs", () => {
+  const validation = workflow.slice(workflow.indexOf("  validation-admission:"), workflow.indexOf("  dialogue:"));
+  assert.match(validation, /mode == 'validation-admission-only'/);
+  assert.match(validation, /workers\/scripts\/\$WORKER_NAME\/versions\/\$R28_PRIOR_VERSION/);
+  assert.match(validation, /workers\/scripts\/\$WORKER_NAME\/versions\/\$R28_VERSION_ID/);
+  assert.match(validation, /workers\/scripts\/\$WORKER_NAME\/deployments/);
+  assert.match(validation, /R28_VERSION_ID=.*GITHUB_SHA|tag.*GITHUB_SHA/);
+  assert.match(validation, /validation root returned HTTP/);
+  assert.match(validation, /validation probe returned HTTP/);
+  assert.match(validation, /R28_PROBE_PATH=.*r2\.8-validation-preflight/);
+  assert.match(validation, /query-workers-observability\.mjs/);
+  assert.match(validation, /modelInferences !== 0/);
+  assert.doesNotMatch(validation, /r2\.8-multi-room-dialogue\.mjs|r2\.8\.4-llm-language-corpus\.mjs|api\/chat|api\/approve/);
+});
+
 test("mandatory validation runners statically install validation headers through the shared helper", () => {
   for (const source of [dialogue, corpus]) {
     assert.match(source, /import \{ validationRequestHeaders \} from "\.\/validation-request-headers\.mjs"/);
@@ -72,13 +87,14 @@ test("validation admission deploy configuration is valid, run-isolated, and secr
   assert.match(workflow, /chmodSync\(process\.env\.R28_VALIDATION_SECRETS_FILE, 0o600\)/);
   assert.match(workflow, /--var "ACP_VALIDATION_NEURON_BUDGET:\$ACP_VALIDATION_NEURON_BUDGET"/);
   assert.match(workflow, /--var "ACP_VALIDATION_EXPERIMENT_ID:\$R28_VALIDATION_EXPERIMENT_ID"/);
-  assert.equal((workflow.match(/--var "ACP_VALIDATION_NEURON_BUDGET:\$ACP_VALIDATION_NEURON_BUDGET"/g) ?? []).length, 2);
-  assert.equal((workflow.match(/--var "ACP_VALIDATION_EXPERIMENT_ID:\$R28_VALIDATION_EXPERIMENT_ID"/g) ?? []).length, 2);
+  assert.equal((workflow.match(/--var "ACP_VALIDATION_NEURON_BUDGET:\$ACP_VALIDATION_NEURON_BUDGET"/g) ?? []).length, 4);
+  assert.equal((workflow.match(/--var "ACP_VALIDATION_EXPERIMENT_ID:\$R28_VALIDATION_EXPERIMENT_ID"/g) ?? []).length, 4);
   assert.doesNotMatch(workflow, /--var "(?:ACP_VALIDATION_NEURON_BUDGET|ACP_VALIDATION_EXPERIMENT_ID)=/);
   const validationDeploy = workflow.indexOf('./node_modules/.bin/wrangler deploy --tag "$GITHUB_SHA"');
-  const cleanup = workflow.indexOf("- name: Remove remotely deployed validation configuration");
-  const cleanupDeploy = workflow.indexOf('./node_modules/.bin/wrangler deploy --message "R2.8.4 validation cleanup $GITHUB_SHA"');
-  const cleanupSecretDelete = workflow.indexOf('printf \'y\\n\' | ./node_modules/.bin/wrangler secret delete ACP_VALIDATION_RUN_TOKEN --name "$WORKER_NAME"');
+  const dialogueStart = workflow.indexOf("  dialogue:");
+  const cleanup = workflow.indexOf("- name: Remove remotely deployed validation configuration", dialogueStart);
+  const cleanupDeploy = workflow.indexOf('./node_modules/.bin/wrangler deploy --message "R2.8.4 validation cleanup $GITHUB_SHA"', dialogueStart);
+  const cleanupSecretDelete = workflow.indexOf('printf \'y\\n\' | ./node_modules/.bin/wrangler secret delete ACP_VALIDATION_RUN_TOKEN --name "$WORKER_NAME"', dialogueStart);
   assert.match(workflow, /echo "R28_VALIDATION_DEPLOY_ATTEMPTED=true" >> "\$GITHUB_ENV"/);
   assert.equal(workflow.indexOf('echo "R28_VALIDATION_DEPLOY_ATTEMPTED=true" >> "$GITHUB_ENV"') < validationDeploy, true, "cleanup flag must precede the real validation deploy");
   assert.match(workflow.slice(cleanup, cleanupDeploy), /if \[\[ "\$\{R28_VALIDATION_DEPLOY_ATTEMPTED:-\}" != "true" \]\]/);
