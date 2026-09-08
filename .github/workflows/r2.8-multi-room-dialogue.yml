@@ -221,7 +221,7 @@ jobs:
           AI_COMMERCE_STAGING_URL="https://$WORKER_NAME.$subdomain.workers.dev"
           echo "AI_COMMERCE_STAGING_URL=$AI_COMMERCE_STAGING_URL" >> "$GITHUB_ENV"
           : > /tmp/r28-admission-tail.log
-          timeout 75s script -qefc "./node_modules/.bin/wrangler tail '$WORKER_NAME' --version-id '$R28_VERSION_ID' --format=json --method POST" /tmp/r28-admission-tail.log > /dev/null 2>&1 &
+          timeout 75s script -qefc "./node_modules/.bin/wrangler tail '$WORKER_NAME' --version-id '$R28_VERSION_ID' --format=json" /tmp/r28-admission-tail.log > /dev/null 2>&1 &
           TAIL_PID=$!
           cleanup_tail() { kill -INT "$TAIL_PID" 2>/dev/null || true; wait "$TAIL_PID" 2>/dev/null || true; }
           trap cleanup_tail EXIT INT TERM
@@ -300,8 +300,8 @@ jobs:
             echo "No validation deployment attempted; cleanup not required."
             exit 0
           fi
-          ./node_modules/.bin/wrangler deploy --message "R2.8.4 admission proof cleanup $GITHUB_SHA" | tee /tmp/r28-admission-cleanup.log
           printf 'y\n' | ./node_modules/.bin/wrangler secret delete ACP_VALIDATION_RUN_TOKEN --name "$WORKER_NAME"
+          ./node_modules/.bin/wrangler deploy --keep-vars=false --message "R2.8.4 admission proof cleanup $GITHUB_SHA" | tee /tmp/r28-admission-cleanup.log
           cleanup_version="$(node -e 'const fs=require("fs");const text=fs.readFileSync("/tmp/r28-admission-cleanup.log","utf8");const m=[...text.matchAll(/Current Version ID:\s*([0-9a-f-]{36})/gi)].at(-1)?.[1];if(!m)process.exit(2);process.stdout.write(m)')"
           echo "R28_CLEANUP_VERSION_ID=$cleanup_version" >> "$GITHUB_ENV"
           curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$WORKER_NAME/versions/$cleanup_version" > /tmp/r28-admission-cleanup-version.json

@@ -58,9 +58,13 @@ test("validation-admission-only mode is provider-free and correlates bindings, v
   assert.match(validation, /validation root returned HTTP/);
   assert.match(validation, /validation probe returned HTTP/);
   assert.match(validation, /R28_PROBE_PATH=.*r2\.8-validation-preflight/);
+  assert.doesNotMatch(validation, /--method POST/);
   assert.match(validation, /query-workers-observability\.mjs/);
   assert.match(validation, /modelInferences !== 0/);
   assert.doesNotMatch(validation, /r2\.8-multi-room-dialogue\.mjs|r2\.8\.4-llm-language-corpus\.mjs|api\/chat|api\/approve/);
+  const cleanupDeploy = validation.indexOf('./node_modules/.bin/wrangler deploy --keep-vars=false --message "R2.8.4 admission proof cleanup $GITHUB_SHA"');
+  const cleanupSecretDelete = validation.indexOf('printf \'y\\n\' | ./node_modules/.bin/wrangler secret delete ACP_VALIDATION_RUN_TOKEN --name "$WORKER_NAME"');
+  assert.equal(cleanupSecretDelete > -1 && cleanupSecretDelete < cleanupDeploy, true, "validation secret must be deleted before cleanup version is created");
 });
 
 test("mandatory validation runners statically install validation headers through the shared helper", () => {
