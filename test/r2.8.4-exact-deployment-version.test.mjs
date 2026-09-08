@@ -24,7 +24,7 @@ test("R2.8.4 staging binds evidence to exact deployed version and shared concurr
   assert.match(workflow, /printf '%s' "\$status" > \/tmp\/r28-r4-probe-status\.txt/);
   assert.match(workflow, /"\$status" != "403"/);
   assert.match(workflow, /intentionally unauthenticated 403 probe/);
-  assert.match(workflow, /if \[\[ "\$status" == "403" \]\]/);
+  assert.match(workflow, /if \[\[ "\$status" != "403" \]\]/);
   assert.doesNotMatch(workflow, /status" == 2\* \|\| "\$status" == "403"/);
   assert.match(workflow, /grep -Fq "\$probe_path" \/tmp\/r28-r4-probe-tail\.log/);
   assert.match(workflow, /tail exited while waiting to capture probe/);
@@ -43,9 +43,12 @@ test("validation deployment readiness rejects 2xx and 404 instead of treating th
     workflow.indexOf("- name: Wait for exact staging deployment"),
     workflow.indexOf("- name: Prove foreground tail and unauthenticated observability probe"),
   );
-  assert.match(readiness, /if \[\[ "\$status" == "403" \]\]/);
+  assert.match(readiness, /if \[\[ "\$status" != "403" \]\]/);
   assert.match(readiness, /expected exactly 403/);
   assert.doesNotMatch(readiness, /\$status" == 2\*/);
+  assert.match(readiness, /query-workers-observability\.mjs/);
+  assert.match(readiness, /r2\.8-runtime-version-diagnostic\.mjs/);
+  assert.match(readiness, /\$status" != "403"/);
 });
 
 test("validation-admission-only mode is provider-free and correlates bindings, version, and 403 proofs", () => {
@@ -56,12 +59,22 @@ test("validation-admission-only mode is provider-free and correlates bindings, v
   assert.match(validation, /workers\/scripts\/\$WORKER_NAME\/deployments/);
   assert.match(validation, /R28_VERSION_ID=.*GITHUB_SHA|tag.*GITHUB_SHA/);
   assert.match(validation, /validation root returned HTTP/);
+  assert.match(validation, /Capture both-method zero-inference runtime identity proof/);
+  assert.match(validation, /seq 1 4/);
+  assert.match(validation, /r2\.8-runtime-version-diagnostic\.mjs/);
   assert.match(validation, /validation probe returned HTTP/);
   assert.match(validation, /R28_PROBE_PATH=.*r2\.8-validation-preflight/);
   assert.doesNotMatch(validation, /--method POST/);
   assert.match(validation, /query-workers-observability\.mjs/);
   assert.match(validation, /modelInferences !== 0/);
   assert.doesNotMatch(validation, /r2\.8-multi-room-dialogue\.mjs|r2\.8\.4-llm-language-corpus\.mjs|api\/chat|api\/approve/);
+  assert.doesNotMatch(validation, /Cloudflare-Workers-Version-Overrides/);
+  const tailStart = validation.indexOf("wrangler tail '$WORKER_NAME' --version-id '$R28_VERSION_ID' --format=json");
+  const getLoop = validation.indexOf("for attempt in $(seq 1 4)");
+  const postProbe = validation.indexOf('probe_path="/__r28-admission-probe?run=');
+  assert.equal(tailStart > -1 && tailStart < getLoop && getLoop < postProbe, true, "one no-method-filter tail must span GET convergence and the unique POST");
+  assert.match(validation.slice(getLoop, postProbe), /query-workers-observability\.mjs/);
+  assert.doesNotMatch(validation.slice(getLoop, postProbe), /-X POST/);
   const cleanupDeploy = validation.indexOf('./node_modules/.bin/wrangler deploy --keep-vars=false --message "R2.8.4 admission proof cleanup $GITHUB_SHA"');
   const cleanupSecretDelete = validation.indexOf('printf \'y\\n\' | ./node_modules/.bin/wrangler secret delete ACP_VALIDATION_RUN_TOKEN --name "$WORKER_NAME"');
   assert.equal(cleanupSecretDelete > -1 && cleanupSecretDelete < cleanupDeploy, true, "validation secret must be deleted before cleanup version is created");

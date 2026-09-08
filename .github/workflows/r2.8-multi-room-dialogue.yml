@@ -212,10 +212,13 @@ jobs:
           writeFileSync("/tmp/r28-admission-binding-summary.json", JSON.stringify({ event: "FRESH_VERSION_BINDINGS", versionId: version.id, candidateSha: process.env.CANDIDATE_SHA, tag: version.annotations?.["workers/tag"], bindings: summary }));
           NODE
 
-      - name: Prove exact-version unauthenticated 403 admission and zero activity
+      - name: Capture both-method zero-inference runtime identity proof
         shell: bash
+        env:
+          CLOUDFLARE_OBSERVABILITY_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVABILITY_API_TOKEN }}
         run: |
           set -euo pipefail
+          test -n "${CLOUDFLARE_OBSERVABILITY_API_TOKEN//[[:space:]]/}"
           payload="$(curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain")"
           subdomain="$(printf '%s' "$payload" | node -e 'const fs=require("fs");const p=JSON.parse(fs.readFileSync(0,"utf8"));if(!p?.success||!p?.result?.subdomain)process.exit(2);process.stdout.write(p.result.subdomain)')"
           AI_COMMERCE_STAGING_URL="https://$WORKER_NAME.$subdomain.workers.dev"
@@ -227,8 +230,30 @@ jobs:
           trap cleanup_tail EXIT INT TERM
           sleep 4
           if ! kill -0 "$TAIL_PID" 2>/dev/null; then echo "exact-version tail exited before unauthenticated checks" >&2; exit 1; fi
-          root_status="$(curl -sS --max-time 10 -o /tmp/r28-admission-root-body.txt -w '%{http_code}' "$AI_COMMERCE_STAGING_URL/" || true)"
-          if [[ "$root_status" != "403" ]]; then echo "validation root returned HTTP ${root_status:-curl-error}; expected exactly 403" >&2; exit 1; fi
+          converged=false
+          for attempt in $(seq 1 4); do
+            from_ms="$(date +%s%3N)"
+            root_status="$(curl -sS --max-time 10 -o /tmp/r28-admission-root-body.txt -w '%{http_code}' "$AI_COMMERCE_STAGING_URL/" || true)"
+            sleep 2
+            node scripts/query-workers-observability.mjs "$from_ms" "$(date +%s%3N)" > "/tmp/r28-admission-historical-$attempt.json"
+            if [[ "$root_status" != "403" ]]; then
+              echo "validation root returned HTTP ${root_status:-curl-error}; expected exactly 403" >&2
+              exit 1
+            fi
+            if R28_VERSION_ID="$R28_VERSION_ID" node scripts/r2.8-runtime-version-diagnostic.mjs "/tmp/r28-admission-historical-$attempt.json" > /tmp/r28-admission-runtime-identity-proof.json 2> /tmp/r28-admission-runtime-identity-error.txt; then
+              converged=true
+              break
+            fi
+            if grep -Fq "MISMATCH:" /tmp/r28-admission-runtime-identity-error.txt; then
+              echo "runtime Worker Version ID mismatched the exact active target" >&2
+              exit 1
+            fi
+            sleep 2
+          done
+          if [[ "$converged" != "true" ]]; then
+            echo "UNKNOWN: exact runtime version diagnostic did not converge within four zero-inference GET attempts" >&2
+            exit 1
+          fi
           probe_path="/__r28-admission-probe?run=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           probe_status="$(curl -sS --max-time 10 -X POST -o /tmp/r28-admission-probe-body.txt -w '%{http_code}' "$AI_COMMERCE_STAGING_URL$probe_path" || true)"
           if [[ "$probe_status" != "403" ]]; then echo "validation probe returned HTTP ${probe_status:-curl-error}; expected exactly 403" >&2; exit 1; fi
@@ -242,19 +267,6 @@ jobs:
           trap - EXIT INT TERM
           node scripts/redact-validation-tail.mjs /tmp/r28-admission-tail.log
           R28_PROBE_PATH="$probe_path" R28_VERSION_ID="$R28_VERSION_ID" node scripts/r2.8-validation-preflight.mjs /tmp/r28-admission-tail.log > /tmp/r28-admission-probe-proof.json
-          R28_ROOT_STATUS="$root_status" R28_VERSION_ID="$R28_VERSION_ID" node --input-type=module <<'NODE'
-          import { readFileSync, writeFileSync } from "node:fs";
-          import { completeTailEvents } from "./scripts/r2.8-validation-turn-proof.mjs";
-          const events = completeTailEvents(readFileSync("/tmp/r28-admission-tail.log", "utf8")).filter((event) => {
-            try { const url = new URL(event.event?.request?.url); return url.pathname === "/" && event.event?.request?.method === "GET"; } catch { return false; }
-          });
-          if (events.length !== 1) throw new Error("UNKNOWN: expected one exact-version root event");
-          const event = events[0];
-          if (event.truncated !== false || event.outcome !== "ok" || event.scriptVersion?.id !== process.env.R28_VERSION_ID || event.event?.response?.status !== 403 || !Array.isArray(event.logs) || event.logs.length || !Array.isArray(event.exceptions) || event.exceptions.length) throw new Error("root admission event did not prove exact-version zero activity");
-          if (process.env.R28_ROOT_STATUS !== "403") throw new Error("root HTTP result was not 403");
-          writeFileSync("/tmp/r28-admission-root-proof.json", JSON.stringify({ event: "ROOT_ADMISSION_PROOF", versionId: process.env.R28_VERSION_ID, status: 403, modelInferences: 0, providerActivity: 0, hmsActivity: 0, approvalActivity: 0 }));
-          NODE
-          echo "R28_ROOT_STATUS=403" >> "$GITHUB_ENV"
           echo "R28_PROBE_STATUS=403" >> "$GITHUB_ENV"
 
       - name: Execute dedicated historical observability query
@@ -325,6 +337,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          shopt -s nullglob
+          historical=(/tmp/r28-admission-historical-*.json)
+          if [[ "${#historical[@]}" -gt 0 ]]; then node scripts/r2.8-redact-historical.mjs "${historical[@]}"; fi
           rm -f /tmp/r28-prior-version.json /tmp/r28-admission-version.json /tmp/r28-admission-deployments.json /tmp/r28-admission-cleanup-version.json /tmp/r28-admission-cleanup-secrets.json /tmp/r28-admission-historical.json "${R28_VALIDATION_SECRETS_FILE:-}"
 
       - name: Preserve sanitized zero-inference evidence
@@ -339,6 +354,8 @@ jobs:
             /tmp/r28-admission-root-proof.json
             /tmp/r28-admission-probe-proof.json
             /tmp/r28-admission-observability-summary.json
+            /tmp/r28-admission-runtime-identity-proof.json
+            /tmp/r28-admission-historical-*.json
             /tmp/r28-admission-zero-activity-summary.json
             /tmp/r28-admission-cleanup-summary.json
             /tmp/r28-admission-tail.log
@@ -472,19 +489,31 @@ jobs:
 
       - name: Wait for exact staging deployment
         shell: bash
+        env:
+          CLOUDFLARE_OBSERVABILITY_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVABILITY_API_TOKEN }}
         run: |
           set -euo pipefail
-          for attempt in $(seq 1 12); do
+          test -n "${CLOUDFLARE_OBSERVABILITY_API_TOKEN//[[:space:]]/}"
+          for attempt in $(seq 1 4); do
+            from_ms="$(date +%s%3N)"
             status="$(curl -sS --max-time 10 -o /tmp/r28-r4-root.html -w '%{http_code}' "$AI_COMMERCE_STAGING_URL/" || true)"
-            if [[ "$status" == "403" ]]; then
-              echo "Validation admission readiness observed on attempt $attempt (HTTP 403)."
+            sleep 2
+            node scripts/query-workers-observability.mjs "$from_ms" "$(date +%s%3N)" > "/tmp/r28-r4-readiness-historical-$attempt.json"
+            if [[ "$status" != "403" ]]; then
+              echo "Validation admission readiness returned HTTP ${status:-curl-error}; expected exactly 403." >&2
+              exit 1
+            fi
+            if R28_VERSION_ID="$R28_VERSION_ID" node scripts/r2.8-runtime-version-diagnostic.mjs "/tmp/r28-r4-readiness-historical-$attempt.json" > /tmp/r28-r4-runtime-identity-proof.json 2> /tmp/r28-r4-runtime-identity-error.txt; then
+              echo "Validation runtime identity converged on attempt $attempt (HTTP 403)."
               exit 0
             fi
-            echo "Validation admission readiness returned HTTP ${status:-curl-error}; expected exactly 403."
+            if grep -Fq "MISMATCH:" /tmp/r28-r4-runtime-identity-error.txt; then
+              echo "runtime Worker Version ID mismatched the exact active target" >&2
+              exit 1
+            fi
             sleep 2
           done
-          echo "Validation deployment never returned the required unauthenticated HTTP 403." >&2
-          cat /tmp/r28-r4-root.html >&2 || true
+          echo "UNKNOWN: validation deployment never produced the required exact-version runtime diagnostic with HTTP 403." >&2
           exit 1
 
       - name: Prove foreground tail and unauthenticated observability probe
@@ -750,7 +779,9 @@ jobs:
         run: |
           set -euo pipefail
           node scripts/redact-validation-tail.mjs /tmp/r28-r4-probe-tail.log /tmp/r28-r4-tail.log
-          node scripts/r2.8-redact-historical.mjs /tmp/r28-r4-historical-preflight.json /tmp/r28-r4-historical.json
+          shopt -s nullglob
+          historical=(/tmp/r28-r4-historical-preflight.json /tmp/r28-r4-historical.json /tmp/r28-r4-readiness-historical-*.json)
+          node scripts/r2.8-redact-historical.mjs "${historical[@]}"
 
       - name: Preserve R2.8.4 evidence
         if: ${{ always() && steps.sanitize_validation_tail_logs.outcome == 'success' }}
@@ -765,6 +796,8 @@ jobs:
             /tmp/r28-r4-preflight-proof.json
             /tmp/r28-r4-historical-preflight.json
             /tmp/r28-r4-historical.json
+            /tmp/r28-r4-readiness-historical-*.json
+            /tmp/r28-r4-runtime-identity-proof.json
             /tmp/r28-r4-tail.log
             /tmp/r28-r4-report.json
             /tmp/r28-r4-model-telemetry.json

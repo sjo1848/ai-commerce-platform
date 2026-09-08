@@ -17,6 +17,7 @@ import { LLMGroundedResponder } from "./core/model-responder.js";
 import { DurableExperimentBudgetProvider, validationExperimentBudget, type ExperimentBudgetTelemetry } from "./core/neuron-budget.js";
 import { AgentCoreRuntime } from "./core/runtime.js";
 import { ConsoleUsageSink } from "./core/usage.js";
+import { runtimeValidationDiagnostic } from "./runtime-validation-diagnostic.js";
 import { admitValidationRequest, parseValidationConfiguration, type ValidationConfiguration } from "./validation-admission.js";
 import { createWebchatHandler } from "./webchat/handler.js";
 
@@ -36,6 +37,8 @@ type Env = {
   ACP_VALIDATION_RUN_TOKEN?: string;
   /** Opt-in Gateway affinity for validation only; absent/false preserves production behavior. */
   ACP_VALIDATION_SESSION_AFFINITY?: string;
+  /** Immutable metadata supplied by Wrangler's official version_metadata binding. */
+  CF_VERSION_METADATA?: { id?: unknown };
 };
 
 const tenant = {
@@ -83,6 +86,21 @@ function recordExperimentBudgetTelemetry(telemetry: ExperimentBudgetTelemetry): 
   console.log(JSON.stringify({ event: "agent_core_experiment_budget", ...telemetry }));
 }
 
+function recordValidationRuntimeDiagnostic(request: Request, env: Env, status: ValidationConfiguration["status"]): void {
+  // This event is emitted before admission and construction, including when
+  // bindings are absent (disabled), and contains presence only: never
+  // configuration values, credentials, headers, or request query data.
+  const diagnostic = runtimeValidationDiagnostic({
+    request,
+    runtimeWorkerVersionId: env.CF_VERSION_METADATA?.id,
+    validationNeuronBudgetPresent: env.ACP_VALIDATION_NEURON_BUDGET !== undefined,
+    validationExperimentIdPresent: env.ACP_VALIDATION_EXPERIMENT_ID !== undefined,
+    validationRunTokenPresent: env.ACP_VALIDATION_RUN_TOKEN !== undefined,
+    validationStatus: status,
+  });
+  console.log(JSON.stringify(diagnostic));
+}
+
 function handler(env: Env, validationConfiguration: ValidationConfiguration): (request: Request) => Promise<Response> {
   if (handle) return handle;
   const reservationOperations = new DurableObjectReservationOperationStore(env.SESSIONS);
@@ -125,6 +143,7 @@ function handler(env: Env, validationConfiguration: ValidationConfiguration): (r
 export default {
   fetch(request: Request, env: Env): Promise<Response> {
     const validationConfiguration = parseValidationConfiguration(env);
+    recordValidationRuntimeDiagnostic(request, env, validationConfiguration.status);
     return admitValidationRequest(request, validationConfiguration, (admittedRequest) => handler(env, validationConfiguration)(admittedRequest));
   },
 };
