@@ -151,18 +151,10 @@ jobs:
           cat /tmp/r28-r4-root.html >&2 || true
           exit 1
 
-      - name: Real-model natural multi-room dialogue
+      - name: Prove foreground tail and unauthenticated observability probe
         shell: bash
-        env:
-          ACP_VALIDATION_RUN_TOKEN: ${{ secrets.ACP_VALIDATION_RUN_TOKEN }}
         run: |
           set -euo pipefail
-          # Keep the random secret out of all shell children except the two
-          # validation runners below. It is never sent to the readiness/probe
-          # curl, Wrangler tail, telemetry, or artifact processes.
-          validation_runner_token="$ACP_VALIDATION_RUN_TOKEN"
-          unset ACP_VALIDATION_RUN_TOKEN
-
           # Phase A: attach tail first, then prove that the live stream receives an event.
           # `script` may emit "<not executed on terminal>"; that is only PTY metadata.
           probe_path=""
@@ -225,8 +217,29 @@ jobs:
           # Read-only stored-log access check. Denial stops before any inference.
           R28_EVIDENCE_FROM_MS="$(date +%s%3N)"
           echo "R28_EVIDENCE_FROM_MS=$R28_EVIDENCE_FROM_MS" >> "$GITHUB_ENV"
-          node scripts/query-workers-observability.mjs "$((R28_EVIDENCE_FROM_MS - 120000))" "$R28_EVIDENCE_FROM_MS" > /tmp/r28-r4-historical-preflight.json
           echo "Foreground live-tail transport proved before any model inference."
+
+      - name: Historical observability preflight query
+        shell: bash
+        env:
+          CLOUDFLARE_OBSERVABILITY_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVABILITY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "${R28_EVIDENCE_FROM_MS:-}"
+          test -n "${CLOUDFLARE_OBSERVABILITY_API_TOKEN//[[:space:]]/}"
+          node scripts/query-workers-observability.mjs "$((R28_EVIDENCE_FROM_MS - 120000))" "$R28_EVIDENCE_FROM_MS" > /tmp/r28-r4-historical-preflight.json
+
+      - name: Real-model natural multi-room dialogue
+        shell: bash
+        env:
+          ACP_VALIDATION_RUN_TOKEN: ${{ secrets.ACP_VALIDATION_RUN_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Keep the random secret out of all shell children except the two
+          # validation runners below. It is never sent to the readiness/probe
+          # curl, Wrangler tail, telemetry, or artifact processes.
+          validation_runner_token="$ACP_VALIDATION_RUN_TOKEN"
+          unset ACP_VALIDATION_RUN_TOKEN
 
           # Phase B: with the transport proved, capture the complete real-model corpus.
           rm -f /tmp/r28-r4-tail.log /tmp/r28-r4-report.json /tmp/r28-r4-dialogue-code.txt /tmp/r28-r4-llm-corpus-report.json /tmp/r28-r4-llm-corpus-code.txt
@@ -364,10 +377,13 @@ jobs:
       - name: Preserve broad historical evidence for reconciliation
         if: ${{ always() && env.R28_EVIDENCE_FROM_MS != '' }}
         shell: bash
+        env:
+          CLOUDFLARE_OBSERVABILITY_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVABILITY_API_TOKEN }}
         run: |
           set -euo pipefail
           # One bounded read-only capture, never a provider retry. Full
           # reconciliation may need later stored-log recovery after ingestion.
+          test -n "${CLOUDFLARE_OBSERVABILITY_API_TOKEN//[[:space:]]/}"
           node scripts/query-workers-observability.mjs "$R28_EVIDENCE_FROM_MS" "$(date +%s%3N)" > /tmp/r28-r4-historical.json
 
       - name: Remove remotely deployed validation configuration
