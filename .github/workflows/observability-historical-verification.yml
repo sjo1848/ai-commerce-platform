@@ -1,0 +1,51 @@
+name: Historical observability verification
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_OBSERVABILITY_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVABILITY_API_TOKEN }}
+      WORKER_NAME: ai-commerce-agent-core
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Verify dedicated credential presence without printing values
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${CLOUDFLARE_ACCOUNT_ID//[[:space:]]/}"
+          test -n "${CLOUDFLARE_OBSERVABILITY_API_TOKEN//[[:space:]]/}"
+          test -n "${WORKER_NAME//[[:space:]]/}"
+
+      - name: Execute one historical observability query
+        shell: bash
+        run: |
+          set -euo pipefail
+          from_ms="$(( $(date +%s%3N) - 120000 ))"
+          to_ms="$(date +%s%3N)"
+          node scripts/query-workers-observability.mjs "$from_ms" "$to_ms" > /tmp/historical-observability.json
+
+          node --input-type=module -e '
+            import { readFileSync } from "node:fs";
+            const payload = JSON.parse(readFileSync("/tmp/historical-observability.json", "utf8"));
+            if (payload?.success !== true) throw new Error("historical query did not return success=true");
+            const result = payload.result;
+            console.log(JSON.stringify({
+              event: "OBSERVABILITY_HISTORICAL_QUERY_HTTP_2XX",
+              success: true,
+              resultType: Array.isArray(result) ? "array" : typeof result,
+              resultCount: Array.isArray(result) ? result.length : undefined,
+              resultKeys: result && typeof result === "object" && !Array.isArray(result) ? Object.keys(result).sort() : undefined,
+            }));
+          '
