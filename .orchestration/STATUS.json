@@ -5,9 +5,9 @@
   "active_task": "ACP-2.6.9-R2-NATURAL-RECEPTIONIST",
   "last_completed_task": "ACP-2.6.9-R2.7-ADVERSARIAL-QA-AND-INDEPENDENT-CRITIC",
   "last_completed_head": "c42f1c8354dbba8ae13b442872349430739f3796",
-  "current_substage": "2.6.9-R2.8.4_RUN_1_FAILED_ZERO_INFERENCE_ADMISSION",
-  "next_action": "HUMAN_GATE_AFTER_RUN_1_FAILED_ADMISSION_PROBE",
-  "stop_reason": "RUN_1_FAILED_ZERO_INFERENCE_ADMISSION_HTTP_404",
+  "current_substage": "2.6.9-R2.8.4_RUNTIME_ADMISSION_REWORK",
+  "next_action": "HUMAN_GATE_ZERO_INFERENCE_VALIDATION_DEPLOYMENT_AND_PROBE",
+  "stop_reason": "RUNTIME_BINDING_OR_VERSION_DISCREPANCY_REQUIRES_METADATA_AND_REMOTE_PROOF",
   "technical_rework_checkpoint": {
     "status": "READY_FOR_EXACT_HEAD_CI_AND_HUMAN_GATE",
     "candidate_worktree": "e31d8c857154bba6ecd44e5501e85cedfe3d3072",
@@ -54,6 +54,25 @@
     "ci_dispatched": true,
     "provider_calls_this_block": 0,
     "evidence": ".orchestration/evidence/ACP-2.6.9-R2.8.4-OBSERVABILITY-AUTH-DIAGNOSIS.md"
+  },
+  "validation_admission_diagnosis": {
+    "failed_workflow_run": 34260151792,
+    "failed_candidate_sha": "e7afc21fb82a8423ce3a3d638a6868a1111e796f",
+    "failed_worker_version": "fcb24c21-f818-402c-98ac-3af11252a33b",
+    "classification": "EXECUTION_OR_EVIDENCE_DEFECT_RUNTIME_BINDING_OR_VERSION_DISCREPANCY",
+    "wrangler_version": "4.127.1",
+    "wrangler_cli_binding_display": "NAMES_REPORTED_FOR_PLAIN_TEXT_AND_SECRET_TEXT",
+    "runtime_root_without_token": "HTTP_200",
+    "runtime_probe_without_token": "HTTP_404_NOT_FOUND",
+    "runtime_probe_body": "{\"error\":{\"code\":\"NOT_FOUND\"}}",
+    "strongest_inference": "ALL_THREE_ADMISSION_BINDINGS_ABSENT_FROM_SERVING_RUNTIME_OR_REQUEST_HIT_DIFFERENT_VERSION",
+    "binding_manifest_proof": "NOT_AVAILABLE_WITHOUT_CONTROL_PLANE_METADATA",
+    "provider_calls": "NONE_INITIATED_BY_CONTROL_FLOW",
+    "historical_query": "SKIPPED_AFTER_ADMISSION_FAILURE",
+    "readiness_gate_fix": "REQUIRE_EXACT_HTTP_403_NOT_2XX_OR_403",
+    "offline_regression": "321/321_PASS",
+    "remote_metadata_and_probe": "BLOCKED_ON_HUMAN_GATE",
+    "evidence": ".orchestration/evidence/ACP-2.6.9-R2.8.4-RUNTIME-ADMISSION-DIAGNOSIS.md"
   },
   "product_decision": {
     "id": "DEC-002",

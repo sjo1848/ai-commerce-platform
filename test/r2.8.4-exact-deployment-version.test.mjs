@@ -24,7 +24,8 @@ test("R2.8.4 staging binds evidence to exact deployed version and shared concurr
   assert.match(workflow, /printf '%s' "\$status" > \/tmp\/r28-r4-probe-status\.txt/);
   assert.match(workflow, /"\$status" != "403"/);
   assert.match(workflow, /intentionally unauthenticated 403 probe/);
-  assert.match(workflow, /status" == 2\* \|\| "\$status" == "403"/);
+  assert.match(workflow, /if \[\[ "\$status" == "403" \]\]/);
+  assert.doesNotMatch(workflow, /status" == 2\* \|\| "\$status" == "403"/);
   assert.match(workflow, /grep -Fq "\$probe_path" \/tmp\/r28-r4-probe-tail\.log/);
   assert.match(workflow, /tail exited while waiting to capture probe/);
   assert.match(workflow, /did not capture intentionally unauthenticated 403 probe \$probe_path within bounded interval/);
@@ -35,6 +36,16 @@ test("R2.8.4 staging binds evidence to exact deployed version and shared concurr
   const corpusGate = workflow.slice(workflow.indexOf("for (const item of report.transcript"), workflow.indexOf("EXPECTED_MODEL=\"$EXPECTED_MODEL\" MODEL_TELEMETRY", workflow.indexOf("for (const item of report.transcript")));
   assert.doesNotMatch(corpusGate, /fb\.length/); assert.match(workflow, /if \(routeFallbacks\.length > 0\)/);
   assert.match(dialogue, /function uniqueExactSet/); assert.match(dialogue, /approvalTargetsExact/); assert.match(dialogue, /expectedRoomIds/);
+});
+
+test("validation deployment readiness rejects 2xx and 404 instead of treating them as admitted", () => {
+  const readiness = workflow.slice(
+    workflow.indexOf("- name: Wait for exact staging deployment"),
+    workflow.indexOf("- name: Prove foreground tail and unauthenticated observability probe"),
+  );
+  assert.match(readiness, /if \[\[ "\$status" == "403" \]\]/);
+  assert.match(readiness, /expected exactly 403/);
+  assert.doesNotMatch(readiness, /\$status" == 2\*/);
 });
 
 test("mandatory validation runners statically install validation headers through the shared helper", () => {

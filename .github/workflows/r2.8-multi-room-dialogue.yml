@@ -195,12 +195,14 @@ jobs:
           set -euo pipefail
           for attempt in $(seq 1 12); do
             status="$(curl -sS --max-time 10 -o /tmp/r28-r4-root.html -w '%{http_code}' "$AI_COMMERCE_STAGING_URL/" || true)"
-            if [[ "$status" == 2* || "$status" == "403" ]]; then
-              echo "Agent Core admission-aware readiness observed on attempt $attempt ($status)."
+            if [[ "$status" == "403" ]]; then
+              echo "Validation admission readiness observed on attempt $attempt (HTTP 403)."
               exit 0
             fi
+            echo "Validation admission readiness returned HTTP ${status:-curl-error}; expected exactly 403."
             sleep 2
           done
+          echo "Validation deployment never returned the required unauthenticated HTTP 403." >&2
           cat /tmp/r28-r4-root.html >&2 || true
           exit 1
 
