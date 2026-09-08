@@ -10,8 +10,8 @@
   "stop_reason": "RUNTIME_BINDING_OR_VERSION_DISCREPANCY_REQUIRES_METADATA_AND_REMOTE_PROOF",
   "technical_rework_checkpoint": {
     "status": "READY_FOR_EXACT_HEAD_CI_AND_HUMAN_GATE",
-    "candidate_worktree": "e31d8c857154bba6ecd44e5501e85cedfe3d3072",
-    "local_npm_qa": "315/315_PASS",
+    "candidate_worktree": "0ee439095f2c22bbf6c8b55b9300cf1c1036ad3f",
+    "local_npm_qa": "321/321_PASS",
     "wrangler_dry_run": "PASS",
     "workflow_provider_trigger": "MANUAL_ONLY",
     "workflow_push_provider_execution": false,
@@ -212,8 +212,8 @@
   "r2_8": {
     "status": "IN_PROGRESS_ARCHITECTURAL_REWORK",
     "current_block": "R2.8.4_NLU_BOUNDARY_REWORK",
-    "candidate_exact_head": "6d5a70a3597ba819550235026a8514d3ddde39c8",
-    "candidate_parent": "6bb600b93acdf3d7bf1f086388ac2dc652fbc96a",
+    "candidate_exact_head": "0ee439095f2c22bbf6c8b55b9300cf1c1036ad3f",
+    "candidate_parent": "a54fea2e89c72c4340db3434b1293025039a683a",
     "contract": ".orchestration/contracts/ACP-2.6.9-R2.8.4-NLU-BOUNDARY-REWORK.md",
     "r2_8_5_blocked": true,
     "mandatory_quality_probes": [
@@ -225,8 +225,8 @@
     "historical_quota_blocker": "CLOUDFLARE_WORKERS_AI_ACCOUNT_QUOTA_BLOCKER_NOT_ACTIVE",
     "qa": "PASS",
     "open_p0_p1_p2": null,
-    "local_npm_qa": "285/285_PASS",
-    "engineering_qa": "QA_PASS",
+    "local_npm_qa": "321/321_PASS",
+    "engineering_qa": "QA_PASS_STATE_RECONCILED_PENDING_EXACT_HEAD_REVIEW",
     "ch1_zero_inference": {
       "status": "COMPLETE_QA_PASS",
       "head": "e2f6839c6990033d9f40859659a2678dec6e6012",
