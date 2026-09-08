@@ -10,8 +10,8 @@
   "stop_reason": "RUNTIME_BINDING_OR_VERSION_DISCREPANCY_REQUIRES_METADATA_AND_REMOTE_PROOF",
   "technical_rework_checkpoint": {
     "status": "READY_FOR_EXACT_HEAD_CI_AND_HUMAN_GATE",
-    "candidate_worktree": "0ee439095f2c22bbf6c8b55b9300cf1c1036ad3f",
-    "local_npm_qa": "321/321_PASS",
+    "candidate_worktree": "dd5251b0f4af85ea553736da916f36cad4a65634",
+    "local_npm_qa": "322/322_PASS",
     "wrangler_dry_run": "PASS",
     "workflow_provider_trigger": "MANUAL_ONLY",
     "workflow_push_provider_execution": false,
@@ -20,7 +20,11 @@
     "deployments_this_rework": 0,
     "approval_consumptions_this_rework": 0,
     "hms_mutations_this_rework": 0,
-    "evidence": ".orchestration/evidence/ACP-2.6.9-R2.8.4-RUN1-READINESS-REWORK.md"
+    "evidence": ".orchestration/evidence/ACP-2.6.9-R2.8.4-RUN1-READINESS-REWORK.md",
+    "latest_candidate_ci_push_run": 34285043323,
+    "latest_candidate_ci_pr_run": 34285051560,
+    "latest_candidate_engineering_qa": "QA_PASS",
+    "remote_zero_inference_validation": "REQUIRES_NEW_HUMAN_GATE"
   },
   "observability_recovery": {
     "status": "OBSERVABILITY_READY_FOR_RUN_1",
@@ -212,8 +216,8 @@
   "r2_8": {
     "status": "IN_PROGRESS_ARCHITECTURAL_REWORK",
     "current_block": "R2.8.4_NLU_BOUNDARY_REWORK",
-    "candidate_exact_head": "0ee439095f2c22bbf6c8b55b9300cf1c1036ad3f",
-    "candidate_parent": "a54fea2e89c72c4340db3434b1293025039a683a",
+    "candidate_exact_head": "dd5251b0f4af85ea553736da916f36cad4a65634",
+    "candidate_parent": "8d06148e1d18f49f1e5e6cdb334e1991efea4610",
     "contract": ".orchestration/contracts/ACP-2.6.9-R2.8.4-NLU-BOUNDARY-REWORK.md",
     "r2_8_5_blocked": true,
     "mandatory_quality_probes": [
@@ -225,8 +229,11 @@
     "historical_quota_blocker": "CLOUDFLARE_WORKERS_AI_ACCOUNT_QUOTA_BLOCKER_NOT_ACTIVE",
     "qa": "PASS",
     "open_p0_p1_p2": null,
-    "local_npm_qa": "321/321_PASS",
+    "local_npm_qa": "322/322_PASS",
     "engineering_qa": "QA_PASS",
+    "latest_candidate_ci_push_run": 34285043323,
+    "latest_candidate_ci_pr_run": 34285051560,
+    "remote_zero_inference_validation": "NOT_EXECUTED_REQUIRES_NEW_HUMAN_GATE",
     "ch1_zero_inference": {
       "status": "COMPLETE_QA_PASS",
       "head": "e2f6839c6990033d9f40859659a2678dec6e6012",
