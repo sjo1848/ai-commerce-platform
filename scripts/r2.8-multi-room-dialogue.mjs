@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { validationRequestHeaders } from "./validation-request-headers.mjs";
 
 const baseUrl = process.env.AI_COMMERCE_STAGING_URL?.replace(/\/$/, "");
 if (!baseUrl) throw new Error("AI_COMMERCE_STAGING_URL is required");
@@ -14,11 +15,12 @@ async function chat(caseId, message, sessionId, { idempotent = false } = {}) {
   requestSeq += 1;
   const started = Date.now();
   const requestId = `r28-r4-${caseId.toLowerCase()}-${requestSeq}-${crypto.randomUUID()}`;
-  const headers = {
+  let headers = {
     "content-type": "application/json",
     "x-request-id": requestId,
   };
   if (idempotent) headers["Idempotency-Key"] = `r28-r4-${caseId.toLowerCase()}-${crypto.randomUUID()}`;
+  headers = validationRequestHeaders(headers);
   const response = await fetch(`${baseUrl}/api/chat`, {
     method: "POST",
     headers,

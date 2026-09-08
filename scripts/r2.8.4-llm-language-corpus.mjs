@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import corpus from "../test/fixtures/r2.8.4-llm-language-corpus.json" with { type: "json" };
+import { validationRequestHeaders } from "./validation-request-headers.mjs";
 
 const baseUrl = process.env.AI_COMMERCE_STAGING_URL?.replace(/\/$/, "");
 if (!baseUrl) throw new Error("AI_COMMERCE_STAGING_URL is required");
@@ -10,7 +11,7 @@ function roomIdsFor(numbers, rooms) { return numbers.map((number) => rooms.find(
 function bodyText(item) { return JSON.stringify(item.body ?? {}); }
 function approvalTarget(item) { return item.body?.approval?.plan?.input?.roomIds ?? item.body?.approval?.input?.roomIds ?? item.body?.approvalTarget?.roomIds ?? []; }
 function uuidTargets(summary) { return String(summary ?? "").match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi) ?? []; }
-async function chat(message, sessionId, key) { return fetch(`${baseUrl}/api/chat`, { method: "POST", headers: { "content-type": "application/json", "Idempotency-Key": key }, body: JSON.stringify({ message, ...(sessionId ? { sessionId } : {}) }), signal: AbortSignal.timeout(30_000) }); }
+async function chat(message, sessionId, key) { return fetch(`${baseUrl}/api/chat`, { method: "POST", headers: validationRequestHeaders({ "content-type": "application/json", "Idempotency-Key": key }), body: JSON.stringify({ message, ...(sessionId ? { sessionId } : {}) }), signal: AbortSignal.timeout(30_000) }); }
 function approvalRequired(response, body) { return response.status === 409 && body?.error?.code === "APPROVAL_REQUIRED" && typeof body.approvalToken === "string"; }
 function clarificationOutcome(response, body, expectedMissing, mutation) {
   const missing = Array.isArray(body?.missing) ? body.missing : [];

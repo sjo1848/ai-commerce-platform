@@ -55,12 +55,53 @@ jobs:
           command -v script
           ./node_modules/.bin/wrangler whoami
 
-      - name: Deploy exact R2.8.4 head to staging
+      - name: Prepare valid validation admission configuration
         shell: bash
+        env:
+          ACP_VALIDATION_RUN_TOKEN: ${{ secrets.ACP_VALIDATION_RUN_TOKEN }}
+          ACP_VALIDATION_NEURON_BUDGET: ${{ vars.ACP_VALIDATION_NEURON_BUDGET }}
         run: |
           set -euo pipefail
-          ./node_modules/.bin/wrangler deploy --dry-run
-          ./node_modules/.bin/wrangler deploy --tag "$GITHUB_SHA" --message "R2.8.4 exact $GITHUB_SHA" | tee /tmp/r28-r4-deploy.log
+          test -n "${ACP_VALIDATION_RUN_TOKEN//[[:space:]]/}"
+          test -n "${ACP_VALIDATION_NEURON_BUDGET//[[:space:]]/}"
+          R28_VALIDATION_EXPERIMENT_ID="r28-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          umask 077
+          R28_VALIDATION_SECRETS_FILE="$(mktemp /tmp/r28-validation-secrets.XXXXXX.json)"
+          cleanup_validation_secrets_file() { rm -f "$R28_VALIDATION_SECRETS_FILE"; }
+          trap cleanup_validation_secrets_file EXIT INT TERM
+          echo "R28_VALIDATION_EXPERIMENT_ID=$R28_VALIDATION_EXPERIMENT_ID" >> "$GITHUB_ENV"
+          echo "R28_VALIDATION_SECRETS_FILE=$R28_VALIDATION_SECRETS_FILE" >> "$GITHUB_ENV"
+          R28_VALIDATION_EXPERIMENT_ID="$R28_VALIDATION_EXPERIMENT_ID" R28_VALIDATION_SECRETS_FILE="$R28_VALIDATION_SECRETS_FILE" node - <<'NODE'
+          import { chmodSync, writeFileSync } from "node:fs";
+          import { parseValidationConfiguration } from "./dist/validation-admission.js";
+
+          const token = process.env.ACP_VALIDATION_RUN_TOKEN;
+          const budget = process.env.ACP_VALIDATION_NEURON_BUDGET;
+          const experimentId = process.env.R28_VALIDATION_EXPERIMENT_ID;
+          const configuration = parseValidationConfiguration({
+            ACP_VALIDATION_NEURON_BUDGET: budget,
+            ACP_VALIDATION_EXPERIMENT_ID: experimentId,
+            ACP_VALIDATION_RUN_TOKEN: token,
+          });
+          if (configuration.status !== "valid") throw new Error("invalid validation admission configuration");
+          writeFileSync(process.env.R28_VALIDATION_SECRETS_FILE, JSON.stringify({ ACP_VALIDATION_RUN_TOKEN: token }));
+          chmodSync(process.env.R28_VALIDATION_SECRETS_FILE, 0o600);
+          NODE
+          trap - EXIT INT TERM
+
+      - name: Deploy exact R2.8.4 head to staging
+        shell: bash
+        env:
+          ACP_VALIDATION_NEURON_BUDGET: ${{ vars.ACP_VALIDATION_NEURON_BUDGET }}
+        run: |
+          set -euo pipefail
+          test -n "${R28_VALIDATION_EXPERIMENT_ID:-}"
+          test -r "${R28_VALIDATION_SECRETS_FILE:-}"
+          ./node_modules/.bin/wrangler deploy --dry-run --var "ACP_VALIDATION_NEURON_BUDGET:$ACP_VALIDATION_NEURON_BUDGET" --var "ACP_VALIDATION_EXPERIMENT_ID:$R28_VALIDATION_EXPERIMENT_ID" --secrets-file "$R28_VALIDATION_SECRETS_FILE"
+          # Set this before the real deploy because Wrangler may upload remote
+          # validation configuration before reporting a deploy failure.
+          echo "R28_VALIDATION_DEPLOY_ATTEMPTED=true" >> "$GITHUB_ENV"
+          ./node_modules/.bin/wrangler deploy --tag "$GITHUB_SHA" --message "R2.8.4 exact $GITHUB_SHA" --var "ACP_VALIDATION_NEURON_BUDGET:$ACP_VALIDATION_NEURON_BUDGET" --var "ACP_VALIDATION_EXPERIMENT_ID:$R28_VALIDATION_EXPERIMENT_ID" --secrets-file "$R28_VALIDATION_SECRETS_FILE" | tee /tmp/r28-r4-deploy.log
           version_id="$(node - <<'NODE'
           const fs = require('fs');
           const text = fs.readFileSync('/tmp/r28-r4-deploy.log', 'utf8');
@@ -100,8 +141,8 @@ jobs:
           set -euo pipefail
           for attempt in $(seq 1 12); do
             status="$(curl -sS --max-time 10 -o /tmp/r28-r4-root.html -w '%{http_code}' "$AI_COMMERCE_STAGING_URL/" || true)"
-            if [[ "$status" == 2* ]]; then
-              echo "Agent Core ready on attempt $attempt ($status)."
+            if [[ "$status" == 2* || "$status" == "403" ]]; then
+              echo "Agent Core admission-aware readiness observed on attempt $attempt ($status)."
               exit 0
             fi
             sleep 2
@@ -111,8 +152,15 @@ jobs:
 
       - name: Real-model natural multi-room dialogue
         shell: bash
+        env:
+          ACP_VALIDATION_RUN_TOKEN: ${{ secrets.ACP_VALIDATION_RUN_TOKEN }}
         run: |
           set -euo pipefail
+          # Keep the random secret out of all shell children except the two
+          # validation runners below. It is never sent to the readiness/probe
+          # curl, Wrangler tail, telemetry, or artifact processes.
+          validation_runner_token="$ACP_VALIDATION_RUN_TOKEN"
+          unset ACP_VALIDATION_RUN_TOKEN
 
           # Phase A: attach tail first, then prove that the live stream receives an event.
           # `script` may emit "<not executed on terminal>"; that is only PTY metadata.
@@ -120,7 +168,7 @@ jobs:
           rm -f /tmp/r28-r4-probe-tail.log /tmp/r28-r4-tail-probe.txt /tmp/r28-r4-probe-status.txt
           timeout 45s script -qefc \
             "./node_modules/.bin/wrangler tail '$WORKER_NAME' --version-id '$R28_VERSION_ID' --format=json --method POST" \
-            /tmp/r28-r4-probe-tail.log &
+            /tmp/r28-r4-probe-tail.log > /dev/null 2>&1 &
           PROBE_TAIL_PID=$!
 
           PROBE_CAPTURED=false
@@ -133,8 +181,8 @@ jobs:
             probe_path="/__r28-tail-probe?run=${GITHUB_RUN_ID}-${attempt}"
             status="$(curl -sS --max-time 10 -X POST -o /tmp/r28-r4-tail-probe.txt -w '%{http_code}' "$AI_COMMERCE_STAGING_URL$probe_path" || true)"
             printf '%s' "$status" > /tmp/r28-r4-probe-status.txt
-            if [[ "$status" != "404" ]]; then
-              PROBE_FAILURE="probe returned HTTP $status instead of expected 404"
+            if [[ "$status" != "403" ]]; then
+              PROBE_FAILURE="intentionally unauthenticated probe returned HTTP $status instead of expected 403"
               break
             fi
 
@@ -155,6 +203,7 @@ jobs:
           done
           kill -INT "$PROBE_TAIL_PID" 2>/dev/null || true
           set +e; wait "$PROBE_TAIL_PID"; PROBE_TAIL_CODE=$?; set -e
+          node scripts/redact-validation-tail.mjs /tmp/r28-r4-probe-tail.log
 
           if [[ -n "$PROBE_FAILURE" ]]; then
             echo "R2.8.4 OBSERVABILITY_INVALID: $PROBE_FAILURE" >&2
@@ -167,7 +216,7 @@ jobs:
             exit 1
           fi
           if [[ "$PROBE_CAPTURED" != "true" ]]; then
-            echo "R2.8.4 OBSERVABILITY_INVALID: foreground tail did not capture 404 probe $probe_path within bounded interval" >&2
+            echo "R2.8.4 OBSERVABILITY_INVALID: foreground tail did not capture intentionally unauthenticated 403 probe $probe_path within bounded interval" >&2
             cat /tmp/r28-r4-probe-tail.log >&2 || true
             exit 1
           fi
@@ -178,12 +227,12 @@ jobs:
           (
             sleep 4
             set +e
-            node scripts/r2.8-multi-room-dialogue.mjs > /tmp/r28-r4-report.json 2>&1
+            ACP_VALIDATION_RUN_TOKEN="$validation_runner_token" node scripts/r2.8-multi-room-dialogue.mjs > /tmp/r28-r4-report.json 2>&1
             code=$?
             set -e
             printf '%s' "$code" > /tmp/r28-r4-dialogue-code.txt
             set +e
-            node scripts/r2.8.4-llm-language-corpus.mjs > /tmp/r28-r4-llm-corpus-report.json 2>&1
+            ACP_VALIDATION_RUN_TOKEN="$validation_runner_token" node scripts/r2.8.4-llm-language-corpus.mjs > /tmp/r28-r4-llm-corpus-report.json 2>&1
             corpus_code=$?
             set -e
             printf '%s' "$corpus_code" > /tmp/r28-r4-llm-corpus-code.txt
@@ -193,10 +242,11 @@ jobs:
           set +e
           timeout 600s script -qefc \
             "./node_modules/.bin/wrangler tail '$WORKER_NAME' --version-id '$R28_VERSION_ID' --format=json --method POST" \
-            /tmp/r28-r4-tail.log
+            /tmp/r28-r4-tail.log > /dev/null 2>&1
           DIALOGUE_TAIL_CODE=$?
           set -e
           wait "$DIALOGUE_PID"
+          node scripts/redact-validation-tail.mjs /tmp/r28-r4-tail.log
 
           if [[ "$DIALOGUE_TAIL_CODE" -ne 0 && "$DIALOGUE_TAIL_CODE" -ne 124 ]]; then
             echo "R2.8.4 OBSERVABILITY_INVALID: corpus wrangler tail exited unexpectedly ($DIALOGUE_TAIL_CODE)" >&2
@@ -300,8 +350,37 @@ jobs:
           test -n "${R28_VERSION_ID:-}"
           curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$WORKER_NAME/deployments" | R28_VERSION_ID="$R28_VERSION_ID" node -e 'const fs=require("fs");const p=JSON.parse(fs.readFileSync(0,"utf8"));const v=process.env.R28_VERSION_ID;const d=p?.result?.deployments?.[0];if(!p.success||!d||!Array.isArray(d.versions)||d.versions.length!==1||d.versions[0].version_id!==v||d.versions[0].percentage!==100)throw Error("post-corpus latest deployment verification failed");'
 
-      - name: Preserve R2.8.4 evidence
+      - name: Remove remotely deployed validation configuration
         if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${R28_VALIDATION_DEPLOY_ATTEMPTED:-}" != "true" ]]; then
+            echo "Validation deployment was never attempted; no remote validation configuration to remove."
+            exit 0
+          fi
+          # Deploy the checked-out exact source without validation vars or a
+          # secrets file before deleting the validation-only remote secret.
+           ./node_modules/.bin/wrangler deploy --message "R2.8.4 validation cleanup $GITHUB_SHA"
+           printf 'y\n' | ./node_modules/.bin/wrangler secret delete ACP_VALIDATION_RUN_TOKEN --name "$WORKER_NAME"
+
+      - name: Remove temporary validation secret file
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f "${R28_VALIDATION_SECRETS_FILE:-}"
+
+      - name: Sanitize validation headers from tail logs
+        id: sanitize_validation_tail_logs
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/redact-validation-tail.mjs /tmp/r28-r4-probe-tail.log /tmp/r28-r4-tail.log
+
+      - name: Preserve R2.8.4 evidence
+        if: ${{ always() && steps.sanitize_validation_tail_logs.outcome == 'success' }}
         uses: actions/upload-artifact@v4
         with:
           name: r2.8-multi-room-dialogue-${{ github.run_id }}
