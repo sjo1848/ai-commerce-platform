@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { proveValidationTurn } from "./r2.8-validation-turn-proof.mjs";
 import { validationRequestHeaders } from "./validation-request-headers.mjs";
 
 const baseUrl = process.env.AI_COMMERCE_STAGING_URL?.replace(/\/$/, "");
@@ -8,6 +9,16 @@ const start = process.env.R28_START ?? "2030-01-01";
 const end = process.env.R28_END ?? "2030-01-03";
 
 let requestSeq = 0;
+function exactFinalPlan(item, ids, occupancyRequired) {
+  const plan = item?.body?.approvalPlan, context = item?.body?.approvalContext;
+  const allocation = context?.roomOccupancy ?? [];
+  return plan?.toolId === "hms.createMultiReservation"
+    && uniqueExactSet(ids, plan?.input?.roomIds ?? [])
+    && plan.input.checkIn === start && plan.input.checkOut === end
+    && context?.stay?.checkIn === start && context?.stay?.checkOut === end && context?.stay?.guests === 4
+    && uniqueExactSet(ids, context?.selectedRoomIds ?? [])
+    && (!occupancyRequired && allocation.length === 0 || uniqueExactSet(ids, allocation.map(x => x.roomId)) && allocation.every(x => x.guests === 2));
+}
 const transcript = [];
 const results = [];
 
@@ -40,6 +51,9 @@ async function chat(caseId, message, sessionId, { idempotent = false } = {}) {
     latencyMs: Date.now() - started,
   };
   transcript.push(item);
+  if (sessionId && body.sessionId !== sessionId) throw Error(`${caseId}: session identity changed`);
+  if (hasMutationResult(item)) throw Error(`${caseId}: response contained mutation result`);
+  item.routeProof = await proveValidationTurn(requestId, body.sessionId);
   return item;
 }
 
@@ -72,14 +86,16 @@ function uniqueExactSet(expected, actual) {
   return left.length === expected.length && right.length === actual.length && left.length === right.length && left.every((value) => right.includes(value));
 }
 function approvalRoomIds(item) { return String(item?.body?.approvalSummary ?? "").match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi) ?? []; }
-function record(caseId, pass, reason, extra = {}) { results.push({ caseId, pass, reason, ...extra }); }
+function record(caseId, pass, reason, extra = {}) { results.push({ caseId, pass, reason, ...extra }); if (!pass) throw new Error(`${caseId}: ${reason}`); }
+let sessionId, boundary, occupancy;
+try {
 
 // C06 — fresh multi-room setup against the readiness-approved synthetic window.
 const setup = await chat(
   "C06",
   "Hola. Somos cuatro y queremos quedarnos del 1 al 3 de enero de 2030. ¿Qué tenés disponible?",
 );
-const sessionId = setup.body?.sessionId;
+sessionId = setup.body?.sessionId;
 const rooms = Array.isArray(setup.body?.data?.rooms) ? setup.body.data.rooms : [];
 const roomNumbers = rooms.map((room) => String(room?.roomNumber ?? "")).filter(Boolean);
 const expectedRooms = ["101", "102"].map((number) => rooms.filter((room) => String(room?.roomNumber) === number));
@@ -107,15 +123,15 @@ if (!sessionId) throw new Error("C06 did not establish a durable multi-room sess
 // the token is deliberately never consumed in R2.8.4, so no side effect occurs.
 const selection = await chat("C07", "Quiero reservar la 101 y la 102.", sessionId, { idempotent: true });
 const selectionText = userFacing(selection);
-const c07LanguageSafe = !asksGuests(selectionText)
+const c07LanguageSafe = (!asksGuests(selectionText) || asksOccupancy(selectionText))
   && !asksDates(selectionText)
   && !staleUnsupported(selectionText)
   && !hasInternalLeak(selectionText)
   && !inventedPayment(selectionText);
 
-let boundary = approvalRequired(selection) ? selection : null;
-let occupancy = null;
-let probe = null;
+boundary = approvalRequired(selection) ? selection : null;
+occupancy = null;
+record("C07-SELECTION", c07LanguageSafe && !hasMutationResult(selection) && (boundary || (is2xx(selection) && selection.body?.outcome === "clarification" && JSON.stringify(selection.body?.missing) === JSON.stringify(["occupancy"]))), "only immediate HITL or explicit occupancy clarification is allowed");
 
 if (!boundary && is2xx(selection) && asksOccupancy(selectionText)) {
   occupancy = await chat("C08", "Dos en cada habitación.", sessionId);
@@ -142,14 +158,6 @@ if (!boundary && is2xx(selection) && asksOccupancy(selectionText)) {
   );
 }
 
-// Historical R2.4 wording probe: if the first natural selection did not already
-// reach HITL, ask to reserve the already-selected pair. The expected server-side
-// path is the R2.5 composite tool, never a single-room collapse. We only issue the
-// challenge; /api/approve is intentionally not called in this block.
-if (!boundary) {
-  probe = await chat("R2.8.4-HISTORICAL-PROBE", "Perfecto, reservá esas dos.", sessionId, { idempotent: true });
-  boundary = approvalRequired(probe) ? probe : null;
-}
 
 record(
   "C07",
@@ -159,7 +167,7 @@ record(
     && uniqueExactSet(expectedRoomIds, approvalRoomIds(boundary))
     && !hasMutationResult(selection)
     && !hasMutationResult(occupancy)
-    && !hasMutationResult(probe),
+    && exactFinalPlan(boundary, expectedRoomIds, Boolean(occupancy)),
   "natural 101+102 intent remains multi-room and reaches unconsumed HITL boundary",
   {
     assistant: selectionText,
@@ -174,13 +182,6 @@ record(
   },
 );
 
-record(
-  "R2.8.4-HISTORICAL-PROBE",
-  Boolean(boundary) && uniqueExactSet(expectedRoomIds, approvalRoomIds(boundary)) && !staleUnsupported(userFacing(boundary)),
-  "real conversational path progresses beyond stale R2.4 assumptions to an approval boundary",
-  { boundaryCaseId: boundary?.caseId ?? null, boundaryStatus: boundary?.status ?? null, approvalTargetsExact: Boolean(boundary) && uniqueExactSet(expectedRoomIds, approvalRoomIds(boundary)) },
-);
-
 const mutationSignals = transcript.filter(hasMutationResult);
 record(
   "R2.8.4-NO-MUTATION",
@@ -189,6 +190,8 @@ record(
   { mutationSignals: mutationSignals.map((item) => item.caseId) },
 );
 
+} catch (error) { if (!results.some(item => !item.pass)) results.push({caseId: "RUNNER", pass: false, reason: error.message}); }
+const mutationSignals = transcript.filter(hasMutationResult);
 const latencies = transcript.map((item) => item.latencyMs).filter(Number.isFinite).sort((a, b) => a - b);
 const p95 = latencies.length ? latencies[Math.max(0, Math.ceil(latencies.length * 0.95) - 1)] : null;
 const failed = results.filter((item) => !item.pass);
@@ -205,7 +208,8 @@ const report = {
     p95LatencyMs: p95,
     reachedApprovalChallenge: Boolean(boundary),
     approvalConsumed: false,
-    hmsMutationRequests: mutationSignals.length,
+    responseMutationSignals: mutationSignals.length,
+    hmsMutations: "UNKNOWN_PENDING_AUDIT",
   },
   results,
   transcript,

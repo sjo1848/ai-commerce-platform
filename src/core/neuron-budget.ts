@@ -16,6 +16,16 @@ export type ValidationExperimentBudgetConfig = {
   conservativeNextCallAllowance: number;
 };
 
+/** Both configured limits constrain admission; neither measures live account quota. */
+export function validationExperimentBudget(config: ValidationNeuronBudgetConfig): ValidationExperimentBudgetConfig {
+  const remainingDaily = Math.max(0, config.configuredAvailableBudget - (config.observedLocalDayNeurons ?? 0) - config.configuredReserve);
+  return {
+    configuredMaxNeurons: Math.min(config.maxNeuronsPerRun, remainingDaily),
+    configuredReserve: 0,
+    conservativeNextCallAllowance: config.conservativeExpectedCost,
+  };
+}
+
 export type ExperimentBudgetStatus = "ACTIVE" | "BUDGET_EXHAUSTED" | "COMPLETE";
 export type ExperimentBudgetSnapshot = Readonly<{
   experimentId: string;
@@ -126,7 +136,7 @@ export function parseStoredExperimentBudget(raw: string): StoredExperimentBudget
   const value: unknown = JSON.parse(raw);
   if (!isRecord(value) || !hasExactKeys(value, ["experimentId", "configuredMaxNeurons", "configuredReserve", "observedProviderNeurons", "inferenceCount", "updatedAt", "status", "conservativeNextCallAllowance", "reservations"])
     || !hasCoreSnapshotValues(value)
-    || !isFiniteNonNegative(value.conservativeNextCallAllowance) || !isRecord(value.reservations)) throw new Error("Invalid stored experiment budget");
+    || !isFiniteNonNegative(value.conservativeNextCallAllowance) || value.conservativeNextCallAllowance <= 0 || !isRecord(value.reservations)) throw new Error("Invalid stored experiment budget");
   for (const [token, reservation] of Object.entries(value.reservations)) {
     if (!EXPERIMENT_BUDGET_RESERVATION_TOKEN.test(token) || !isRecord(reservation) || !hasExactKeys(reservation, ["allowance", "state"])
       || reservation.allowance !== value.conservativeNextCallAllowance || !["reserved", "settled", "released"].includes(String(reservation.state))) throw new Error("Invalid stored experiment budget");
@@ -216,6 +226,7 @@ export class DurableExperimentBudgetProvider implements ModelProvider {
     nonNegative("configuredMaxNeurons", config.configuredMaxNeurons);
     nonNegative("configuredReserve", config.configuredReserve);
     nonNegative("conservativeNextCallAllowance", config.conservativeNextCallAllowance);
+    if (config.conservativeNextCallAllowance <= 0) throw new Error("conservativeNextCallAllowance must be positive");
     if (config.configuredReserve > config.configuredMaxNeurons) throw new Error("configuredReserve must not exceed configuredMaxNeurons");
   }
 
@@ -230,15 +241,11 @@ export class DurableExperimentBudgetProvider implements ModelProvider {
     let result: StructuredModelResult;
     try {
       result = await this.provider.completeStructured(request);
-    } catch (error) {
-      // A provider failure has no successful result to account for, so release its
-      // conservative allowance. A release transport failure is itself uncertain.
-      try {
-        this.report(await this.store.release(reservation.token));
-      } catch {
-        throw new ModelProviderError("Validation experiment budget release is uncertain", "EXPERIMENT_BUDGET_RELEASE_UNCERTAIN");
-      }
-      throw error;
+    } catch {
+      // Dispatch may have consumed provider quota even without a usable result.
+      // No ModelProvider failure currently proves pre-dispatch non-consumption.
+      // Preserve the durable allowance; never turn UNKNOWN consumption into zero.
+      throw new ModelProviderError("Validation experiment provider consumption is uncertain", "EXPERIMENT_BUDGET_PROVIDER_UNCERTAIN");
     }
     if (result.providerNeurons === undefined) {
       // A successful provider response without usage is unknown consumption, never zero.

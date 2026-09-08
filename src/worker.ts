@@ -14,7 +14,7 @@ import { ConversationBackedStateStore } from "./core/conversation-state.js";
 import { DeterministicModelRouter } from "./core/deterministic-model.js";
 import { LLMModelRouter } from "./core/llm-model.js";
 import { LLMGroundedResponder } from "./core/model-responder.js";
-import { DurableExperimentBudgetProvider, type ExperimentBudgetTelemetry } from "./core/neuron-budget.js";
+import { DurableExperimentBudgetProvider, validationExperimentBudget, type ExperimentBudgetTelemetry } from "./core/neuron-budget.js";
 import { AgentCoreRuntime } from "./core/runtime.js";
 import { ConsoleUsageSink } from "./core/usage.js";
 import { admitValidationRequest, parseValidationConfiguration, type ValidationConfiguration } from "./validation-admission.js";
@@ -98,11 +98,7 @@ function handler(env: Env, validationConfiguration: ValidationConfiguration): (r
   // Only an explicitly configured validation deployment uses this durable, experiment-scoped guard.
   const validationBudget = validationConfiguration.status === "valid" ? validationConfiguration.budget : undefined;
   const provider = validationBudget && validationConfiguration.status === "valid"
-    ? new DurableExperimentBudgetProvider(workersAiProvider, new DurableObjectExperimentNeuronBudgetStore(env.SESSIONS, validationConfiguration.experimentId), {
-      configuredMaxNeurons: validationBudget.maxNeuronsPerRun,
-      configuredReserve: validationBudget.configuredReserve,
-      conservativeNextCallAllowance: validationBudget.conservativeExpectedCost,
-    }, recordExperimentBudgetTelemetry)
+    ? new DurableExperimentBudgetProvider(workersAiProvider, new DurableObjectExperimentNeuronBudgetStore(env.SESSIONS, validationConfiguration.experimentId), validationExperimentBudget(validationBudget), recordExperimentBudgetTelemetry)
     : workersAiProvider;
   const model = new LLMModelRouter(provider, new DeterministicModelRouter(), usage);
   const responder = new LLMGroundedResponder(provider, undefined, usage);

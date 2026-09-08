@@ -144,7 +144,7 @@ test("conversation-backed state folds concurrent full snapshots by field revisio
   assert.deepEqual(merged.stay, { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 4 });
 });
 
-test("current-turn semantic facts persist even when model routing throws", async () => {
+test("raw semantic facts do not become authority when model routing throws", async () => {
   const stateStore = new InMemoryConversationStateStore();
   const runtime = new AgentCoreRuntime({
     tenants: [tenant],
@@ -158,10 +158,10 @@ test("current-turn semantic facts persist even when model routing throws", async
     /provider exploded/,
   );
   const stored = await stateStore.get(context.session.id);
-  assert.deepEqual(stored.stay, { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 2 });
+  assert.deepEqual(stored.stay, {});
 });
 
-test("overlapping chat requests retain facts learned by both turns", async () => {
+test("overlapping late model route cannot overwrite newer structured facts", async () => {
   const stateStore = new InMemoryConversationStateStore();
   const runtime = new AgentCoreRuntime({
     tenants: [tenant],
@@ -170,17 +170,18 @@ test("overlapping chat requests retain facts learned by both turns", async () =>
     model: {
       async route(message) {
         await new Promise((resolve) => setTimeout(resolve, message.includes("15") ? 15 : 1));
-        return { kind: "message", purpose: "help", message: "Perfecto." };
+        return { kind: "message", purpose: "help", message: "Perfecto.", statePatch: message.includes("15") ? {checkIn:"2027-01-15",checkOut:"2027-01-17"} : {guests:4} };
       },
     },
   });
   const context = await runtime.createContext({ tenantId: tenant.id, actor, channel: "webchat" });
-  await Promise.all([
+  const outcomes = await Promise.all([
     runtime.orchestrator.chat("Quiero del 15 al 17 de enero de 2027", context),
     runtime.orchestrator.chat("Somos cuatro", context),
   ]);
   const stored = await stateStore.get(context.session.id);
-  assert.equal(stored.stay.checkIn, "2027-01-15");
-  assert.equal(stored.stay.checkOut, "2027-01-17");
+  assert.equal(outcomes[0].outcome, "clarification");
+  assert.equal(stored.stay.checkIn, undefined);
+  assert.equal(stored.stay.checkOut, undefined);
   assert.equal(stored.stay.guests, 4);
 });

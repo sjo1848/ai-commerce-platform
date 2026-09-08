@@ -169,9 +169,12 @@ export function createWebchatHandler(runtime: AgentCoreRuntime, config: WebchatH
             plan: error.plan,
             recoveryAttempt: 0,
           });
+          const approvalState = await runtime.conversationState.get(activeSessionId!);
           return json({
             error: { code: error.code, message: error.message },
             sessionId: activeSessionId,
+            approvalPlan: { toolId: error.plan.toolId, input: error.plan.input },
+            approvalContext: { stay: approvalState.stay, selectedRoomIds: approvalState.selectedRoomIds, roomOccupancy: approvalState.roomOccupancy },
             approvalToken: challenge.token,
             approvalExpiresAt: challenge.expiresAt,
             approvalSummary: approvalSummaryForPlan(error.plan),

@@ -2,10 +2,6 @@ name: R2.8 multi-room dialogue
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - feature/r2.8.4-nlu-boundary-rework
-      - feat/acp-2.6.9-r2.8.4-multi-room-dialogue
 
 permissions:
   contents: read
@@ -16,12 +12,14 @@ concurrency:
 
 jobs:
   dialogue:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       WORKER_NAME: ai-commerce-agent-core
+      R28_TAIL_PATH: /tmp/r28-r4-tail.log
       EXPECTED_MODEL: '@cf/meta/llama-3.3-70b-instruct-fp8-fast'
       R28_START: '2030-01-01'
       R28_END: '2030-01-03'
@@ -84,6 +82,9 @@ jobs:
             ACP_VALIDATION_RUN_TOKEN: token,
           });
           if (configuration.status !== "valid") throw new Error("invalid validation admission configuration");
+          const approvedBudget = { maxNeuronsPerRun: 7000, configuredAvailableBudget: 7000, configuredReserve: 0, conservativeExpectedCost: 180 };
+          const suppliedBudget = JSON.parse(budget);
+          if (Object.keys(suppliedBudget).length !== 4 || Object.entries(approvedBudget).some(([key, value]) => suppliedBudget[key] !== value)) throw new Error("budget differs from RUN 1 authorization");
           writeFileSync(process.env.R28_VALIDATION_SECRETS_FILE, JSON.stringify({ ACP_VALIDATION_RUN_TOKEN: token }));
           chmodSync(process.env.R28_VALIDATION_SECRETS_FILE, 0o600);
           NODE
@@ -97,11 +98,11 @@ jobs:
           set -euo pipefail
           test -n "${R28_VALIDATION_EXPERIMENT_ID:-}"
           test -r "${R28_VALIDATION_SECRETS_FILE:-}"
-          ./node_modules/.bin/wrangler deploy --dry-run --var "ACP_VALIDATION_NEURON_BUDGET:$ACP_VALIDATION_NEURON_BUDGET" --var "ACP_VALIDATION_EXPERIMENT_ID:$R28_VALIDATION_EXPERIMENT_ID" --secrets-file "$R28_VALIDATION_SECRETS_FILE"
+          ./node_modules/.bin/wrangler deploy --dry-run --var "ACP_MODEL_ID:$EXPECTED_MODEL" --var "ACP_VALIDATION_SESSION_AFFINITY:false" --var "ACP_VALIDATION_NEURON_BUDGET:$ACP_VALIDATION_NEURON_BUDGET" --var "ACP_VALIDATION_EXPERIMENT_ID:$R28_VALIDATION_EXPERIMENT_ID" --secrets-file "$R28_VALIDATION_SECRETS_FILE"
           # Set this before the real deploy because Wrangler may upload remote
           # validation configuration before reporting a deploy failure.
           echo "R28_VALIDATION_DEPLOY_ATTEMPTED=true" >> "$GITHUB_ENV"
-          ./node_modules/.bin/wrangler deploy --tag "$GITHUB_SHA" --message "R2.8.4 exact $GITHUB_SHA" --var "ACP_VALIDATION_NEURON_BUDGET:$ACP_VALIDATION_NEURON_BUDGET" --var "ACP_VALIDATION_EXPERIMENT_ID:$R28_VALIDATION_EXPERIMENT_ID" --secrets-file "$R28_VALIDATION_SECRETS_FILE" | tee /tmp/r28-r4-deploy.log
+          ./node_modules/.bin/wrangler deploy --tag "$GITHUB_SHA" --message "R2.8.4 exact $GITHUB_SHA" --var "ACP_MODEL_ID:$EXPECTED_MODEL" --var "ACP_VALIDATION_SESSION_AFFINITY:false" --var "ACP_VALIDATION_NEURON_BUDGET:$ACP_VALIDATION_NEURON_BUDGET" --var "ACP_VALIDATION_EXPERIMENT_ID:$R28_VALIDATION_EXPERIMENT_ID" --secrets-file "$R28_VALIDATION_SECRETS_FILE" | tee /tmp/r28-r4-deploy.log
           version_id="$(node - <<'NODE'
           const fs = require('fs');
           const text = fs.readFileSync('/tmp/r28-r4-deploy.log', 'utf8');
@@ -220,6 +221,11 @@ jobs:
             cat /tmp/r28-r4-probe-tail.log >&2 || true
             exit 1
           fi
+          R28_PROBE_PATH="$probe_path" node scripts/r2.8-validation-preflight.mjs /tmp/r28-r4-probe-tail.log > /tmp/r28-r4-preflight-proof.json
+          # Read-only stored-log access check. Denial stops before any inference.
+          R28_EVIDENCE_FROM_MS="$(date +%s%3N)"
+          echo "R28_EVIDENCE_FROM_MS=$R28_EVIDENCE_FROM_MS" >> "$GITHUB_ENV"
+          node scripts/query-workers-observability.mjs "$((R28_EVIDENCE_FROM_MS - 120000))" "$R28_EVIDENCE_FROM_MS" > /tmp/r28-r4-historical-preflight.json
           echo "Foreground live-tail transport proved before any model inference."
 
           # Phase B: with the transport proved, capture the complete real-model corpus.
@@ -231,6 +237,11 @@ jobs:
             code=$?
             set -e
             printf '%s' "$code" > /tmp/r28-r4-dialogue-code.txt
+            if [[ "$code" -ne 0 ]]; then
+              printf '%s\n' '{"event":"ACP_R2_8_4_LLM_CORPUS_SKIPPED","reason":"dialogue contractual failure"}' > /tmp/r28-r4-llm-corpus-report.json
+              printf '%s' "$code" > /tmp/r28-r4-llm-corpus-code.txt
+              exit 0
+            fi
             set +e
             ACP_VALIDATION_RUN_TOKEN="$validation_runner_token" node scripts/r2.8.4-llm-language-corpus.mjs > /tmp/r28-r4-llm-corpus-report.json 2>&1
             corpus_code=$?
@@ -285,7 +296,7 @@ jobs:
 
           EXPECTED_MODEL="$EXPECTED_MODEL" CORPUS_REPORT=/tmp/r28-r4-llm-corpus-report.json MODEL_TELEMETRY="$MODEL_TELEMETRY" AUDIT_TELEMETRY="$AUDIT_TELEMETRY" node - <<'NODE'
           const fs=require('fs'); const report=JSON.parse(fs.readFileSync(process.env.CORPUS_REPORT,'utf8')); const model=JSON.parse(process.env.MODEL_TELEMETRY); const audit=JSON.parse(process.env.AUDIT_TELEMETRY);
-          for (const item of report.transcript ?? []) { const ids=[item.initial?.body?.sessionId,item.final?.body?.sessionId].filter(Boolean); const sessionId=ids[0]; if(!sessionId) throw Error(`missing corpus session: ${item.id}`); const inf=model.inferences.filter(x=>x.sessionId===sessionId&&x.label==='agent_core_route'); if(inf.length<2||!model.models.includes(process.env.EXPECTED_MODEL)) throw Error(`invalid corpus telemetry: ${item.id}`); const events=audit.events.filter(x=>x.sessionId===sessionId); if(!events.some(x=>x.toolId==='hms.checkAvailability'&&x.status==='succeeded')) throw Error(`missing availability audit: ${item.id}`); if(events.some(x=>/create|cancel/i.test(String(x.toolId))&&['succeeded','replayed'].includes(x.status))) throw Error(`corpus mutation: ${item.id}`); }
+          for (const item of report.transcript ?? []) { const ids=[item.initial?.body?.sessionId,item.final?.body?.sessionId].filter(Boolean); const sessionId=ids[0]; if(!sessionId) throw Error(`missing corpus session: ${item.id}`); const inf=model.inferences.filter(x=>x.sessionId===sessionId&&x.label==='agent_core_route'); if(inf.length<2||!model.models.includes(process.env.EXPECTED_MODEL)) throw Error(`invalid corpus telemetry: ${item.id}`); if(model.fallbacks.some(x=>x.sessionId===sessionId&&x.label==='agent_core_route')) throw Error(`corpus route fallback: ${item.id}`); const events=audit.events.filter(x=>x.sessionId===sessionId); if(!events.some(x=>x.toolId==='hms.checkAvailability'&&x.status==='succeeded')) throw Error(`missing availability audit: ${item.id}`); if(events.some(x=>/create|cancel/i.test(String(x.toolId))&&['succeeded','replayed'].includes(x.status))) throw Error(`corpus mutation: ${item.id}`); }
           NODE
 
           EXPECTED_MODEL="$EXPECTED_MODEL" MODEL_TELEMETRY="$MODEL_TELEMETRY" REPORT_PATH=/tmp/r28-r4-report.json node - <<'NODE'
@@ -350,6 +361,15 @@ jobs:
           test -n "${R28_VERSION_ID:-}"
           curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$WORKER_NAME/deployments" | R28_VERSION_ID="$R28_VERSION_ID" node -e 'const fs=require("fs");const p=JSON.parse(fs.readFileSync(0,"utf8"));const v=process.env.R28_VERSION_ID;const d=p?.result?.deployments?.[0];if(!p.success||!d||!Array.isArray(d.versions)||d.versions.length!==1||d.versions[0].version_id!==v||d.versions[0].percentage!==100)throw Error("post-corpus latest deployment verification failed");'
 
+      - name: Preserve broad historical evidence for reconciliation
+        if: ${{ always() && env.R28_EVIDENCE_FROM_MS != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # One bounded read-only capture, never a provider retry. Full
+          # reconciliation may need later stored-log recovery after ingestion.
+          node scripts/query-workers-observability.mjs "$R28_EVIDENCE_FROM_MS" "$(date +%s%3N)" > /tmp/r28-r4-historical.json
+
       - name: Remove remotely deployed validation configuration
         if: always()
         shell: bash
@@ -378,6 +398,7 @@ jobs:
         run: |
           set -euo pipefail
           node scripts/redact-validation-tail.mjs /tmp/r28-r4-probe-tail.log /tmp/r28-r4-tail.log
+          node scripts/r2.8-redact-historical.mjs /tmp/r28-r4-historical-preflight.json /tmp/r28-r4-historical.json
 
       - name: Preserve R2.8.4 evidence
         if: ${{ always() && steps.sanitize_validation_tail_logs.outcome == 'success' }}
@@ -389,6 +410,9 @@ jobs:
             /tmp/r28-r4-probe-tail.log
             /tmp/r28-r4-tail-probe.txt
             /tmp/r28-r4-probe-status.txt
+            /tmp/r28-r4-preflight-proof.json
+            /tmp/r28-r4-historical-preflight.json
+            /tmp/r28-r4-historical.json
             /tmp/r28-r4-tail.log
             /tmp/r28-r4-report.json
             /tmp/r28-r4-model-telemetry.json

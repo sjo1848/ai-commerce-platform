@@ -1,50 +1,85 @@
 #!/usr/bin/env node
 import corpus from "../test/fixtures/r2.8.4-llm-language-corpus.json" with { type: "json" };
+import { proveValidationTurn } from "./r2.8-validation-turn-proof.mjs";
 import { validationRequestHeaders } from "./validation-request-headers.mjs";
 
 const baseUrl = process.env.AI_COMMERCE_STAGING_URL?.replace(/\/$/, "");
 if (!baseUrl) throw new Error("AI_COMMERCE_STAGING_URL is required");
 const transcript = [];
-// Deliberately never call the mutation endpoint: /api/approve is forbidden in this runner.
-const mutationFields = /createdBookingIds|cancelledBookingIds|bookingId|reservationId|reservationGroup/i;
-function roomIdsFor(numbers, rooms) { return numbers.map((number) => rooms.find((room) => String(room.roomNumber) === number)?.id).filter(Boolean); }
-function bodyText(item) { return JSON.stringify(item.body ?? {}); }
-function approvalTarget(item) { return item.body?.approval?.plan?.input?.roomIds ?? item.body?.approval?.input?.roomIds ?? item.body?.approvalTarget?.roomIds ?? []; }
-function uuidTargets(summary) { return String(summary ?? "").match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi) ?? []; }
-async function chat(message, sessionId, key) { return fetch(`${baseUrl}/api/chat`, { method: "POST", headers: validationRequestHeaders({ "content-type": "application/json", "Idempotency-Key": key }), body: JSON.stringify({ message, ...(sessionId ? { sessionId } : {}) }), signal: AbortSignal.timeout(30_000) }); }
-function approvalRequired(response, body) { return response.status === 409 && body?.error?.code === "APPROVAL_REQUIRED" && typeof body.approvalToken === "string"; }
-function clarificationOutcome(response, body, expectedMissing, mutation) {
-  const missing = Array.isArray(body?.missing) ? body.missing : [];
-  const uniqueMissing = [...new Set(missing)];
-  const forbidden = JSON.stringify(body).match(/APPROVAL_REQUIRED|approvalToken|approvalSummary|approvalTarget|target|token|summary/i);
-  return response.status >= 200 && response.status < 300 && typeof body?.message === "string" && body.message.trim().length > 0 && body.outcome === "clarification" && uniqueMissing.length === 1 && uniqueMissing[0] === expectedMissing && missing.length === uniqueMissing.length && !forbidden && !mutation;
+const mutationFields = /"(?:createdBookingIds|cancelledBookingIds|bookingId|reservationId|reservationGroup)"\s*:/i;
+const mutationSignals = [];
+const sameSet = (a, b) => Array.isArray(b) && new Set(a).size === a.length && new Set(b).size === b.length && a.length === b.length && a.every(x => b.includes(x));
+const approval = item => item.status === 409 && item.body?.error?.code === "APPROVAL_REQUIRED" && typeof item.body.approvalToken === "string" && item.body.approvalToken.length > 0;
+const clarification = (item, field) => {
+  const body = item.body;
+  const uniqueMissing = [...new Set(body?.missing ?? [])];
+  return item.status >= 200 && item.status < 300 && body.outcome === "clarification" && JSON.stringify(uniqueMissing) === JSON.stringify([field]) && JSON.stringify(body.missing) === JSON.stringify([field]) && typeof body?.message === "string" && body.message.trim().length > 0 && !/approvalToken|approvalSummary|approvalTarget|approvalPlan|APPROVAL_REQUIRED/.test(JSON.stringify(body));
+};
+let current;
+function requirePass(pass, reason) { if (!pass) throw Error(reason); }
+async function chat(message, sessionId) {
+  const requestId = `r28-corpus-${current.id}-${crypto.randomUUID()}`;
+  const response = await fetch(`${baseUrl}/api/chat`, { method: "POST", headers: validationRequestHeaders({ "content-type": "application/json", "x-request-id": requestId, "Idempotency-Key": crypto.randomUUID() }), body: JSON.stringify({ message, ...(sessionId ? { sessionId } : {}) }), signal: AbortSignal.timeout(30_000) });
+  const raw = await response.text(); let body;
+  try { body = JSON.parse(raw); } catch { body = { raw }; }
+  const item = { requestId, status: response.status, body, user: message };
+  current.turns.push(item);
+  item.routeProof = await proveValidationTurn(requestId, body.sessionId);
+  if (mutationFields.test(JSON.stringify(body))) mutationSignals.push({ caseId: current.id, requestId });
+  requirePass(mutationSignals.length === 0, "response mutation signal");
+  requirePass(!sessionId || body.sessionId === sessionId, "session identity changed");
+  return item;
 }
-for (const item of corpus.cases) {
-  const availability = await chat(`Somos ${item.setupGuests ?? 2}. Del 1 al 3 de enero de 2030, ¿qué habitaciones están disponibles?`, undefined, `r28-corpus-${item.id}-availability`);
-  const availabilityBody = await availability.json();
-  const sessionId = availabilityBody.sessionId;
-  const rooms = Array.isArray(availabilityBody.data?.rooms) ? availabilityBody.data.rooms : [];
-  const setupValid = availability.status >= 200 && availability.status < 300 && typeof sessionId === "string" && sessionId.length > 0 && availabilityBody.data?.source === "hms" && availabilityBody.data?.truth === "transactional" && ["101", "102", "103"].every((number) => rooms.some((room) => String(room.roomNumber) === number));
-  const response = await chat(item.message, sessionId, `r28-corpus-${item.id}-intent`);
-  const raw = await response.text();
-  let body; try { body = raw ? JSON.parse(raw) : {}; } catch { body = { raw }; }
-  const expectedIds = item.expected.roomNumbers ? roomIdsFor(item.expected.roomNumbers, rooms) : [];
-  let finalResponse = response; let finalBody = body;
-  if (item.expected.roomNumbers && !approvalRequired(response, body) && response.status >= 200 && response.status < 300) {
-    finalResponse = await chat("Reservá la selección actual.", sessionId, `r28-corpus-${item.id}-probe`); const probeRaw = await finalResponse.text(); try { finalBody = probeRaw ? JSON.parse(probeRaw) : {}; } catch { finalBody = { raw: probeRaw }; }
+function exactApproval(item, numbers, rooms, guests) {
+  const ids = numbers.map(number => rooms.find(room => String(room.roomNumber) === number)?.id);
+  const plan = item.body?.approvalPlan, context = item.body?.approvalContext;
+  const targets = numbers.length === 1 ? [plan?.input?.roomId] : plan?.input?.roomIds;
+  return ids.every(Boolean) && approval(item) && plan?.toolId === (numbers.length === 1 ? "hms.createReservation" : "hms.createMultiReservation") && sameSet(ids, targets)
+    && plan.input.checkIn === "2030-01-01" && plan.input.checkOut === "2030-01-03"
+    && context?.stay?.checkIn === "2030-01-01" && context?.stay?.checkOut === "2030-01-03" && context?.stay?.guests === guests && sameSet(ids, context?.selectedRoomIds);
+}
+try {
+  for (const item of corpus.cases) {
+    current = { id: item.id, category: item.category, expected: item.expected, turns: [], pass: false, approvalConsumed: false };
+    transcript.push(current);
+    const guests = item.setupGuests ?? 2;
+    const setup = await chat(`Somos ${guests}. Del 1 al 3 de enero de 2030, ¿qué habitaciones están disponibles?`);
+    const sessionId = setup.body.sessionId, data = setup.body.data;
+    const rooms = Array.isArray(data?.rooms) ? data.rooms : [];
+    current.setup = setup;
+    current.setupValid = setup.status >= 200 && setup.status < 300 && typeof sessionId === "string" && sessionId.length > 0 && data?.source === "hms" && data?.truth === "transactional" && data.start === "2030-01-01" && data.end === "2030-01-03" && data.requestedGuests === guests && ["101", "102", "103"].every(number => rooms.filter(room => String(room.roomNumber) === number).length === 1);
+    requirePass(current.setupValid, "invalid authoritative setup");
+    current.authoritativeRooms = rooms.map(({id, roomNumber}) => ({id, roomNumber}));
+    if (item.priorSelection) {
+      const prior = await chat(`Quiero reservar la ${item.priorSelection}.`, sessionId);
+      requirePass(exactApproval(prior, [item.priorSelection], rooms, guests), "prior selection did not reach exact unconsumed HITL");
+    }
+    const initial = await chat(item.message, sessionId); current.initial = initial;
+    let final = initial;
+    if (item.expected.clarification) {
+      requirePass(clarification(initial, item.expected.clarification), "missing explicit selection clarification");
+      if (item.priorSelection) {
+        final = await chat("Reservá la selección actual.", sessionId);
+        requirePass(clarification(final, item.expected.clarification), "invalid reference left stale selection authorizable");
+      }
+    } else {
+      // A non-write selection may need one explicit reservation instruction; an
+      // invalid/clarifying selection must never be rescued by another request.
+      if (!approval(initial)) {
+        requirePass(initial.status >= 200 && initial.status < 300 && initial.body.outcome !== "clarification", "selection failed before reservation instruction");
+        final = await chat("Reservá la selección actual.", sessionId);
+      }
+      requirePass(exactApproval(final, item.expected.roomNumbers, rooms, guests), "final plan differs from latest authoritative selection/stay");
+    }
+    current.final = final;
+    current.observedOutcome = initial.body?.outcome;
+    current.observedMissing = initial.body?.missing;
+    current.approvalTarget = final.body?.approvalPlan?.input?.roomIds ?? final.body?.approvalPlan?.input?.roomId ?? [];
+    current.approvalSummary = final.body?.approvalSummary ?? null;
+    current.mutationSignals = [...mutationSignals];
+    current.pass = true;
   }
-  const target = approvalTarget({ body: finalBody });
-  const summaryIds = uuidTargets(finalBody.approvalSummary);
-  const observedTargets = target.length ? target : summaryIds;
-  const targetMatches = item.expected.roomNumbers ? expectedIds.length === item.expected.roomNumbers.length && observedTargets.length === expectedIds.length && observedTargets.every((id) => expectedIds.includes(id)) : observedTargets.length === 0;
-  const approval = approvalRequired(finalResponse, finalBody);
-  const mutationSignals = [availabilityBody, body, finalBody].filter((value, index, all) => index === all.indexOf(value)).filter((value) => mutationFields.test(JSON.stringify(value)));
-  const mutation = mutationSignals.length > 0;
-  const clarification = item.expected.clarification ? clarificationOutcome(response, body, item.expected.clarification, mutation) : false;
-  const pass = setupValid && (item.expected.clarification ? clarification : !mutation && targetMatches && approval);
-  transcript.push({ id: item.id, category: item.category, expected: item.expected, setupValid, initial: { status: response.status, body, observedOutcome: body.outcome, observedMissing: body.missing }, final: { status: finalResponse.status, body: finalBody, observedOutcome: finalBody.outcome, observedMissing: finalBody.missing }, authoritativeRooms: rooms.map(({ id, roomNumber }) => ({ id, roomNumber })), approvalConsumed: false, mutation, mutationSignals, clarification, pass });
-}
-const failed = transcript.filter((item) => !item.pass);
-const report = { event: failed.length === 0 ? "ACP_R2_8_4_LLM_CORPUS_COMPLETE" : "ACP_R2_8_4_LLM_CORPUS_FAIL", version: corpus.version, cases: transcript.length, hmsMutationRequests: transcript.filter((item) => item.mutation).length, approvalConsumed: false, externallyUnassertable: ["server audit correlation of every downstream mutation requires observability attachment"], results: transcript.map(({ id, pass, mutation, approvalConsumed, clarification, initial, final }) => ({ id, pass, mutation, clarification, observedOutcome: initial.observedOutcome, observedMissing: initial.observedMissing, finalOutcome: final.observedOutcome, finalMissing: final.observedMissing, approvalConsumed })), transcript };
-console.log(JSON.stringify(report, null, 2));
-if (failed.length > 0) process.exit(1);
+} catch (error) { if (current) current.failure = error.message; }
+const passed = transcript.length === corpus.cases.length && transcript.every(item => item.pass);
+console.log(JSON.stringify({ event: passed ? "ACP_R2_8_4_LLM_CORPUS_COMPLETE" : "ACP_R2_8_4_LLM_CORPUS_FAIL", version: corpus.version, cases: transcript.length, expectedCases: corpus.cases.length, approvalConsumed: false, hmsMutations: "UNKNOWN_PENDING_AUDIT", mutationSignals, results: transcript.map(({id, pass, failure}) => ({id, pass, failure})), transcript }, null, 2));
+if (!passed) process.exitCode = 1;

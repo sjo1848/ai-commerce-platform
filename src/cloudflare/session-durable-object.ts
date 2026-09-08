@@ -128,7 +128,7 @@ export class SessionDurableObject extends DurableObject<Env> {
       if (url.pathname === "/experiment-budget/reserve") {
         const config = body.config as Record<string, unknown> | undefined;
         if (!config || !isFiniteNonNegative(config.configuredMaxNeurons) || !isFiniteNonNegative(config.configuredReserve)
-          || !isFiniteNonNegative(config.conservativeNextCallAllowance) || config.configuredReserve > config.configuredMaxNeurons) return new Response(null, { status: 400 });
+          || !isFiniteNonNegative(config.conservativeNextCallAllowance) || config.conservativeNextCallAllowance <= 0 || config.configuredReserve > config.configuredMaxNeurons) return new Response(null, { status: 400 });
         const raw = this.ctx.storage.kv.get<string>(EXPERIMENT_BUDGET_KEY);
         const state: StoredExperimentBudget = raw === undefined
           ? { experimentId, configuredMaxNeurons: config.configuredMaxNeurons, configuredReserve: config.configuredReserve, conservativeNextCallAllowance: config.conservativeNextCallAllowance, observedProviderNeurons: 0, inferenceCount: 0, updatedAt: new Date().toISOString(), status: "ACTIVE", reservations: {} }

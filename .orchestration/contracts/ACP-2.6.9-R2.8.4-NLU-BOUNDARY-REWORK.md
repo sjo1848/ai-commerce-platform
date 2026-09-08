@@ -24,3 +24,20 @@ Only the LLM may derive, from open natural language, intent or semantic referenc
 ## Gate
 
 This rework is not a technical closure. R2.8.5 remains blocked until the boundary is implemented, reviewed, and verified on the exact deployed artifact.
+
+## Pre-RUN-1 acceptance execution amendment (2026-09-08)
+
+This records the Product Owner's authorized technical REWORK and explicit provider gate.
+It does not authorize deployment, provider inference, approval consumption, merge or closure.
+
+- R2.8.4 validation is manual-only. Ordinary push must run offline CI only.
+- RUN 1 requires explicit human authorization of the current exact PR SHA, a fresh experiment and fresh request/session identities, baseline `@cf/meta/llama-3.3-70b-instruct-fp8-fast`, affinity OFF, and configured budget `7000/7000/0/180` (run cap / configured available / reserve / next-call allowance). Configuration is not proof of live account quota.
+- Prove the unauthenticated zero-inference admission/observability probe before contractual inference.
+- Stop on first contractual failure and retain the partial report; do not send subsequent validation requests to accumulate failures. Missing telemetry is UNKNOWN and fails evidence admission.
+- Exact C06: “Hola. Somos cuatro y queremos quedarnos del 1 al 3 de enero de 2030. ¿Qué tenés disponible?” HMS transactional availability must ground 101 and 102, 2030-01-01 through 2030-01-03, four guests.
+- Exact C07: “Quiero reservar la 101 y la 102.” The only conditional follow-up is “Dos en cada habitación.” when occupancy clarification is naturally required. No rescue/retry turn may satisfy C07.
+- Final evidence must bind authoritative dates, guests, exact rooms and applicable 2+2 occupancy to `hms.createMultiReservation`, `APPROVAL_REQUIRED`, unconsumed approval, zero successful/replayed create/cancel mutation. Server plan and canonical context are evidence, not model-authored facts or approval authority.
+- L01–L15 retain their linguistic requests and expected semantics. Corrections/negations and unknown/ambiguous references must additionally exercise prior-selection replacement/invalidation. Corpus route fallback cannot substitute for real LLM interpretation.
+- Correlate requestId, sessionId, experimentId, trace, exact Worker Version and candidate SHA. Live tail provides immediate stopping evidence; stored logs and durable budget reconciliation are required before RUN 1 is declared reconciled GREEN. A request-ID-only query is insufficient.
+- RUN 2 requires a separate explicit gate after complete GREEN and reconciliation of RUN 1 on the same SHA/config. Two same-SHA consecutive GREENs still require exact-head CI, fresh Critic, Integration Review, SHA-pinned merge, main CI and durable convergence before closure.
+- Consumption Hardening remains historically `DURABLE_BUDGET_E2E_PASS_ISOLATED` / `CONSUMPTION_HARDENING_SUFFICIENT`. Proven current budget safety defects may receive bounded offline corrections; no CH-1.4 or optimization track is opened.

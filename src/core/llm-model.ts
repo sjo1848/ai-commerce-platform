@@ -1,5 +1,5 @@
 import type { ConversationState, ConversationStatePatch } from "./conversation-state.js";
-import { emptyConversationState } from "./conversation-state.js";
+import { applyConversationStatePatch, canonicalSelectedRoomIds, emptyConversationState } from "./conversation-state.js";
 import { ModelProviderError, type ModelProvider } from "./model-provider.js";
 import { recordModelFallback, recordModelInference } from "./model-telemetry.js";
 import type {
@@ -242,7 +242,7 @@ function parseStatePatch(value: unknown): ConversationStatePatch | undefined {
   return patch;
 }
 
-function parseMutationGrounding(value: unknown, tool: ToolDescriptor | undefined, state: Readonly<ConversationState>): MutationGrounding | null | undefined {
+function parseMutationGrounding(value: unknown, tool: ToolDescriptor | undefined, state: Readonly<ConversationState>, patch?: ConversationStatePatch): MutationGrounding | null | undefined {
   if (value === null) return null;
   if (!tool || tool.risk !== "write") return undefined;
   const rooms = state.availabilityRoomIds;
@@ -255,7 +255,16 @@ function parseMutationGrounding(value: unknown, tool: ToolDescriptor | undefined
     ...(state.stay.checkIn ? { checkIn: state.stay.checkIn } : {}),
     ...(state.stay.checkOut ? { checkOut: state.stay.checkOut } : {}),
   });
-  return result.ok ? result.grounding : undefined;
+  if (!result.ok) return undefined;
+  if (result.grounding.kind === "reservation") {
+    const interpreted = applyConversationStatePatch(state, patch);
+    const explicit = patch && Object.keys(patch).some((key) => key.startsWith("selectedRoom"));
+    const ids = canonicalSelectedRoomIds(interpreted);
+    if (interpreted.roomSelectionNeedsClarification
+      || (explicit && (ids.length !== result.grounding.roomIds.length || !ids.every((id) => result.grounding.kind === "reservation" && result.grounding.roomIds.includes(id))))
+      || (interpreted.requestedRoomCount !== undefined && interpreted.requestedRoomCount !== result.grounding.roomIds.length)) return undefined;
+  }
+  return result.grounding;
 }
 
 function isReservationIntent(message: string): boolean {
@@ -450,7 +459,7 @@ export class LLMModelRouter implements ModelRouter {
     if (repaired.kind !== "tool" || typeof repaired.toolId !== "string" || !isRecord(repaired.input) || clarification.reason !== "none" || clarification.missing.length !== 0) return undefined;
     const tool = availableTools.find((candidate) => candidate.id === repaired.toolId);
     if (!tool) return undefined;
-    const mutationGrounding = parseMutationGrounding(repaired.mutationGrounding, tool, state);
+    const mutationGrounding = parseMutationGrounding(repaired.mutationGrounding, tool, state, statePatch);
     if (tool.risk === "write" && !mutationGrounding) return undefined;
     if (hasUnknownTopLevelInput(repaired.input, tool)) return undefined;
     if (JSON.stringify(repaired.input).length > 8_000) return undefined;
@@ -594,8 +603,8 @@ export class LLMModelRouter implements ModelRouter {
         }
         return {
           kind: "message",
-          message: clarificationMessage(clarification.reason, clarification.missing),
-          purpose: messagePurpose(clarification.reason),
+          message: clarificationMessage(clarification.missing.length ? "missing" : clarification.reason, clarification.missing),
+          purpose: clarification.missing.length ? "clarification" : messagePurpose(clarification.reason),
           ...(clarification.missing.length ? { missing: clarification.missing as readonly ModelClarificationField[] } : {}),
           statePatch,
           mutationGrounding: null,
@@ -615,7 +624,7 @@ export class LLMModelRouter implements ModelRouter {
       }
       const tool = availableTools.find((candidate) => candidate.id === value.toolId);
       if (!tool) return this.fallbackRoute("non_visible_tool", message, context, availableTools, conversation, state);
-      const mutationGrounding = parseMutationGrounding(value.mutationGrounding, tool, state);
+      const mutationGrounding = parseMutationGrounding(value.mutationGrounding, tool, state, statePatch);
       if (tool.risk === "write" && !mutationGrounding) return this.fallbackRoute("missing_mutation_grounding", message, context, availableTools, conversation, state);
       if (hasUnknownTopLevelInput(value.input, tool)) return this.fallbackRoute("unknown_tool_argument", message, context, availableTools, conversation, state);
       if (JSON.stringify(value.input).length > 8_000) return this.fallbackRoute("tool_input_too_large", message, context, availableTools, conversation, state);

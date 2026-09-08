@@ -1236,6 +1236,7 @@ export function updateConversationStateFromTool(
   toolId: string,
   input: unknown,
   data: unknown,
+  options: { currentQuery?: boolean } = {},
 ): ConversationState {
   const normalized = normalizeConversationState(current);
   const rawInput = isRecord(input) ? input : {};
@@ -1243,16 +1244,16 @@ export function updateConversationStateFromTool(
   const checkIn = stringField(rawInput.checkIn) ?? stringField(rawData.start);
   const checkOut = stringField(rawInput.checkOut) ?? stringField(rawData.end);
   const guests = validGuests(rawInput.guests) ? Number(rawInput.guests) : undefined;
-  const stale = userConflict(normalized, "checkIn", checkIn)
+  const stale = !options.currentQuery && (userConflict(normalized, "checkIn", checkIn)
     || userConflict(normalized, "checkOut", checkOut)
     || userConflict(normalized, "guests", guests)
-    || (toolId === "hms.checkAvailability" && (authoritativeAvailabilityConflict(normalized, "checkIn", checkIn)
+    || (authoritativeAvailabilityConflict(normalized, "checkIn", checkIn)
       || authoritativeAvailabilityConflict(normalized, "checkOut", checkOut)
       || authoritativeAvailabilityConflict(normalized, "guests", guests)));
-  const completedAvailabilityQuery = toolId === "hms.checkAvailability"
+  const completedAvailabilityQuery = (toolId === "hms.checkAvailability" || toolId === "hms.getQuote")
     && validIsoDate(checkIn)
     && validIsoDate(checkOut)
-    && guests !== undefined
+    && (toolId === "hms.getQuote" || guests !== undefined)
     && !stale;
 
   const patch: ConversationStatePatch = {};
@@ -1260,11 +1261,16 @@ export function updateConversationStateFromTool(
   if (validIsoDate(checkOut)) patch.checkOut = checkOut;
   if (guests !== undefined) patch.guests = guests;
   const intent = conversationIntentForTool(toolId);
-  const next = applyConversationStatePatch(normalized, patch, {
+  let next = applyConversationStatePatch(normalized, patch, {
     semanticSource: "tool",
     ...(completedAvailabilityQuery ? { allowToolOverrideUserStay: true } : {}),
     ...(intent ? { activeIntent: intent, activeIntentSource: "server" as const } : {}),
   });
+
+  if (completedAvailabilityQuery && (normalized.stay.checkIn !== next.stay.checkIn
+    || normalized.stay.checkOut !== next.stay.checkOut || normalized.stay.guests !== next.stay.guests)) {
+    next = clearStaleRoomGrounding(next);
+  }
 
   if (toolId === "hms.checkAvailability") {
     if (stale) return clearStaleRoomGrounding(next);

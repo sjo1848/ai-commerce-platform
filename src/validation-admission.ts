@@ -59,7 +59,7 @@ export function parseValidationConfiguration(config: ValidationAdmissionConfig):
   if (!isFiniteNonNegative(maxNeuronsPerRun)
     || !isFiniteNonNegative(configuredAvailableBudget)
     || !isFiniteNonNegative(configuredReserve)
-    || !isFiniteNonNegative(conservativeExpectedCost)
+    || !isFiniteNonNegative(conservativeExpectedCost) || conservativeExpectedCost <= 0
     || (observedLocalDayNeurons !== undefined && !isFiniteNonNegative(observedLocalDayNeurons))) return { status: "invalid" };
   const budget = {
     maxNeuronsPerRun,

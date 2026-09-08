@@ -34,8 +34,8 @@ function stateWithRooms() {
   );
 }
 
-test("read route without mutation grounding enriches mechanical dates and guests post-route", async () => {
-  const { runtime, context } = await setup({ kind: "tool", plan: { toolId: "hms.checkAvailability", input: {} }, statePatch: {}, mutationGrounding: undefined }, ["hms.checkAvailability"]);
+test("read route without mutation grounding enriches structured dates and guests post-route", async () => {
+  const { runtime, context } = await setup({ kind: "tool", plan: { toolId: "hms.checkAvailability", input: {} }, statePatch: { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 2 }, mutationGrounding: undefined }, ["hms.checkAvailability"]);
   await runtime.orchestrator.chat("Somos dos del 15 al 17 de enero de 2027", context);
   const state = await runtime.conversationState.get(context.session.id);
   assert.deepEqual(state.stay, { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 2 });
@@ -86,7 +86,7 @@ test("successful availability promotes its exact query for reservation HITL whil
   const routes = [
     { kind: "tool", plan: { toolId: "hms.checkAvailability", input: { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 2 } }, statePatch: {}, mutationGrounding: null },
     { kind: "tool", plan: { toolId: "hms.createReservation", input: {} }, statePatch: {}, mutationGrounding: { kind: "reservation", checkIn: "2027-01-15", checkOut: "2027-01-17", roomIds: ["room-a"] } },
-    { kind: "tool", plan: { toolId: "hms.createReservation", input: {} }, statePatch: {}, mutationGrounding: { kind: "reservation", checkIn: "2027-01-15", checkOut: "2027-01-17", roomIds: ["room-a"] } },
+    { kind: "tool", plan: { toolId: "hms.createReservation", input: {} }, statePatch: { checkIn: "2027-01-20", checkOut: "2027-01-22" }, mutationGrounding: { kind: "reservation", checkIn: "2027-01-15", checkOut: "2027-01-17", roomIds: ["room-a"] } },
   ];
   let routeIndex = 0;
   const { runtime, context } = await setup(() => routes[routeIndex++], ["hms.checkAvailability", "hms.createReservation"], { "hms.createReservation": "approval" });
