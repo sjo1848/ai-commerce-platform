@@ -121,6 +121,7 @@ test("validation admission deploy configuration is valid, run-isolated, and secr
   assert.doesNotMatch(workflow.slice(cleanupDeploy, cleanupDeploy + 250), /--var|--secrets-file/);
   assert.match(workflow.slice(cleanup, cleanupDeploy + 1), /if: always\(\)/);
   assert.match(workflow.slice(cleanupDeploy), /cleanup-version\.json/);
+  assert.match(workflow.slice(cleanupDeploy), /full-run validation bindings remain after cleanup/);
   assert.match(workflow.slice(cleanupDeploy), /validation secret remains after cleanup/);
   assert.equal(cleanup > workflow.indexOf("- name: Verify exact active deployment after corpus"), true, "remote cleanup follows corpus/evidence verification");
   assert.match(workflow, /\/tmp\/r28-r4-tail\.log > \/dev\/null 2>&1/);
