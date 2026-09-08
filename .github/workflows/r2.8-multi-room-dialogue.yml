@@ -760,17 +760,30 @@ jobs:
             echo "Validation deployment was never attempted; no remote validation configuration to remove."
             exit 0
           fi
-          # Deploy the checked-out exact source without validation vars or a
-          # secrets file before deleting the validation-only remote secret.
-           ./node_modules/.bin/wrangler deploy --message "R2.8.4 validation cleanup $GITHUB_SHA"
-           printf 'y\n' | ./node_modules/.bin/wrangler secret delete ACP_VALIDATION_RUN_TOKEN --name "$WORKER_NAME"
+          printf 'y\n' | ./node_modules/.bin/wrangler secret delete ACP_VALIDATION_RUN_TOKEN --name "$WORKER_NAME"
+          ./node_modules/.bin/wrangler deploy --keep-vars=false --message "R2.8.4 validation cleanup $GITHUB_SHA" | tee /tmp/r28-r4-cleanup.log
+          cleanup_version="$(node -e 'const fs=require("fs");const text=fs.readFileSync("/tmp/r28-r4-cleanup.log","utf8");const m=[...text.matchAll(/Current Version ID:\s*([0-9a-f-]{36})/gi)].at(-1)?.[1];if(!m)process.exit(2);process.stdout.write(m)')"
+          curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$WORKER_NAME/versions/$cleanup_version" > /tmp/r28-r4-cleanup-version.json
+          ./node_modules/.bin/wrangler secret list --name "$WORKER_NAME" --format json > /tmp/r28-r4-cleanup-secrets.json
+          CLEANUP_VERSION="$cleanup_version" node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          const payload = JSON.parse(readFileSync("/tmp/r28-r4-cleanup-version.json", "utf8"));
+          const version = payload.result ?? payload;
+          if (payload.success === false || version?.id !== process.env.CLEANUP_VERSION) throw new Error("full-run cleanup version metadata mismatch");
+          const bindings = Array.isArray(version?.resources?.bindings) ? version.resources.bindings : [];
+          if (bindings.some(({ name }) => /^ACP_VALIDATION_/.test(name))) throw new Error("full-run validation bindings remain after cleanup");
+          const secrets = JSON.parse(readFileSync("/tmp/r28-r4-cleanup-secrets.json", "utf8"));
+          const secretNames = (secrets.result ?? secrets).map((entry) => entry.name).filter(Boolean);
+          if (secretNames.includes("ACP_VALIDATION_RUN_TOKEN")) throw new Error("full-run validation secret remains after cleanup");
+          console.log(JSON.stringify({ event: "FULL_RUN_VALIDATION_CLEANUP_PASS", versionId: version.id, validationBindingsRemaining: [], validationSecretRemaining: false }));
+          NODE
 
       - name: Remove temporary validation secret file
         if: always()
         shell: bash
         run: |
           set -euo pipefail
-          rm -f "${R28_VALIDATION_SECRETS_FILE:-}"
+          rm -f "${R28_VALIDATION_SECRETS_FILE:-}" /tmp/r28-r4-cleanup-version.json /tmp/r28-r4-cleanup-secrets.json
 
       - name: Sanitize validation headers from tail logs
         id: sanitize_validation_tail_logs
@@ -789,7 +802,10 @@ jobs:
         with:
           name: r2.8-multi-room-dialogue-${{ github.run_id }}
           path: |
-            /tmp/r28-r4-deploy.log
+           /tmp/r28-r4-deploy.log
+            /tmp/r28-r4-cleanup.log
+            /tmp/r28-r4-cleanup-version.json
+            /tmp/r28-r4-cleanup-secrets.json
             /tmp/r28-r4-probe-tail.log
             /tmp/r28-r4-tail-probe.txt
             /tmp/r28-r4-probe-status.txt
