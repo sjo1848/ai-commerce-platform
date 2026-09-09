@@ -491,26 +491,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          status="$(curl -sS --max-time 10 -D /tmp/r28-r4-readiness-headers.txt -o /tmp/r28-r4-root.html -w '%{http_code}' "$AI_COMMERCE_STAGING_URL/" || true)"
-          if [[ "$status" != "403" ]]; then
-            echo "Validation admission readiness returned HTTP ${status:-curl-error}; expected exactly 403." >&2
-            exit 1
-          fi
-          R28_VERSION_ID="$R28_VERSION_ID" node --input-type=module <<'NODE'
-          import { readFileSync, writeFileSync } from "node:fs";
-          const raw = readFileSync("/tmp/r28-r4-readiness-headers.txt", "utf8");
-          const blocks = raw.trim().split(/\r?\n\r?\n/);
-          const response = blocks.at(-1);
-          if (!response?.startsWith("HTTP/")) throw new Error("readiness response headers unavailable");
-          const headers = new Headers(response.split(/\r?\n/).slice(1).flatMap((line) => {
-            const separator = line.indexOf(":");
-            return separator < 1 ? [] : [[line.slice(0, separator), line.slice(separator + 1).trim()]];
-          }));
-          const runtimeVersionId = headers.get("x-acp-validation-runtime-version");
-          if (!runtimeVersionId) throw new Error("readiness response omitted immutable runtime version header");
-          if (runtimeVersionId !== process.env.R28_VERSION_ID) throw new Error("readiness response runtime version does not match exact active version");
-          writeFileSync("/tmp/r28-r4-runtime-identity-proof.json", JSON.stringify({ event: "EXACT_ACTIVE_RUNTIME_RESPONSE", status: 403, runtimeVersionId }));
-          NODE
+          R28_READINESS_URL="$AI_COMMERCE_STAGING_URL/" R28_VERSION_ID="$R28_VERSION_ID" node scripts/r2.8-full-run-readiness.mjs > /tmp/r28-r4-runtime-identity-proof.json
           echo "R28_EVIDENCE_FROM_MS=$(date +%s%3N)" >> "$GITHUB_ENV"
 
       - name: Prove foreground tail and unauthenticated observability probe

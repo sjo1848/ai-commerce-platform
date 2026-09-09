@@ -48,15 +48,9 @@ test("validation deployment readiness rejects 2xx and 404 instead of treating th
     workflow.indexOf("- name: Prove full RUN 1 readiness response before provider runner"),
     workflow.indexOf("- name: Prove foreground tail and unauthenticated observability probe"),
   );
-  assert.match(readiness, /if \[\[ "\$status" != "403" \]\]/);
-  assert.match(readiness, /expected exactly 403/);
-  assert.doesNotMatch(readiness, /\$status" == 2\*/);
-  assert.match(readiness, /-D \/tmp\/r28-r4-readiness-headers\.txt/);
-  assert.match(readiness, /x-acp-validation-runtime-version/);
-  assert.match(readiness, /runtimeVersionId !== process\.env\.R28_VERSION_ID/);
+  assert.match(readiness, /R28_READINESS_URL="\$AI_COMMERCE_STAGING_URL\/" R28_VERSION_ID="\$R28_VERSION_ID" node scripts\/r2\.8-full-run-readiness\.mjs/);
   assert.doesNotMatch(readiness, /wrangler tail|r2\.8-validation-preflight\.mjs/);
   assert.doesNotMatch(readiness, /query-workers-observability\.mjs/);
-  assert.match(readiness, /\$status" != "403"/);
 });
 
 test("validation-admission-only mode is provider-free and correlates bindings, version, and 403 proofs", () => {

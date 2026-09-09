@@ -12,15 +12,12 @@ test("empty or unavailable historical observability is UNKNOWN_NOT_VISIBLE, neve
   assert.doesNotMatch(JSON.stringify(classifyHistoricalObservability({ raw: JSON.stringify({ success: true, result: { events: [] } }) })), /consumption|zero|0/i);
 });
 
-test("full runner starts only after the same GET proves exact 403 runtime identity and historical query is supplemental", () => {
+test("full runner starts only after bounded GET convergence proves exact 403 runtime identity and historical query is supplemental", () => {
   const readiness = workflow.slice(workflow.indexOf("- name: Prove full RUN 1 readiness response before provider runner"), workflow.indexOf("- name: Prove foreground tail"));
   const historical = workflow.slice(workflow.indexOf("- name: Historical observability preflight query"), workflow.indexOf("- name: Real-model natural multi-room dialogue"));
   const broadHistorical = workflow.slice(workflow.indexOf("- name: Preserve broad historical evidence"), workflow.indexOf("- name: Remove remotely deployed validation configuration"));
-  assert.match(readiness, /\$status" != "403"/);
-  assert.match(readiness, /-D \/tmp\/r28-r4-readiness-headers\.txt/);
-  assert.match(readiness, /x-acp-validation-runtime-version/);
-  assert.match(readiness, /runtimeVersionId !== process\.env\.R28_VERSION_ID/);
-  assert.doesNotMatch(readiness, /wrangler tail|r2\.8-validation-preflight|grep -Fq|seq 1/);
+  assert.match(readiness, /R28_READINESS_URL=.*R28_VERSION_ID=.*r2\.8-full-run-readiness\.mjs/);
+  assert.doesNotMatch(readiness, /wrangler tail|r2\.8-validation-preflight|grep -Fq|query-workers-observability/);
   assert.doesNotMatch(readiness, /query-workers-observability/);
   assert.match(historical, /set \+e/);
   assert.match(historical, /r2\.8-historical-observability-status\.mjs/);
