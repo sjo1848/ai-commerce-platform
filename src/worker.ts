@@ -24,6 +24,7 @@ import { createWebchatHandler } from "./webchat/handler.js";
 export { SessionDurableObject };
 
 export const VALIDATION_RUNTIME_VERSION_HEADER = "x-acp-validation-runtime-version";
+const BASELINE_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 
 type Env = {
   AI: WorkersAiBinding;
@@ -130,7 +131,12 @@ function handler(env: Env, validationConfiguration: ValidationConfiguration): (r
   const provider = validationBudget && validationConfiguration.status === "valid"
     ? new DurableExperimentBudgetProvider(workersAiProvider, new DurableObjectExperimentNeuronBudgetStore(env.SESSIONS, validationConfiguration.experimentId), validationExperimentBudget(validationBudget), recordExperimentBudgetTelemetry)
     : workersAiProvider;
-  const model = new LLMModelRouter(provider, new DeterministicModelRouter(), usage);
+  const model = new LLMModelRouter(
+    provider,
+    new DeterministicModelRouter(),
+    usage,
+    validationConfiguration.status === "valid" && (!env.ACP_MODEL_ID || env.ACP_MODEL_ID === BASELINE_MODEL),
+  );
   const responder = new LLMGroundedResponder(provider, undefined, usage);
   const conversationStore = new DurableObjectConversationStore(env.SESSIONS);
   const runtime = new AgentCoreRuntime({
@@ -148,6 +154,7 @@ function handler(env: Env, validationConfiguration: ValidationConfiguration): (r
     fixedTenantId: "hotel-demo",
     fixedActorId: "visitor-demo",
     approvalStore: new DurableObjectApprovalStore(env.SESSIONS),
+    exposeValidationRouteProvenance: validationConfiguration.status === "valid" && (!env.ACP_MODEL_ID || env.ACP_MODEL_ID === BASELINE_MODEL),
   });
   return handle;
 }

@@ -122,7 +122,7 @@ test("full-run readiness stops after six immediate failures when the injected cl
 
 test("full-run workflow gates all runners behind bounded read-only readiness", () => {
   const readinessStart = workflow.indexOf("- name: Prove full RUN 1 readiness response before provider runner");
-  const readinessEnd = workflow.indexOf("- name: Prove foreground tail and unauthenticated observability probe");
+  const readinessEnd = workflow.indexOf("- name: Prove synchronous unauthenticated admission before provider runner");
   const runnerStart = workflow.indexOf("- name: Real-model natural multi-room dialogue");
   const readiness = workflow.slice(readinessStart, readinessEnd);
   assert.match(readiness, /R28_READINESS_URL=.*R28_VERSION_ID=.*node scripts\/r2\.8-full-run-readiness\.mjs/);

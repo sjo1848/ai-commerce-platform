@@ -12,20 +12,34 @@ test("empty or unavailable historical observability is UNKNOWN_NOT_VISIBLE, neve
   assert.doesNotMatch(JSON.stringify(classifyHistoricalObservability({ raw: JSON.stringify({ success: true, result: { events: [] } }) })), /consumption|zero|0/i);
 });
 
-test("full runner starts only after bounded GET convergence proves exact 403 runtime identity and historical query is supplemental", () => {
-  const readiness = workflow.slice(workflow.indexOf("- name: Prove full RUN 1 readiness response before provider runner"), workflow.indexOf("- name: Prove foreground tail"));
+test("full runner starts only after bounded GET convergence and synchronous admission; transport is supplemental", () => {
+  const readiness = workflow.slice(workflow.indexOf("- name: Prove full RUN 1 readiness response before provider runner"), workflow.indexOf("- name: Prove synchronous unauthenticated admission"));
+  const admission = workflow.slice(workflow.indexOf("- name: Prove synchronous unauthenticated admission"), workflow.indexOf("- name: Historical observability preflight query"));
   const historical = workflow.slice(workflow.indexOf("- name: Historical observability preflight query"), workflow.indexOf("- name: Real-model natural multi-room dialogue"));
   const broadHistorical = workflow.slice(workflow.indexOf("- name: Preserve broad historical evidence"), workflow.indexOf("- name: Remove remotely deployed validation configuration"));
   assert.match(readiness, /R28_READINESS_URL=.*R28_VERSION_ID=.*r2\.8-full-run-readiness\.mjs/);
   assert.doesNotMatch(readiness, /wrangler tail|r2\.8-validation-preflight|grep -Fq|query-workers-observability/);
   assert.doesNotMatch(readiness, /query-workers-observability/);
+  assert.match(admission, /curl -sS.*-X POST/);
+  assert.match(admission, /status" != "403"/);
+  assert.doesNotMatch(admission, /wrangler tail|grep -Fq|r2\.8-validation-preflight/);
   assert.match(historical, /set \+e/);
   assert.match(historical, /r2\.8-historical-observability-status\.mjs/);
   assert.match(historical, /UNKNOWN_NOT_VISIBLE, never zero consumption/);
   assert.match(broadHistorical, /set \+e/);
   assert.match(broadHistorical, /UNKNOWN_NOT_VISIBLE, never zero consumption/);
-  assert.equal(workflow.indexOf("- name: Real-model natural multi-room dialogue") > workflow.indexOf("- name: Prove full RUN 1 readiness response before provider runner"), true);
+  assert.equal(workflow.indexOf("- name: Real-model natural multi-room dialogue") > workflow.indexOf("- name: Prove synchronous unauthenticated admission"), true);
   assert.match(workflow, /if \[\[ "\$code" -ne 0 \]\]; then[\s\S]*?exit 0[\s\S]*?node scripts\/r2\.8\.4-llm-language-corpus/);
+});
+
+test("validation-admission-only uses direct response proof and leaves telemetry supplemental", () => {
+  const validation = workflow.slice(workflow.indexOf("  validation-admission:"), workflow.indexOf("  dialogue:"));
+  assert.match(validation, /DIRECT_PRE_ADMISSION_RUNTIME_PROOF/);
+  assert.match(validation, /status: 403/);
+  assert.match(validation, /runtimeWorkerVersionId: observedVersion/);
+  assert.match(validation, /validationStatus: "valid"/);
+  assert.match(validation, /telemetry: "UNKNOWN_NOT_CAPTURED"/);
+  assert.doesNotMatch(validation, /wrangler tail|query-workers-observability|r2\.8-validation-preflight/);
 });
 
 test("validation identity header is derived only from immutable runtime metadata and is absent when validation is disabled", () => {

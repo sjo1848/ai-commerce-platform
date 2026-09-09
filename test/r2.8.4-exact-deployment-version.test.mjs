@@ -13,47 +13,30 @@ test("R2.8.4 staging binds evidence to exact deployed version and shared concurr
   assert.match(workflow, /--version-id .*R28_VERSION_ID/); assert.match(workflow, /r2\.8\.4-llm-language-corpus\.mjs/);
   assert.doesNotMatch(workflow, /npx wrangler/);
   assert.match(workflow, /\.\/node_modules\/\.bin\/wrangler tail/);
-  assert.match(workflow, /timeout 45s script/);
-  assert.match(workflow, /PROBE_TAIL_PID/);
-  assert.match(workflow, /kill -0.*PROBE_TAIL_PID/);
-  assert.equal((workflow.match(/\/tmp\/r28-r4-(?:probe-)?tail\.log > \/dev\/null 2>&1/g) ?? []).length, 2);
-  assert.match(workflow, /PROBE_CAPTURED=false/);
-  assert.match(workflow, /PROBE_FAILURE=""/);
-  assert.match(workflow, /seq 1 2/);
-  assert.match(workflow, /for poll in \$\(seq 1 10\)/);
+  assert.doesNotMatch(workflow.slice(workflow.indexOf("- name: Prove synchronous unauthenticated admission"), workflow.indexOf("- name: Historical observability preflight query")), /wrangler tail|PROBE_TAIL_PID|grep -Fq/);
   assert.match(workflow, /printf '%s' "\$status" > \/tmp\/r28-r4-probe-status\.txt/);
   assert.match(workflow, /"\$status" != "403"/);
-  assert.match(workflow, /intentionally unauthenticated 403 probe/);
+  assert.match(workflow, /validation admission probe returned HTTP/);
   assert.match(workflow, /if \[\[ "\$status" != "403" \]\]/);
   assert.doesNotMatch(workflow, /status" == 2\* \|\| "\$status" == "403"/);
-  assert.match(workflow, /grep -Fq "\$probe_path" \/tmp\/r28-r4-probe-tail\.log/);
-  assert.match(workflow, /tail exited while waiting to capture probe/);
-  assert.match(workflow, /did not capture intentionally unauthenticated 403 probe \$probe_path within bounded interval/);
-  assert.match(workflow, /kill -INT.*PROBE_TAIL_PID/);
   assert.match(workflow, /r28-r4-llm-corpus-report/); assert.match(workflow, /r28-r4-llm-corpus-code/); assert.match(workflow, /timeout 600s/); assert.match(workflow, /r2\.8\.4-llm-language-corpus/); assert.match(workflow, /ai-commerce-staging/); assert.match(evalWorkflow, /group: ai-commerce-staging/);
-  assert.match(workflow, /EXPECTED_MODEL/); assert.match(workflow, /routeInferences/); assert.match(workflow, /routeFallbacks/); assert.match(workflow, /UNKNOWN_NOT_CAPTURED/);
-  assert.match(workflow, /CORPUS_REPORT/); assert.match(workflow, /for \(const item of report\.transcript/); assert.match(workflow, /missing availability audit/); assert.match(workflow, /corpus mutation/); assert.doesNotMatch(workflow, /name: Run LLM language corpus/);
-  const corpusGate = workflow.slice(workflow.indexOf("for (const item of report.transcript"), workflow.indexOf("EXPECTED_MODEL=\"$EXPECTED_MODEL\" MODEL_TELEMETRY", workflow.indexOf("for (const item of report.transcript")));
-  assert.match(corpusGate, /UNKNOWN_NOT_CAPTURED/); assert.doesNotMatch(corpusGate, /inf\.length<2|model\.models\.includes/); assert.match(workflow, /if \(routeFallbacks\.length > 0\)/);
-  const modelCounter = 'MODEL_TELEMETRY="$(R28_VERSION_ID="$R28_VERSION_ID" node scripts/count-model-telemetry.mjs /tmp/r28-r4-tail.log)"';
-  const modelPostchecks = workflow.slice(workflow.indexOf(modelCounter), workflow.indexOf("AUDIT_TELEMETRY=\"$AUDIT_TELEMETRY\" REPORT_PATH", workflow.indexOf(modelCounter)));
-  assert.doesNotMatch(modelPostchecks, /modelInferences === 0|routeInferences\.length <|model mismatch|missing token evidence/);
-  assert.match(modelPostchecks, /status: captured \? 'CAPTURED' : 'UNKNOWN_NOT_CAPTURED'/);
-  assert.match(modelPostchecks, /R28_VERSION_ID="\$R28_VERSION_ID" node scripts\/count-(?:model-telemetry|audit-events)\.mjs/);
+  assert.match(workflow, /EXPECTED_MODEL/); assert.match(workflow, /UNKNOWN_NOT_CAPTURED/);
+  assert.match(workflow, /CORPUS_REPORT/); assert.match(workflow, /direct corpus predicate failed/); assert.doesNotMatch(workflow, /missing availability audit|corpus mutation/); assert.doesNotMatch(workflow, /name: Run LLM language corpus/);
+  assert.match(workflow, /direct composite HITL\/no-mutation proof failed/);
   assert.match(dialogue, /function uniqueExactSet/); assert.match(dialogue, /approvalTargetsExact/); assert.match(dialogue, /expectedRoomIds/);
 });
 
 test("validation deployment readiness rejects 2xx and 404 instead of treating them as admitted", () => {
   const readiness = workflow.slice(
     workflow.indexOf("- name: Prove full RUN 1 readiness response before provider runner"),
-    workflow.indexOf("- name: Prove foreground tail and unauthenticated observability probe"),
+    workflow.indexOf("- name: Prove synchronous unauthenticated admission before provider runner"),
   );
   assert.match(readiness, /R28_READINESS_URL="\$AI_COMMERCE_STAGING_URL\/" R28_VERSION_ID="\$R28_VERSION_ID" node scripts\/r2\.8-full-run-readiness\.mjs/);
   assert.doesNotMatch(readiness, /wrangler tail|r2\.8-validation-preflight\.mjs/);
   assert.doesNotMatch(readiness, /query-workers-observability\.mjs/);
 });
 
-test("validation-admission-only mode is provider-free and correlates bindings, version, and 403 proofs", () => {
+test("validation-admission-only mode is provider-free and uses direct pre-admission binding/version/403 proof", () => {
   const validation = workflow.slice(workflow.indexOf("  validation-admission:"), workflow.indexOf("  dialogue:"));
   assert.match(validation, /mode == 'validation-admission-only'/);
   assert.match(validation, /workers\/scripts\/\$WORKER_NAME\/versions\/\$R28_PRIOR_VERSION/);
@@ -61,22 +44,18 @@ test("validation-admission-only mode is provider-free and correlates bindings, v
   assert.match(validation, /workers\/scripts\/\$WORKER_NAME\/deployments/);
   assert.match(validation, /R28_VERSION_ID=.*GITHUB_SHA|tag.*GITHUB_SHA/);
   assert.match(validation, /validation root returned HTTP/);
-  assert.match(validation, /Capture both-method zero-inference runtime identity proof/);
-  assert.match(validation, /seq 1 4/);
-  assert.match(validation, /r2\.8-runtime-version-diagnostic\.mjs/);
-  assert.match(validation, /validation probe returned HTTP/);
-  assert.match(validation, /R28_PROBE_PATH=.*r2\.8-validation-preflight/);
-  assert.doesNotMatch(validation, /--method POST/);
-  assert.match(validation, /query-workers-observability\.mjs/);
-  assert.match(validation, /modelInferences !== 0/);
+  assert.match(validation, /Capture direct pre-admission runtime identity proof/);
+  assert.match(validation, /-D \/tmp\/r28-admission-root-headers\.txt/);
+  assert.match(validation, /x-acp-validation-runtime-version/);
+  assert.match(validation, /DIRECT_PRE_ADMISSION_RUNTIME_PROOF/);
+  assert.match(validation, /applicationRequest: false/);
+  assert.match(validation, /telemetry: "UNKNOWN_NOT_CAPTURED"/);
+  assert.doesNotMatch(validation, /wrangler tail|query-workers-observability|r2\.8-runtime-version-diagnostic|r2\.8-validation-preflight|count-model-telemetry|count-audit-events/);
+  assert.doesNotMatch(validation, /-X POST/);
   assert.doesNotMatch(validation, /r2\.8-multi-room-dialogue\.mjs|r2\.8\.4-llm-language-corpus\.mjs|api\/chat|api\/approve/);
   assert.doesNotMatch(validation, /Cloudflare-Workers-Version-Overrides/);
-  const tailStart = validation.indexOf("wrangler tail '$WORKER_NAME' --version-id '$R28_VERSION_ID' --format=json");
-  const getLoop = validation.indexOf("for attempt in $(seq 1 4)");
-  const postProbe = validation.indexOf('probe_path="/__r28-admission-probe?run=');
-  assert.equal(tailStart > -1 && tailStart < getLoop && getLoop < postProbe, true, "one no-method-filter tail must span GET convergence and the unique POST");
-  assert.match(validation.slice(getLoop, postProbe), /query-workers-observability\.mjs/);
-  assert.doesNotMatch(validation.slice(getLoop, postProbe), /-X POST/);
+  assert.match(validation, /status !== "403"/);
+  assert.match(validation, /observedVersion !== version/);
   const cleanupDeploy = validation.indexOf('./node_modules/.bin/wrangler deploy --keep-vars=false --message "R2.8.4 admission proof cleanup $GITHUB_SHA"');
   const cleanupSecretDelete = validation.indexOf('printf \'y\\n\' | ./node_modules/.bin/wrangler secret delete ACP_VALIDATION_RUN_TOKEN --name "$WORKER_NAME"');
   assert.equal(cleanupSecretDelete > -1 && cleanupSecretDelete < cleanupDeploy, true, "validation secret must be deleted before cleanup version is created");
@@ -142,18 +121,7 @@ test("validation admission deploy configuration is valid, run-isolated, and secr
   );
   assert.match(workflow, /id: sanitize_validation_tail_logs/);
   assert.match(workflow, /if: \$\{\{ always\(\) && steps\.sanitize_validation_tail_logs\.outcome == 'success' \}\}/);
-  assert.equal(
-    workflow.indexOf("node scripts/redact-validation-tail.mjs /tmp/r28-r4-probe-tail.log")
-      < workflow.indexOf("cat /tmp/r28-r4-probe-tail.log"),
-    true,
-    "probe tail must be redacted before diagnostic output",
-  );
-  assert.equal(
-    workflow.indexOf("node scripts/redact-validation-tail.mjs /tmp/r28-r4-tail.log")
-      < workflow.indexOf("MODEL_TELEMETRY=\"$(R28_VERSION_ID=\"$R28_VERSION_ID\" node scripts/count-model-telemetry.mjs /tmp/r28-r4-tail.log)\""),
-    true,
-    "corpus tail must be redacted before telemetry",
-  );
+  assert.match(workflow, /MODEL_TELEMETRY='\{"status":"UNKNOWN_NOT_CAPTURED"\}'/);
   for (const artifactPath of ["/tmp/r28-r4-probe-tail.log", "/tmp/r28-r4-tail.log"]) {
     assert.match(workflow, new RegExp(`node scripts/redact-validation-tail\\.mjs .*${artifactPath.slice(5).replaceAll(".", "\\.")}`));
     assert.match(workflow, new RegExp(`\\s+${artifactPath.replaceAll(".", "\\.")}\\s*$`, "m"));

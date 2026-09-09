@@ -80,18 +80,18 @@ test("workflow isolates observability credentials from validation and provider r
   assert.match(historicalJob, /query-workers-observability\.mjs/);
   assert.doesNotMatch(historicalJob, /wrangler tail|curl|r2\.8-multi-room-dialogue|r2\.8\.4-llm-language-corpus/);
   assert.match(validationJob, /mode == 'validation-admission-only'/);
-  assert.match(validationJob, /CLOUDFLARE_OBSERVABILITY_API_TOKEN: \$\{\{ secrets\.CLOUDFLARE_OBSERVABILITY_API_TOKEN \}\}/);
-  assert.match(validationJob, /node scripts\/query-workers-observability\.mjs/);
+  assert.doesNotMatch(validationJob, /CLOUDFLARE_OBSERVABILITY_API_TOKEN|query-workers-observability|wrangler tail/);
+  assert.match(validationJob, /DIRECT_PRE_ADMISSION_RUNTIME_PROOF/);
   assert.doesNotMatch(validationJob, /r2\.8-multi-room-dialogue\.mjs|r2\.8\.4-llm-language-corpus\.mjs|api\/chat|api\/approve/);
   assert.doesNotMatch(dialogueJob, /CLOUDFLARE_OBSERVABILITY_API_TOKEN/);
   assert.match(dialogueJob, /CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.CLOUDFLARE_API_TOKEN \}\}/);
-  assert.equal((workflow.match(/CLOUDFLARE_OBSERVABILITY_API_TOKEN: \$\{\{ secrets\.CLOUDFLARE_OBSERVABILITY_API_TOKEN \}\}/g) ?? []).length, 5);
-  assert.equal(workflow.split('test -n "${CLOUDFLARE_OBSERVABILITY_API_TOKEN//[[:space:]]/}"').length - 1, 3);
-  const tailProbe = workflow.slice(workflow.indexOf("- name: Prove foreground tail"), workflow.indexOf("- name: Historical observability preflight query"));
+  assert.equal((workflow.match(/CLOUDFLARE_OBSERVABILITY_API_TOKEN: \$\{\{ secrets\.CLOUDFLARE_OBSERVABILITY_API_TOKEN \}\}/g) ?? []).length, 3);
+  assert.equal(workflow.split('test -n "${CLOUDFLARE_OBSERVABILITY_API_TOKEN//[[:space:]]/}"').length - 1, 1);
+  const tailProbe = workflow.slice(workflow.indexOf("- name: Prove synchronous unauthenticated admission"), workflow.indexOf("- name: Historical observability preflight query"));
   const preflight = workflow.slice(workflow.indexOf("- name: Historical observability preflight query"), workflow.indexOf("- name: Real-model natural multi-room dialogue"));
   const dialogue = workflow.slice(workflow.indexOf("- name: Real-model natural multi-room dialogue"), workflow.indexOf("- name: Verify exact active deployment after corpus"));
   const broadEvidence = workflow.slice(workflow.indexOf("- name: Preserve broad historical evidence"), workflow.indexOf("- name: Remove remotely deployed validation configuration"));
-  assert.match(tailProbe, /\.\/node_modules\/\.bin\/wrangler tail/);
+  assert.doesNotMatch(tailProbe, /wrangler tail|grep -Fq|r2\.8-validation-preflight/);
   assert.match(tailProbe, /curl -sS/);
   assert.doesNotMatch(tailProbe, /CLOUDFLARE_OBSERVABILITY_API_TOKEN|query-workers-observability/);
   assert.match(preflight, /node scripts\/query-workers-observability\.mjs/);
@@ -111,14 +111,13 @@ test("workflow isolates observability credentials from validation and provider r
   const observabilitySteps = workflow
     .split(/^      - name: /m)
     .filter((step) => step.includes("CLOUDFLARE_OBSERVABILITY_API_TOKEN"));
-  assert.equal(observabilitySteps.length, 6);
+  assert.equal(observabilitySteps.length, 4);
   const querySteps = observabilitySteps.filter((step) => step.includes("query-workers-observability.mjs"));
-  assert.equal(querySteps.length, 4);
+  assert.equal(querySteps.length, 2);
   for (const step of querySteps) {
     assert.match(step, /query-workers-observability\.mjs/);
     assert.doesNotMatch(step, /r2\.8-multi-room-dialogue|r2\.8\.4-llm-language-corpus/);
-    if (step.includes("Capture both-method zero-inference runtime identity proof")) assert.match(step, /wrangler tail/);
-    else assert.doesNotMatch(step, /wrangler tail/);
+    assert.doesNotMatch(step, /wrangler tail/);
   }
 });
 

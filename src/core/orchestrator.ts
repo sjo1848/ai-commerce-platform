@@ -1,4 +1,4 @@
-import { CoreError } from "./errors.js";
+import { ApprovalRequiredError, CoreError } from "./errors.js";
 import type { AuditSink } from "./audit.js";
 import { serializeToolResult, type ConversationStore } from "./conversation.js";
 import {
@@ -34,6 +34,7 @@ import type {
   ToolDescriptor,
   ToolExecutionMeta,
   ToolPlan,
+  ValidationRouteProvenanceReceipt,
 } from "./types.js";
 import type { ToolRegistry } from "./tool-registry.js";
 import type { UsageSink } from "./usage.js";
@@ -45,6 +46,7 @@ export type ChatResult = {
   data?: unknown;
   outcome?: "clarification";
   missing?: readonly ModelClarificationField[];
+  validationRouteProvenance?: ValidationRouteProvenanceReceipt;
 };
 
 function modelVisibleConversation(turns: readonly ModelConversationTurn[]): ModelConversationTurn[] {
@@ -235,6 +237,10 @@ function sameBookingGrounding(left: readonly ReservationGroupBooking[], right: r
 export class ChatOrchestrator {
   private readonly reservationGroupState: ReservationGroupStateStore;
 
+  private withValidationRouteProvenance(result: ChatResult, provenance?: ValidationRouteProvenanceReceipt): ChatResult {
+    return provenance ? { ...result, validationRouteProvenance: provenance } : result;
+  }
+
   constructor(
     private readonly model: ModelRouter,
     private readonly responder: ModelResponder,
@@ -354,7 +360,7 @@ export class ChatOrchestrator {
     }
   }
 
-  private async clarification(message: string, normalized: string, context: ExecutionContext, missing?: ModelClarificationField[]): Promise<ChatResult> {
+  private async clarification(message: string, normalized: string, context: ExecutionContext, missing?: ModelClarificationField[], provenance?: ValidationRouteProvenanceReceipt): Promise<ChatResult> {
     const conversationalContext = modelVisibleConversation(await this.conversation.list(context.session.id, 32));
     const reply = await this.responder.compose({
       kind: "message",
@@ -366,7 +372,7 @@ export class ChatOrchestrator {
       context,
     });
     await this.conversation.append(context.session.id, { role: "assistant", content: reply });
-    return { message: reply, sessionId: context.session.id, outcome: "clarification", missing: missing ?? [] };
+    return this.withValidationRouteProvenance({ message: reply, sessionId: context.session.id, outcome: "clarification", missing: missing ?? [] }, provenance);
   }
 
   private async unsupportedMultiRoom(normalized: string, context: ExecutionContext): Promise<ChatResult> {
@@ -383,7 +389,7 @@ export class ChatOrchestrator {
     return { message: reply, sessionId: context.session.id };
   }
 
-  private async executePlan(plan: ToolPlan, context: ExecutionContext, trustedMeta: ToolExecutionMeta, freshReadRoute = false): Promise<ChatResult> {
+  private async executePlan(plan: ToolPlan, context: ExecutionContext, trustedMeta: ToolExecutionMeta, freshReadRoute = false, provenance?: ValidationRouteProvenanceReceipt): Promise<ChatResult> {
     if (this.maxToolCalls < 1) throw new CoreError("LIMIT_EXCEEDED", "Tool-call limit reached", 429);
     const tools = this.registry.descriptorsFor(context.tenant);
     const visible = tools.some((tool) => tool.id === plan.toolId);
@@ -393,7 +399,13 @@ export class ChatOrchestrator {
     }
 
     const queryBaseline = await this.conversationState.get(context.session.id);
-    const data = await this.executor.execute(plan.toolId, plan.input, context, trustedMeta);
+    let data: unknown;
+    try {
+      data = await this.executor.execute(plan.toolId, plan.input, context, trustedMeta);
+    } catch (error) {
+      if (error instanceof ApprovalRequiredError && provenance) error.validationRouteProvenance = provenance;
+      throw error;
+    }
     const before = await this.conversationState.get(context.session.id);
     const sameList = (left: readonly string[] | undefined, right: readonly string[] | undefined) =>
       JSON.stringify(left ?? []) === JSON.stringify(right ?? []);
@@ -405,7 +417,7 @@ export class ChatOrchestrator {
       && sameList(before.selectedRoomIds, queryBaseline.selectedRoomIds)
       && sameList(before.availabilityRoomIds, queryBaseline.availabilityRoomIds);
     if ((plan.toolId === "hms.checkAvailability" || plan.toolId === "hms.getQuote") && !currentQuery) {
-      return this.clarification("La información cambió mientras consultaba. Confirmá los datos actuales.", "", context, ["selection"]);
+      return this.clarification("La información cambió mientras consultaba. Confirmá los datos actuales.", "", context, ["selection"], provenance);
     }
     const toolUpdated = updateConversationStateFromTool(before, plan.toolId, plan.input, data, { currentQuery: freshReadRoute && currentQuery });
     await this.conversationState.put(context.session.id, preserveUserSemanticAuthority(before, toolUpdated, plan.toolId));
@@ -414,7 +426,7 @@ export class ChatOrchestrator {
     const groundedContext = modelVisibleConversation(await this.conversation.list(context.session.id, 32));
     const message = await this.responder.compose({ toolId: plan.toolId, data, conversation: groundedContext, context });
     await this.conversation.append(context.session.id, { role: "assistant", content: message });
-    return { message, sessionId: context.session.id, data };
+    return this.withValidationRouteProvenance({ message, sessionId: context.session.id, data }, provenance);
   }
 
   async executeApprovedPlan(plan: ToolPlan, context: ExecutionContext, trustedMeta: ToolExecutionMeta): Promise<ChatResult> {
@@ -444,10 +456,11 @@ export class ChatOrchestrator {
     const tools = this.registry.descriptorsFor(context.tenant);
     await this.usage.record({ timestamp: context.now, tenantId: context.tenant.id, sessionId: context.session.id, kind: "model_route", units: 1, estimatedCostUsd: 0 });
     const route = await this.model.route(normalized, context, tools, priorConversation, priorState);
+    const provenance = route.validationRouteProvenance;
     const routedAgainst = await this.conversationState.get(context.session.id);
     if (routedAgainst.semanticMemory.revision !== rawPriorState.semanticMemory.revision
       || routedAgainst.roomSelectionRevision !== rawPriorState.roomSelectionRevision) {
-      return this.clarification("La información cambió mientras procesaba el pedido. Confirmá tu selección actual.", normalized, context, ["selection"]);
+      return this.clarification("La información cambió mientras procesaba el pedido. Confirmá tu selección actual.", normalized, context, ["selection"], provenance);
     }
     // Linguistic updates come only from the structured model route. They can
     // invalidate prior grounding, but only successful tools promote stay authority.
@@ -483,7 +496,7 @@ export class ChatOrchestrator {
       await this.conversation.append(context.session.id, { role: "assistant", content: reply });
       const missing = bounded?.missing ?? (route.missing?.length ? route.missing : ["selection"]);
       const isClarification = Boolean(bounded) || Boolean(route.missing?.length) || (route.purpose ?? "clarification") === "clarification";
-      return { message: reply, sessionId: context.session.id, ...(isClarification ? { outcome: "clarification" as const, missing } : {}) };
+      return this.withValidationRouteProvenance({ message: reply, sessionId: context.session.id, ...(isClarification ? { outcome: "clarification" as const, missing } : {}) }, provenance);
     }
 
     const visibleTool = tools.find((tool) => tool.id === route.plan.toolId);
@@ -500,21 +513,21 @@ export class ChatOrchestrator {
       await this.conversationState.put(context.session.id, nextState);
       const durableNextState = await this.conversationState.get(context.session.id);
       const issue = multiRoomConversationIssue(durableNextState);
-      if (issue) { const bounded = multiRoomClarification(issue); return this.clarification(bounded.message, normalized, context, bounded.missing); }
+      if (issue) { const bounded = multiRoomClarification(issue); return this.clarification(bounded.message, normalized, context, bounded.missing, provenance); }
       let planInput = enrichPlanInputFromState(route.plan.toolId, route.plan.input, durableNextState) as Record<string, unknown>;
       for (const field of ["checkIn", "checkOut", "guests"] as const) {
         const interpreted = route.statePatch?.[field];
         if (interpreted !== undefined && interpreted !== planInput[field]) {
-          return this.clarification("Necesito aclarar los datos de la estadía.", normalized, context, [field === "guests" ? "guests" : "dates"]);
+          return this.clarification("Necesito aclarar los datos de la estadía.", normalized, context, [field === "guests" ? "guests" : "dates"], provenance);
         }
       }
       const missing = missingRequiredBusinessFields(visibleTool, planInput);
-      if (missing.length) return this.clarification(missingRequiredClarification(missing), normalized, context, missingRequiredClarificationFields(missing));
-      return this.executePlan({ toolId: route.plan.toolId, input: planInput }, context, trustedMeta, true);
+      if (missing.length) return this.clarification(missingRequiredClarification(missing), normalized, context, missingRequiredClarificationFields(missing), provenance);
+      return this.executePlan({ toolId: route.plan.toolId, input: planInput }, context, trustedMeta, true, provenance);
     }
-    if (visibleTool.risk !== "write") return this.clarification("No pude validar una operación segura.", normalized, context, ["selection"]);
+    if (visibleTool.risk !== "write") return this.clarification("No pude validar una operación segura.", normalized, context, ["selection"], provenance);
     const proposedGrounding = route.mutationGrounding;
-    if (!proposedGrounding) return this.clarification("No pude validar referencias suficientes para preparar esa operación.", normalized, context, ["selection"]);
+    if (!proposedGrounding) return this.clarification("No pude validar referencias suficientes para preparar esa operación.", normalized, context, ["selection"], provenance);
     // Validate against the current turn's state so a correction has already
     // invalidated the prior availability candidates before any write can plan.
     const serverBookings = currentGroup.activeBookingIds.length ? currentGroup.activeBookingIds : (userUpdatedState.activeBookingId ? [userUpdatedState.activeBookingId] : []);
@@ -524,28 +537,28 @@ export class ChatOrchestrator {
       ? checkOutMeta?.source === "tool" || checkOutMeta?.source === "server"
       : false;
     const checkedGrounding = validateMutationGrounding(proposedGrounding, { rooms: userUpdatedState.availabilityRoomIds, bookings: serverBookings, ...(groundedDatesAreAuthoritative && userUpdatedState.stay.checkIn ? { checkIn: userUpdatedState.stay.checkIn } : {}), ...(groundedDatesAreAuthoritative && userUpdatedState.stay.checkOut ? { checkOut: userUpdatedState.stay.checkOut } : {}) });
-    if (!checkedGrounding.ok) return this.clarification("No pude validar referencias suficientes para preparar esa operación.", normalized, context, ["selection"]);
+    if (!checkedGrounding.ok) return this.clarification("No pude validar referencias suficientes para preparar esa operación.", normalized, context, ["selection"], provenance);
     const grounding = checkedGrounding.grounding;
     const expected = route.plan.toolId === "hms.createReservation" || route.plan.toolId === "hms.createMultiReservation" ? "reservation" : route.plan.toolId === "hms.cancelReservation" || route.plan.toolId === "hms.cancelMultiReservation" ? "cancellation" : "other";
     if (expected === "other" || grounding.kind !== expected) {
-      return this.clarification("La operación no coincide con la referencia indicada.", normalized, context, ["selection"]);
+      return this.clarification("La operación no coincide con la referencia indicada.", normalized, context, ["selection"], provenance);
     }
     if (grounding.kind === "cancellation" && grounding.scope === "single" && route.plan.toolId !== "hms.cancelReservation") {
-      return this.clarification("La operación no coincide con la referencia indicada.", normalized, context, ["booking"]);
+      return this.clarification("La operación no coincide con la referencia indicada.", normalized, context, ["booking"], provenance);
     }
     if (grounding.kind === "cancellation" && grounding.scope === "all" && route.plan.toolId !== "hms.cancelMultiReservation" && route.plan.toolId !== "hms.cancelReservation") {
-      return this.clarification("La operación no coincide con la referencia indicada.", normalized, context, ["booking"]);
+      return this.clarification("La operación no coincide con la referencia indicada.", normalized, context, ["booking"], provenance);
     }
     let planInput: unknown = route.plan.input;
     if (grounding.kind === "reservation") {
-      if ((route.plan.toolId === "hms.createReservation" && grounding.roomIds.length !== 1) || (route.plan.toolId === "hms.createMultiReservation" && grounding.roomIds.length < 2)) return this.clarification("La cantidad de habitaciones no coincide con la operación.", normalized, context, ["selection"]);
+      if ((route.plan.toolId === "hms.createReservation" && grounding.roomIds.length !== 1) || (route.plan.toolId === "hms.createMultiReservation" && grounding.roomIds.length < 2)) return this.clarification("La cantidad de habitaciones no coincide con la operación.", normalized, context, ["selection"], provenance);
       const selectionPatch = stripModelSemanticStatePatch(route.statePatch);
       const selectionTouched = selectionPatch && Object.keys(selectionPatch).some((key) => key.startsWith("selectedRoom"));
       const interpreted = applyConversationStatePatch(userUpdatedState, selectionPatch);
       if ((selectionTouched && !sameStringList(canonicalSelectedRoomIds(interpreted), grounding.roomIds))
         || interpreted.roomSelectionNeedsClarification
         || (interpreted.requestedRoomCount !== undefined && interpreted.requestedRoomCount !== grounding.roomIds.length)) {
-        return this.clarification("Necesito aclarar la selección de habitaciones.", normalized, context, ["selection"]);
+        return this.clarification("Necesito aclarar la selección de habitaciones.", normalized, context, ["selection"], provenance);
       }
       const raw = isRecord(route.plan.input) ? route.plan.input : {};
       planInput = {
@@ -563,30 +576,30 @@ export class ChatOrchestrator {
 
     if (grounding.kind === "cancellation") {
       if (groundedBookingIds.length === 0) {
-        return this.clarification("¿Qué reserva querés cancelar? No tengo una reserva activa identificada en esta sesión.", normalized, context, ["booking"]);
+        return this.clarification("¿Qué reserva querés cancelar? No tengo una reserva activa identificada en esta sesión.", normalized, context, ["booking"], provenance);
       }
 
       if (grounding.scope === "all") {
         if (groundedBookingIds.length === 1) {
           if (route.plan.toolId === "hms.cancelMultiReservation" && !tools.some((tool) => tool.id === "hms.cancelReservation")) {
-            return this.clarification("La cancelación grupal requiere la operación de reserva individual habilitada. Indicame qué reserva específica querés cancelar.", normalized, context, ["booking"]);
+            return this.clarification("La cancelación grupal requiere la operación de reserva individual habilitada. Indicame qué reserva específica querés cancelar.", normalized, context, ["booking"], provenance);
           }
           planInput = { bookingId: groundedBookingIds[0] };
         } else {
           if (route.plan.toolId === "hms.cancelReservation") {
-            return this.clarification("La cancelación grupal requiere la operación de grupo habilitada.", normalized, context, ["booking"]);
+            return this.clarification("La cancelación grupal requiere la operación de grupo habilitada.", normalized, context, ["booking"], provenance);
           }
           if (!tools.some((tool) => tool.id === "hms.cancelMultiReservation")) {
-            return this.clarification("La cancelación grupal no está habilitada en este runtime. Indicame qué reserva específica querés cancelar.", normalized, context, ["booking"]);
+            return this.clarification("La cancelación grupal no está habilitada en este runtime. Indicame qué reserva específica querés cancelar.", normalized, context, ["booking"], provenance);
           }
           planInput = { bookingIds: [...groundedBookingIds] };
         }
       } else if (grounding.scope === "single" && groundedBookingIds.includes(grounding.bookingId)) {
         planInput = { bookingId: grounding.bookingId };
       } else if (groundedBookingIds.length === 1) {
-        return this.clarification("Indicame la reserva exacta que querés cancelar.", normalized, context, ["booking"]);
+        return this.clarification("Indicame la reserva exacta que querés cancelar.", normalized, context, ["booking"], provenance);
       } else {
-        return this.clarification("Indicame la reserva exacta que querés cancelar.", normalized, context, ["booking"]);
+        return this.clarification("Indicame la reserva exacta que querés cancelar.", normalized, context, ["booking"], provenance);
       }
     }
 
@@ -595,7 +608,7 @@ export class ChatOrchestrator {
       if (tools.some((tool) => tool.id === "hms.cancelReservation")) plan.toolId = "hms.cancelReservation";
     }
     if (grounding.kind === "cancellation" && grounding.scope === "all" && groundedBookingIds.length > 1) {
-      if (plan.toolId !== "hms.cancelMultiReservation") return this.clarification("La operación no coincide con la cancelación grupal.", normalized, context, ["booking"]);
+      if (plan.toolId !== "hms.cancelMultiReservation") return this.clarification("La operación no coincide con la cancelación grupal.", normalized, context, ["booking"], provenance);
     }
     if (grounding.kind === "cancellation" && grounding.scope === "single") plan.toolId = "hms.cancelReservation";
     const finalTool = tools.find((tool) => tool.id === plan.toolId);
@@ -604,7 +617,7 @@ export class ChatOrchestrator {
       if (missing.length > 0) {
         const clarification = missingRequiredClarification(missing);
         const clarificationFields = missingRequiredClarificationFields(missing);
-        return this.clarification(clarification, normalized, context, clarificationFields);
+        return this.clarification(clarification, normalized, context, clarificationFields, provenance);
       }
     }
 
@@ -612,10 +625,10 @@ export class ChatOrchestrator {
       const canonical = applyConversationStatePatch(userUpdatedState, { ...(route.statePatch?.roomOccupancy !== undefined ? { roomOccupancy: route.statePatch.roomOccupancy } : {}), checkIn: grounding.checkIn, checkOut: grounding.checkOut, selectedRoomIds: grounding.roomIds, requestedRoomCount: grounding.roomIds.length }, { semanticSource: "server", activeIntent: "reservation", activeIntentSource: "server" });
       await this.conversationState.put(context.session.id, canonical);
       const reread = await this.conversationState.get(context.session.id);
-      if (reread.stay.checkIn !== grounding.checkIn || reread.stay.checkOut !== grounding.checkOut || !sameStringList(canonicalSelectedRoomIds(reread), grounding.roomIds)) return this.clarification("No pude validar referencias suficientes para preparar esa operación.", normalized, context, ["selection"]);
+      if (reread.stay.checkIn !== grounding.checkIn || reread.stay.checkOut !== grounding.checkOut || !sameStringList(canonicalSelectedRoomIds(reread), grounding.roomIds)) return this.clarification("No pude validar referencias suficientes para preparar esa operación.", normalized, context, ["selection"], provenance);
       const issue = multiRoomConversationIssue(reread);
-      if (issue) { const bounded = multiRoomClarification(issue); return this.clarification(bounded.message, normalized, context, bounded.missing); }
+      if (issue) { const bounded = multiRoomClarification(issue); return this.clarification(bounded.message, normalized, context, bounded.missing, provenance); }
     }
-    return this.executePlan(plan, context, trustedMeta);
+    return this.executePlan(plan, context, trustedMeta, false, provenance);
   }
 }

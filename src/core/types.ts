@@ -93,9 +93,11 @@ export type ToolPlan = {
 
 export type ModelMessagePurpose = "clarification" | "unsupported" | "greeting" | "social" | "help" | "policy" | "acknowledgement";
 export type ModelClarificationField = "dates" | "guests" | "room" | "booking" | "selection" | "occupancy";
+/** Validation-only, server/router-issued route receipt. It intentionally has no request or runtime identity. */
+export type ValidationRouteProvenanceReceipt = { route: "baseline_llm" | "deterministic_fallback" };
 
 export type ModelRouteResult =
-  | { kind: "tool"; plan: ToolPlan; statePatch?: ConversationStatePatch; mutationGrounding?: MutationGrounding | null }
+  | { kind: "tool"; plan: ToolPlan; statePatch?: ConversationStatePatch; mutationGrounding?: MutationGrounding | null; validationRouteProvenance?: ValidationRouteProvenanceReceipt }
   | {
       kind: "message";
       message: string;
@@ -103,7 +105,8 @@ export type ModelRouteResult =
       missing?: readonly ModelClarificationField[];
       statePatch?: ConversationStatePatch;
       mutationGrounding?: null;
-  };
+      validationRouteProvenance?: ValidationRouteProvenanceReceipt;
+    };
 export type ModelRoutingState = ConversationState & { activeBookings?: readonly { bookingId: string; roomNumber?: string }[] };
 
 export type ModelConversationTurn = {

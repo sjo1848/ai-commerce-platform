@@ -385,7 +385,12 @@ export class LLMModelRouter implements ModelRouter {
     private readonly provider: ModelProvider,
     private readonly fallback: ModelRouter,
     private readonly usage?: UsageSink,
+    private readonly emitValidationRouteProvenance = false,
   ) {}
+
+  private validationRouteProvenance(route: "baseline_llm" | "deterministic_fallback") {
+    return this.emitValidationRouteProvenance ? { validationRouteProvenance: { route } as const } : {};
+  }
 
   private async fallbackRoute(
     reason: string,
@@ -401,15 +406,15 @@ export class LLMModelRouter implements ModelRouter {
     if (fallbackResult.kind === "message") {
       const { statePatch: _discardedStatePatch, mutationGrounding: _discardedMutationGrounding, ...safeMessage } = fallbackResult;
       if (safeMessage.purpose === "clarification" && (!safeMessage.missing || safeMessage.missing.length === 0)) {
-        return { ...safeMessage, missing: ["selection"] };
+        return { ...safeMessage, missing: ["selection"], ...this.validationRouteProvenance("deterministic_fallback") };
       }
-      return safeMessage;
+      return { ...safeMessage, ...this.validationRouteProvenance("deterministic_fallback") };
     }
     const tool = availableTools.find((candidate) => candidate.id === fallbackResult.plan.toolId);
     if (!tool || tool.risk !== "read") {
-      return { kind: "message", purpose: "clarification", message: "No pude procesar la solicitud con seguridad. ¿Podés reformularla?", missing: ["selection"] };
+      return { kind: "message", purpose: "clarification", message: "No pude procesar la solicitud con seguridad. ¿Podés reformularla?", missing: ["selection"], ...this.validationRouteProvenance("deterministic_fallback") };
     }
-    return { kind: "tool", plan: fallbackResult.plan };
+    return { kind: "tool", plan: fallbackResult.plan, ...this.validationRouteProvenance("deterministic_fallback") };
   }
 
   private async repairContradictoryToolRoute(
@@ -608,6 +613,7 @@ export class LLMModelRouter implements ModelRouter {
           ...(clarification.missing.length ? { missing: clarification.missing as readonly ModelClarificationField[] } : {}),
           statePatch,
           mutationGrounding: null,
+          ...this.validationRouteProvenance("baseline_llm"),
         };
       }
 
@@ -619,7 +625,7 @@ export class LLMModelRouter implements ModelRouter {
           repairTrigger: true,
         };
         const repaired = await this.repairContradictoryToolRoute(value, system, message, context, availableTools, state, repairPromptTelemetry, (category) => { repairFailureCategory = category; });
-        if (repaired) return repaired;
+        if (repaired) return { ...repaired, ...this.validationRouteProvenance("baseline_llm") };
         return this.fallbackRoute("invalid_tool_plan_shape", message, context, availableTools, conversation, state, repairFailureCategory);
       }
       const tool = availableTools.find((candidate) => candidate.id === value.toolId);
@@ -628,7 +634,7 @@ export class LLMModelRouter implements ModelRouter {
       if (tool.risk === "write" && !mutationGrounding) return this.fallbackRoute("missing_mutation_grounding", message, context, availableTools, conversation, state);
       if (hasUnknownTopLevelInput(value.input, tool)) return this.fallbackRoute("unknown_tool_argument", message, context, availableTools, conversation, state);
       if (JSON.stringify(value.input).length > 8_000) return this.fallbackRoute("tool_input_too_large", message, context, availableTools, conversation, state);
-      return { kind: "tool", plan: { toolId: tool.id, input: value.input }, statePatch, mutationGrounding: mutationGrounding ?? null };
+      return { kind: "tool", plan: { toolId: tool.id, input: value.input }, statePatch, mutationGrounding: mutationGrounding ?? null, ...this.validationRouteProvenance("baseline_llm") };
     } catch (error) {
       return this.fallbackRoute(
         "provider_failure",

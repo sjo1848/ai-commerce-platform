@@ -71,6 +71,9 @@ async function chat(caseId, message, sessionId, { idempotent = false } = {}) {
   transcript.push(item);
   if (sessionId && body.sessionId !== sessionId) throw Error(`${caseId}: session identity changed`);
   if (hasMutationResult(item)) throw Error(`${caseId}: response contained mutation result`);
+  const route = body?.validationRouteProvenance?.route;
+  if (route === "deterministic_fallback") throw Error(`${caseId}: direct validation receipt reports deterministic fallback`);
+  if (route !== "baseline_llm") throw Error(`${caseId}: missing or invalid direct baseline route receipt`);
   item.routeProof = await supplementalRouteProof(requestId, body.sessionId);
   if (item.routeProof.status === "CAPTURED_INVALID") throw Error(`${caseId}: captured route proof invalid: ${item.routeProof.reason}`);
   return item;
@@ -95,6 +98,19 @@ function approvalRequired(item) {
     && item?.body?.error?.code === "APPROVAL_REQUIRED"
     && typeof item?.body?.approvalToken === "string"
     && Boolean(item.body.approvalToken);
+}
+function reportSafe(value) {
+  if (Array.isArray(value)) return value.map(reportSafe);
+  if (!value || typeof value !== "object") return value;
+  const copy = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (/approval.*token/i.test(key)) {
+      copy.approvalTokenPresent = Boolean(child);
+    } else {
+      copy[key] = reportSafe(child);
+    }
+  }
+  return copy;
 }
 function hasMutationResult(item) {
   const raw = JSON.stringify(item?.body ?? {});
@@ -150,7 +166,7 @@ const c07LanguageSafe = (!asksGuests(selectionText) || asksOccupancy(selectionTe
 
 boundary = approvalRequired(selection) ? selection : null;
 occupancy = null;
-record("C07-SELECTION", c07LanguageSafe && !hasMutationResult(selection) && (boundary || (is2xx(selection) && selection.body?.outcome === "clarification" && JSON.stringify(selection.body?.missing) === JSON.stringify(["occupancy"]))), "only immediate HITL or explicit occupancy clarification is allowed");
+record("C07-SELECTION", c07LanguageSafe && !hasMutationResult(selection) && (Boolean(boundary) || (is2xx(selection) && selection.body?.outcome === "clarification" && JSON.stringify(selection.body?.missing) === JSON.stringify(["occupancy"]))), "only immediate HITL or explicit occupancy clarification is allowed");
 
 if (!boundary && is2xx(selection) && asksOccupancy(selectionText)) {
   occupancy = await chat("C08", "Dos en cada habitación.", sessionId);
@@ -231,7 +247,7 @@ const report = {
     hmsMutations: "UNKNOWN_PENDING_AUDIT",
   },
   results,
-  transcript,
+  transcript: transcript.map(reportSafe),
 };
 console.log(JSON.stringify(report, null, 2));
 if (failed.length > 0) process.exit(1);

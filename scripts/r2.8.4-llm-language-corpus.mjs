@@ -10,6 +10,16 @@ const mutationFields = /"(?:createdBookingIds|cancelledBookingIds|bookingId|rese
 const mutationSignals = [];
 const sameSet = (a, b) => Array.isArray(b) && new Set(a).size === a.length && new Set(b).size === b.length && a.length === b.length && a.every(x => b.includes(x));
 const approval = item => item.status === 409 && item.body?.error?.code === "APPROVAL_REQUIRED" && typeof item.body.approvalToken === "string" && item.body.approvalToken.length > 0;
+const reportSafe = value => {
+  if (Array.isArray(value)) return value.map(reportSafe);
+  if (!value || typeof value !== "object") return value;
+  const copy = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (/approval.*token/i.test(key)) copy.approvalTokenPresent = Boolean(child);
+    else copy[key] = reportSafe(child);
+  }
+  return copy;
+};
 const clarification = (item, field) => {
   const body = item.body;
   const uniqueMissing = [...new Set(body?.missing ?? [])];
@@ -42,6 +52,9 @@ async function chat(message, sessionId) {
   if (mutationFields.test(JSON.stringify(body))) mutationSignals.push({ caseId: current.id, requestId });
   requirePass(mutationSignals.length === 0, "response mutation signal");
   requirePass(!sessionId || body.sessionId === sessionId, "session identity changed");
+  const route = body?.validationRouteProvenance?.route;
+  requirePass(route !== "deterministic_fallback", "direct validation receipt reports deterministic fallback");
+  requirePass(route === "baseline_llm", "missing or invalid direct baseline route receipt");
   item.routeProof = await supplementalRouteProof(requestId, body.sessionId);
   requirePass(item.routeProof.status !== "CAPTURED_INVALID", `captured route proof invalid: ${item.routeProof.reason}`);
   return item;
@@ -97,5 +110,5 @@ try {
   }
 } catch (error) { if (current) current.failure = error.message; }
 const passed = transcript.length === corpus.cases.length && transcript.every(item => item.pass);
-console.log(JSON.stringify({ event: passed ? "ACP_R2_8_4_LLM_CORPUS_COMPLETE" : "ACP_R2_8_4_LLM_CORPUS_FAIL", version: corpus.version, cases: transcript.length, expectedCases: corpus.cases.length, approvalConsumed: false, hmsMutations: "UNKNOWN_PENDING_AUDIT", mutationSignals, results: transcript.map(({id, pass, failure}) => ({id, pass, failure})), transcript }, null, 2));
+console.log(JSON.stringify({ event: passed ? "ACP_R2_8_4_LLM_CORPUS_COMPLETE" : "ACP_R2_8_4_LLM_CORPUS_FAIL", version: corpus.version, cases: transcript.length, expectedCases: corpus.cases.length, approvalConsumed: false, hmsMutations: "UNKNOWN_PENDING_AUDIT", mutationSignals, results: transcript.map(({id, pass, failure}) => ({id, pass, failure})), transcript: reportSafe(transcript) }, null, 2));
 if (!passed) process.exitCode = 1;
