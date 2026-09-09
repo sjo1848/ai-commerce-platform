@@ -216,8 +216,8 @@
   "r2_8": {
     "status": "IN_PROGRESS_ARCHITECTURAL_REWORK",
     "current_block": "R2.8.4_NLU_BOUNDARY_REWORK",
-    "candidate_exact_head": "547a6f91d43cb5318129929d2f621903849b3e9d",
-    "candidate_parent": "088a3fb06c49daeaf00bc41d69634f52ce9d7326",
+    "candidate_exact_head": "19af869b0c448f69a939698fe7ef0385fe2ad229",
+    "candidate_parent": "ecda93fddaf0975ca087b699709462270a5b7101",
     "contract": ".orchestration/contracts/ACP-2.6.9-R2.8.4-NLU-BOUNDARY-REWORK.md",
     "r2_8_5_blocked": true,
     "mandatory_quality_probes": [
@@ -225,15 +225,16 @@
       "NATURAL_PARA_DOS_MUST_NOT_REASK_GUEST_COUNT",
       "REAL_MULTI_ROOM_HITL_CREATE_VERIFY_CANCEL_CLEANUP"
     ],
-    "staging_e2e": "NOT_RUN_AFTER_CH1",
+    "staging_e2e": "NOT_RUN_AFTER_GOVERNANCE_ALIGNMENT",
     "historical_quota_blocker": "CLOUDFLARE_WORKERS_AI_ACCOUNT_QUOTA_BLOCKER_NOT_ACTIVE",
     "qa": "PASS",
     "open_p0_p1_p2": null,
-    "local_npm_qa": "324/324_PASS",
+    "local_npm_qa": "354/354_PASS",
     "engineering_qa": "QA_PASS",
-    "latest_candidate_ci_push_run": 34291722979,
-    "latest_candidate_ci_pr_run": 34291727306,
+    "latest_candidate_ci_push_run": 34415811956,
+    "latest_candidate_ci_pr_run": 34415815653,
     "remote_zero_inference_validation": "NOT_EXECUTED_REQUIRES_NEW_HUMAN_GATE",
+    "evidence_policy": "DIRECT_SYNCHRONOUS_READINESS_AND_SERVER_AUTHORED_FUNCTIONAL_PROOF; LIVE_HISTORICAL_TELEMETRY_SUPPLEMENTAL_UNKNOWN; CAPTURED_INVALID_BLOCKING",
     "ch1_zero_inference": {
       "status": "COMPLETE_QA_PASS",
       "head": "e2f6839c6990033d9f40859659a2678dec6e6012",
