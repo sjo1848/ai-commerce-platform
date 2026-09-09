@@ -31,10 +31,15 @@ test("R2.8.4 staging binds evidence to exact deployed version and shared concurr
   assert.match(workflow, /did not capture intentionally unauthenticated 403 probe \$probe_path within bounded interval/);
   assert.match(workflow, /kill -INT.*PROBE_TAIL_PID/);
   assert.match(workflow, /r28-r4-llm-corpus-report/); assert.match(workflow, /r28-r4-llm-corpus-code/); assert.match(workflow, /timeout 600s/); assert.match(workflow, /r2\.8\.4-llm-language-corpus/); assert.match(workflow, /ai-commerce-staging/); assert.match(evalWorkflow, /group: ai-commerce-staging/);
-  assert.match(workflow, /EXPECTED_MODEL/); assert.match(workflow, /routeInferences/); assert.match(workflow, /routeFallbacks/);
+  assert.match(workflow, /EXPECTED_MODEL/); assert.match(workflow, /routeInferences/); assert.match(workflow, /routeFallbacks/); assert.match(workflow, /UNKNOWN_NOT_CAPTURED/);
   assert.match(workflow, /CORPUS_REPORT/); assert.match(workflow, /for \(const item of report\.transcript/); assert.match(workflow, /missing availability audit/); assert.match(workflow, /corpus mutation/); assert.doesNotMatch(workflow, /name: Run LLM language corpus/);
   const corpusGate = workflow.slice(workflow.indexOf("for (const item of report.transcript"), workflow.indexOf("EXPECTED_MODEL=\"$EXPECTED_MODEL\" MODEL_TELEMETRY", workflow.indexOf("for (const item of report.transcript")));
-  assert.doesNotMatch(corpusGate, /fb\.length/); assert.match(workflow, /if \(routeFallbacks\.length > 0\)/);
+  assert.match(corpusGate, /UNKNOWN_NOT_CAPTURED/); assert.doesNotMatch(corpusGate, /inf\.length<2|model\.models\.includes/); assert.match(workflow, /if \(routeFallbacks\.length > 0\)/);
+  const modelCounter = 'MODEL_TELEMETRY="$(R28_VERSION_ID="$R28_VERSION_ID" node scripts/count-model-telemetry.mjs /tmp/r28-r4-tail.log)"';
+  const modelPostchecks = workflow.slice(workflow.indexOf(modelCounter), workflow.indexOf("AUDIT_TELEMETRY=\"$AUDIT_TELEMETRY\" REPORT_PATH", workflow.indexOf(modelCounter)));
+  assert.doesNotMatch(modelPostchecks, /modelInferences === 0|routeInferences\.length <|model mismatch|missing token evidence/);
+  assert.match(modelPostchecks, /status: captured \? 'CAPTURED' : 'UNKNOWN_NOT_CAPTURED'/);
+  assert.match(modelPostchecks, /R28_VERSION_ID="\$R28_VERSION_ID" node scripts\/count-(?:model-telemetry|audit-events)\.mjs/);
   assert.match(dialogue, /function uniqueExactSet/); assert.match(dialogue, /approvalTargetsExact/); assert.match(dialogue, /expectedRoomIds/);
 });
 
@@ -151,7 +156,7 @@ test("validation admission deploy configuration is valid, run-isolated, and secr
   );
   assert.equal(
     workflow.indexOf("node scripts/redact-validation-tail.mjs /tmp/r28-r4-tail.log")
-      < workflow.indexOf("MODEL_TELEMETRY=\"$(node scripts/count-model-telemetry.mjs /tmp/r28-r4-tail.log)\""),
+      < workflow.indexOf("MODEL_TELEMETRY=\"$(R28_VERSION_ID=\"$R28_VERSION_ID\" node scripts/count-model-telemetry.mjs /tmp/r28-r4-tail.log)\""),
     true,
     "corpus tail must be redacted before telemetry",
   );

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import fs from "node:fs";
+import { completeTailEvents, telemetry } from "./r2.8-validation-turn-proof.mjs";
 
 const path = process.argv[2];
 if (!path) throw new Error("usage: count-model-telemetry.mjs <wrangler-tail-log>");
@@ -11,12 +12,11 @@ let modelFallbacks = 0;
 const inferences = [];
 const fallbacks = [];
 
-function inspect(value) {
-  if (Array.isArray(value)) {
-    for (const item of value) inspect(item);
-    return;
+for (const event of completeTailEvents(raw)) {
+  if (process.env.R28_VERSION_ID && event.scriptVersion?.id !== process.env.R28_VERSION_ID) {
+    throw new Error("CAPTURED_INVALID: Worker Version mismatch");
   }
-  if (value && typeof value === "object") {
+  for (const value of telemetry(event)) {
     if (value.kind === "model_inference") {
       modelInferences += 1;
       inferences.push(value);
@@ -24,24 +24,8 @@ function inspect(value) {
       modelFallbacks += 1;
       fallbacks.push(value);
     }
-    for (const nested of Object.values(value)) inspect(nested);
-    return;
   }
-  if (typeof value !== "string") return;
-
-  const text = value.trim();
-  if (!text.startsWith("{") && !text.startsWith("[")) return;
-  try { inspect(JSON.parse(text)); } catch { /* ordinary log string */ }
 }
-
-for (const line of raw.split(/\r?\n/)) {
-  const text = line.trim();
-  if (!text) continue;
-  try { inspect(JSON.parse(text)); }
-  catch { /* Wrangler can pretty-print multi-line JSON; complete-file pass follows. */ }
-}
-
-try { inspect(JSON.parse(raw)); } catch { /* expected for concatenated tail events */ }
 
 function inferenceKey(item) {
   return [item.logId, item.sessionId, item.label, item.model, item.inputTokens, item.outputTokens, item.latencyMs].join("|");
