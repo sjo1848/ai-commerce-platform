@@ -575,7 +575,7 @@ jobs:
             cat /tmp/r28-r4-probe-tail.log >&2 || true
             exit 1
           fi
-          R28_PROBE_PATH="$probe_path" node scripts/r2.8-validation-preflight.mjs /tmp/r28-r4-probe-tail.log > /tmp/r28-r4-preflight-proof.json
+          R28_READINESS_ROOT_ONLY=false R28_PROBE_PATH="$probe_path" node scripts/r2.8-validation-preflight.mjs /tmp/r28-r4-probe-tail.log > /tmp/r28-r4-preflight-proof.json
           # Read-only stored-log access check. Denial stops before any inference.
           R28_EVIDENCE_FROM_MS="$(date +%s%3N)"
           echo "R28_EVIDENCE_FROM_MS=$R28_EVIDENCE_FROM_MS" >> "$GITHUB_ENV"

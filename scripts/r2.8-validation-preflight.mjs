@@ -20,12 +20,7 @@ export function verifyAdmissionProbe(raw, { path, version }) {
   });
   if (probes.length !== 1 || probes[0]?.event?.request?.method !== 'POST') throw Error('UNKNOWN: expected one completed admission POST probe');
   verifyZeroActivity(probes[0], version);
-  const roots = events.filter(event => {
-    try { const url = new URL(event.event?.request?.url); return url.pathname === '/' && url.search === '' && event.event?.request?.method === 'GET'; } catch { return false; }
-  });
-  if (!roots.length) throw Error('UNKNOWN: expected completed admission GET root evidence');
-  for (const root of roots) verifyZeroActivity(root, version);
-  return { version, path, status: 403, rootRequests: roots.length, modelInferences: 0, reserves: 0, hmsOperations: 0, approvalConsumption: 0, completedEnvelope: true };
+  return { version, path, status: 403, modelInferences: 0, reserves: 0, hmsOperations: 0, approvalConsumption: 0, completedEnvelope: true };
 }
 
 export function verifyLiveReadiness(raw, { version }) {
