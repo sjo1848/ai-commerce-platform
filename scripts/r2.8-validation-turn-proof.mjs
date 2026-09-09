@@ -19,14 +19,25 @@ export function completeTailEvents(raw) {
   if (start >= 0) throw Error('CAPTURED_INVALID: incomplete tail event');
   return events;
 }
+// These are the discriminators emitted by ConsoleUsageSink, ConsoleAuditSink,
+// the validation experiment budget reporter, and the runtime diagnostic. A
+// brace/bracket-prefixed human log is not itself a captured telemetry record.
+const CAPTURED_TELEMETRY_DISCRIMINATOR = /"(?:kind|event)"\s*:\s*"(?:message|model_route|tool_call|model_inference|model_fallback|audit_event|agent_core_usage|agent_core_experiment_budget|acp_validation_runtime_identity)"/;
+
+function isClearlyIntendedTelemetry(text) {
+  return CAPTURED_TELEMETRY_DISCRIMINATOR.test(text);
+}
+
 export function telemetry(value, found = []) {
   if (Array.isArray(value)) value.forEach(x => telemetry(x, found));
   else if (value && typeof value === 'object') { if (value.kind) found.push(value); Object.values(value).forEach(x => telemetry(x, found)); }
   else if (typeof value === 'string') {
     const text = value.trim();
-    if (!text.startsWith('{') && !text.startsWith('[')) return found;
+    if (!text.startsWith('{') && !text.startsWith('[') && !text.startsWith('"')) return found;
     try { telemetry(JSON.parse(text), found); }
-    catch { throw Error('CAPTURED_INVALID: malformed captured telemetry JSON'); }
+    catch {
+      if (isClearlyIntendedTelemetry(text)) throw Error('CAPTURED_INVALID: malformed captured telemetry JSON');
+    }
   }
   return found;
 }
@@ -53,7 +64,7 @@ export async function proveValidationTurn(requestId, sessionId, { path = process
       // predicates remain authoritative; do not manufacture a zero here.
       if (!routes.some(x => x.kind === 'model_inference' && x.model === '@cf/meta/llama-3.3-70b-instruct-fp8-fast')) throw Error('UNKNOWN: completed request has no captured baseline route inference');
       const audits = logs.filter(x => x.kind === 'audit_event' && x.sessionId === sessionId);
-      if (audits.some(x => ['succeeded', 'replayed'].includes(x.status) && /create|cancel|approve/i.test(String(x.toolId)))) throw Error('unauthorized mutation or approval activity');
+      if (audits.some(x => ['allowed', 'succeeded', 'replayed'].includes(x.status) && /create|cancel|approve/i.test(String(x.toolId)))) throw Error('unauthorized mutation or approval activity');
       return { requestId, sessionId, routeFallbacks: 0, completedTailEvent: true };
     }
     await delay(100);
