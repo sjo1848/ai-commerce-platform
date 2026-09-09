@@ -17,6 +17,21 @@ const clarification = (item, field) => {
 };
 let current;
 function requirePass(pass, reason) { if (!pass) throw Error(reason); }
+// Per-turn live-tail proof supplements the direct structured/HMS/session/
+// grounding/no-mutation predicates. A missing tail is unknown evidence, not
+// a claim that model activity or fallback was zero.
+async function supplementalRouteProof(requestId, sessionId) {
+  try {
+    return { status: "AVAILABLE", ...(await proveValidationTurn(requestId, sessionId)) };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    // Only unavailable request-correlated telemetry is supplemental. A
+    // completed envelope with negative route/safety evidence is a failure.
+    return reason.startsWith("UNKNOWN:")
+      ? { status: "UNKNOWN_NOT_CAPTURED" }
+      : { status: "CAPTURED_INVALID", reason };
+  }
+}
 async function chat(message, sessionId) {
   const requestId = `r28-corpus-${current.id}-${crypto.randomUUID()}`;
   const response = await fetch(`${baseUrl}/api/chat`, { method: "POST", headers: validationRequestHeaders({ "content-type": "application/json", "x-request-id": requestId, "Idempotency-Key": crypto.randomUUID() }), body: JSON.stringify({ message, ...(sessionId ? { sessionId } : {}) }), signal: AbortSignal.timeout(30_000) });
@@ -24,10 +39,11 @@ async function chat(message, sessionId) {
   try { body = JSON.parse(raw); } catch { body = { raw }; }
   const item = { requestId, status: response.status, body, user: message };
   current.turns.push(item);
-  item.routeProof = await proveValidationTurn(requestId, body.sessionId);
   if (mutationFields.test(JSON.stringify(body))) mutationSignals.push({ caseId: current.id, requestId });
   requirePass(mutationSignals.length === 0, "response mutation signal");
   requirePass(!sessionId || body.sessionId === sessionId, "session identity changed");
+  item.routeProof = await supplementalRouteProof(requestId, body.sessionId);
+  requirePass(item.routeProof.status !== "CAPTURED_INVALID", `captured route proof invalid: ${item.routeProof.reason}`);
   return item;
 }
 function exactApproval(item, numbers, rooms, guests) {

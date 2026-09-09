@@ -10,8 +10,13 @@ export function completeTailEvents(raw) {
     if (quoted) { if (escaped) escaped = false; else if (c === '\\') escaped = true; else if (c === '"') quoted = false; continue; }
     if (c === '"') quoted = true;
     else if (c === '{') depth++;
-    else if (c === '}' && --depth === 0) { try { events.push(JSON.parse(raw.slice(start, i + 1))); } catch {} start = -1; }
+    else if (c === '}' && --depth === 0) {
+      try { events.push(JSON.parse(raw.slice(start, i + 1))); }
+      catch { throw Error('CAPTURED_INVALID: malformed tail event'); }
+      start = -1;
+    }
   }
+  if (start >= 0) throw Error('CAPTURED_INVALID: incomplete tail event');
   return events;
 }
 function telemetry(value, found = []) {
@@ -21,10 +26,16 @@ function telemetry(value, found = []) {
   return found;
 }
 export async function proveValidationTurn(requestId, sessionId, { path = process.env.R28_TAIL_PATH, timeoutMs = 15000 } = {}) {
-  if (!path) throw Error('R28_TAIL_PATH required: per-turn route proof is fail-closed');
+  if (!path) throw Error('UNKNOWN: R28_TAIL_PATH unavailable for per-turn route proof');
   const deadline = Date.now() + timeoutMs;
   do {
-    let events = []; try { events = completeTailEvents(readFileSync(path, 'utf8')); } catch {}
+    let raw;
+    try { raw = readFileSync(path, 'utf8'); }
+    catch (error) {
+      if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') throw Error('UNKNOWN: R28 tail path unavailable for per-turn route proof');
+      throw Error(`CAPTURED_INVALID: unable to read R28 tail capture${error?.code ? ` (${error.code})` : ''}`);
+    }
+    const events = completeTailEvents(raw);
     const event = events.find(value => Object.entries(value.event?.request?.headers ?? {}).some(([key, value]) => key.toLowerCase() === 'x-request-id' && value === requestId));
     if (event) {
       if (event.truncated !== false || event.outcome !== "ok") throw Error("incomplete or failed tail envelope");

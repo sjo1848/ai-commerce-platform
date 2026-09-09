@@ -22,6 +22,24 @@ function exactFinalPlan(item, ids, occupancyRequired) {
 const transcript = [];
 const results = [];
 
+// Live tail correlation is useful evidence, but it is an observability
+// transport concern. The direct response predicates below remain the
+// functional acceptance boundary; an unavailable per-turn tail is explicit
+// unknown evidence, never inferred as zero model/fallback activity.
+async function supplementalRouteProof(requestId, sessionId) {
+  try {
+    return { status: "AVAILABLE", ...(await proveValidationTurn(requestId, sessionId)) };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    // Only the proof helper's explicit absence classification is supplemental.
+    // A correlated completed envelope that disproves the route contract remains
+    // captured negative evidence and must stop this runner.
+    return reason.startsWith("UNKNOWN:")
+      ? { status: "UNKNOWN_NOT_CAPTURED" }
+      : { status: "CAPTURED_INVALID", reason };
+  }
+}
+
 async function chat(caseId, message, sessionId, { idempotent = false } = {}) {
   requestSeq += 1;
   const started = Date.now();
@@ -53,7 +71,8 @@ async function chat(caseId, message, sessionId, { idempotent = false } = {}) {
   transcript.push(item);
   if (sessionId && body.sessionId !== sessionId) throw Error(`${caseId}: session identity changed`);
   if (hasMutationResult(item)) throw Error(`${caseId}: response contained mutation result`);
-  item.routeProof = await proveValidationTurn(requestId, body.sessionId);
+  item.routeProof = await supplementalRouteProof(requestId, body.sessionId);
+  if (item.routeProof.status === "CAPTURED_INVALID") throw Error(`${caseId}: captured route proof invalid: ${item.routeProof.reason}`);
   return item;
 }
 

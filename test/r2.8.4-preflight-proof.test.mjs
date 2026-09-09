@@ -10,7 +10,7 @@ test('admission probe requires complete exact-version 403 with zero application 
     assert.throws(() => verifyAdmissionProbe(JSON.stringify({...event,...change}), options));
   }
   assert.throws(() => verifyAdmissionProbe('', options), /UNKNOWN/);
-  assert.throws(() => verifyAdmissionProbe(JSON.stringify(event).slice(0,-1), options), /UNKNOWN/);
+  assert.throws(() => verifyAdmissionProbe(JSON.stringify(event).slice(0,-1), options), /CAPTURED_INVALID/);
   const diagnosticLog = [{ message: ['{"event":"acp_validation_runtime_identity"}'] }];
   assert.equal(verifyAdmissionProbe(JSON.stringify({ ...event, logs: diagnosticLog }), options).modelInferences, 0);
   assert.equal(verifyAdmissionProbe(`${JSON.stringify({ ...root, event: { ...root.event, response: { status: 200 } } })}\n${JSON.stringify(event)}`, options).modelInferences, 0);
