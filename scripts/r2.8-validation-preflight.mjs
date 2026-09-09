@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { completeTailEvents } from './r2.8-validation-turn-proof.mjs';
+import { verifyRuntimeVersionDiagnostic } from './r2.8-runtime-version-diagnostic.mjs';
 
 function verifyZeroActivity(event, version) {
   if (event.truncated !== false || event.outcome !== 'ok' || event.scriptVersion?.id !== version
@@ -27,6 +28,20 @@ export function verifyAdmissionProbe(raw, { path, version }) {
   return { version, path, status: 403, rootRequests: roots.length, modelInferences: 0, reserves: 0, hmsOperations: 0, approvalConsumption: 0, completedEnvelope: true };
 }
 
+export function verifyLiveReadiness(raw, { version }) {
+  if (!version) throw Error('exact version required');
+  const roots = completeTailEvents(raw).filter(event => {
+    try { const url = new URL(event.event?.request?.url); return url.pathname === '/' && url.search === '' && event.event?.request?.method === 'GET'; } catch { return false; }
+  });
+  if (roots.length !== 1) throw Error('UNKNOWN: expected one completed admission GET root evidence');
+  verifyZeroActivity(roots[0], version);
+  verifyRuntimeVersionDiagnostic(roots[0], { version });
+  return { version, status: 403, rootRequests: 1, liveTailIdentity: true, modelInferences: 0, reserves: 0, hmsOperations: 0, approvalConsumption: 0, completedEnvelope: true };
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  console.log(JSON.stringify(verifyAdmissionProbe(readFileSync(process.argv[2], 'utf8'), { path: process.env.R28_PROBE_PATH, version: process.env.R28_VERSION_ID })));
+  const raw = readFileSync(process.argv[2], 'utf8');
+  console.log(JSON.stringify(process.env.R28_READINESS_ROOT_ONLY === 'true'
+    ? verifyLiveReadiness(raw, { version: process.env.R28_VERSION_ID })
+    : verifyAdmissionProbe(raw, { path: process.env.R28_PROBE_PATH, version: process.env.R28_VERSION_ID })));
 }

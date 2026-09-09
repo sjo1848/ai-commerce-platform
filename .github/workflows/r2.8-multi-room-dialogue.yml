@@ -487,34 +487,34 @@ jobs:
           ')"
           echo "AI_COMMERCE_STAGING_URL=https://$WORKER_NAME.$subdomain.workers.dev" >> "$GITHUB_ENV"
 
-      - name: Wait for exact staging deployment
+      - name: Prove full RUN 1 live readiness before provider runner
         shell: bash
-        env:
-          CLOUDFLARE_OBSERVABILITY_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVABILITY_API_TOKEN }}
         run: |
           set -euo pipefail
-          test -n "${CLOUDFLARE_OBSERVABILITY_API_TOKEN//[[:space:]]/}"
-          for attempt in $(seq 1 4); do
-            from_ms="$(date +%s%3N)"
-            status="$(curl -sS --max-time 10 -o /tmp/r28-r4-root.html -w '%{http_code}' "$AI_COMMERCE_STAGING_URL/" || true)"
-            sleep 2
-            node scripts/query-workers-observability.mjs "$from_ms" "$(date +%s%3N)" > "/tmp/r28-r4-readiness-historical-$attempt.json"
-            if [[ "$status" != "403" ]]; then
-              echo "Validation admission readiness returned HTTP ${status:-curl-error}; expected exactly 403." >&2
-              exit 1
-            fi
-            if R28_VERSION_ID="$R28_VERSION_ID" node scripts/r2.8-runtime-version-diagnostic.mjs "/tmp/r28-r4-readiness-historical-$attempt.json" > /tmp/r28-r4-runtime-identity-proof.json 2> /tmp/r28-r4-runtime-identity-error.txt; then
-              echo "Validation runtime identity converged on attempt $attempt (HTTP 403)."
-              exit 0
-            fi
-            if grep -Fq "MISMATCH:" /tmp/r28-r4-runtime-identity-error.txt; then
-              echo "runtime Worker Version ID mismatched the exact active target" >&2
-              exit 1
-            fi
+          : > /tmp/r28-r4-readiness-tail.log
+          timeout 75s script -qefc "./node_modules/.bin/wrangler tail '$WORKER_NAME' --version-id '$R28_VERSION_ID' --format=json" /tmp/r28-r4-readiness-tail.log > /dev/null 2>&1 &
+          READINESS_TAIL_PID=$!
+          cleanup_readiness_tail() { kill -INT "$READINESS_TAIL_PID" 2>/dev/null || true; wait "$READINESS_TAIL_PID" 2>/dev/null || true; }
+          trap cleanup_readiness_tail EXIT INT TERM
+          sleep 4
+          if ! kill -0 "$READINESS_TAIL_PID" 2>/dev/null; then echo "exact-version live tail exited before readiness GET" >&2; exit 1; fi
+          status="$(curl -sS --max-time 10 -o /tmp/r28-r4-root.html -w '%{http_code}' "$AI_COMMERCE_STAGING_URL/" || true)"
+          if [[ "$status" != "403" ]]; then
+            echo "Validation admission readiness returned HTTP ${status:-curl-error}; expected exactly 403." >&2
+            exit 1
+          fi
+          captured=false
+          for poll in $(seq 1 15); do
+            if grep -Fq '"pathname":"/"' /tmp/r28-r4-readiness-tail.log; then captured=true; break; fi
+            if ! kill -0 "$READINESS_TAIL_PID" 2>/dev/null; then echo "exact-version live tail exited before readiness identity" >&2; exit 1; fi
             sleep 2
           done
-          echo "UNKNOWN: validation deployment never produced the required exact-version runtime diagnostic with HTTP 403." >&2
-          exit 1
+          if [[ "$captured" != "true" ]]; then echo "UNKNOWN: exact-version live tail did not capture the unauthenticated GET /" >&2; exit 1; fi
+          cleanup_readiness_tail
+          trap - EXIT INT TERM
+          node scripts/redact-validation-tail.mjs /tmp/r28-r4-readiness-tail.log
+          R28_READINESS_ROOT_ONLY=true R28_VERSION_ID="$R28_VERSION_ID" node scripts/r2.8-validation-preflight.mjs /tmp/r28-r4-readiness-tail.log > /tmp/r28-r4-runtime-identity-proof.json
+          echo "R28_EVIDENCE_FROM_MS=$(date +%s%3N)" >> "$GITHUB_ENV"
 
       - name: Prove foreground tail and unauthenticated observability probe
         shell: bash
@@ -591,8 +591,16 @@ jobs:
         run: |
           set -euo pipefail
           test -n "${R28_EVIDENCE_FROM_MS:-}"
-          test -n "${CLOUDFLARE_OBSERVABILITY_API_TOKEN//[[:space:]]/}"
-          node scripts/query-workers-observability.mjs "$((R28_EVIDENCE_FROM_MS - 120000))" "$R28_EVIDENCE_FROM_MS" > /tmp/r28-r4-historical-preflight.json
+          set +e
+          if [[ -n "${CLOUDFLARE_OBSERVABILITY_API_TOKEN//[[:space:]]/}" ]]; then
+            node scripts/query-workers-observability.mjs "$((R28_EVIDENCE_FROM_MS - 120000))" "$R28_EVIDENCE_FROM_MS" > /tmp/r28-r4-historical-preflight.json 2> /tmp/r28-r4-historical-preflight-error.txt
+            historical_code=$?
+          else
+            historical_code=1
+          fi
+          set -e
+          R28_HISTORICAL_QUERY_EXIT="$historical_code" node scripts/r2.8-historical-observability-status.mjs /tmp/r28-r4-historical-preflight.json > /tmp/r28-r4-historical-preflight-summary.json
+          echo "Historical observability is supplemental; absence is UNKNOWN_NOT_VISIBLE, never zero consumption."
 
       - name: Real-model natural multi-room dialogue
         shell: bash
@@ -746,10 +754,13 @@ jobs:
           CLOUDFLARE_OBSERVABILITY_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVABILITY_API_TOKEN }}
         run: |
           set -euo pipefail
-          # One bounded read-only capture, never a provider retry. Full
-          # reconciliation may need later stored-log recovery after ingestion.
-          test -n "${CLOUDFLARE_OBSERVABILITY_API_TOKEN//[[:space:]]/}"
-          node scripts/query-workers-observability.mjs "$R28_EVIDENCE_FROM_MS" "$(date +%s%3N)" > /tmp/r28-r4-historical.json
+          # One bounded read-only capture, never a provider retry. Historical
+          # absence remains UNKNOWN_NOT_VISIBLE, never zero consumption.
+          set +e
+          node scripts/query-workers-observability.mjs "$R28_EVIDENCE_FROM_MS" "$(date +%s%3N)" > /tmp/r28-r4-historical.json 2> /tmp/r28-r4-historical-error.txt
+          historical_code=$?
+          set -e
+          R28_HISTORICAL_QUERY_EXIT="$historical_code" node scripts/r2.8-historical-observability-status.mjs /tmp/r28-r4-historical.json > /tmp/r28-r4-historical-summary.json
 
       - name: Remove remotely deployed validation configuration
         if: always()
@@ -811,9 +822,11 @@ jobs:
             /tmp/r28-r4-probe-status.txt
             /tmp/r28-r4-preflight-proof.json
             /tmp/r28-r4-historical-preflight.json
+            /tmp/r28-r4-historical-preflight-summary.json
             /tmp/r28-r4-historical.json
-            /tmp/r28-r4-readiness-historical-*.json
+            /tmp/r28-r4-historical-summary.json
             /tmp/r28-r4-runtime-identity-proof.json
+            /tmp/r28-r4-readiness-tail.log
             /tmp/r28-r4-tail.log
             /tmp/r28-r4-report.json
             /tmp/r28-r4-model-telemetry.json

@@ -33,5 +33,6 @@ test("historical runtime identity proof rejects missing and mismatched versions"
   const event = { event: "acp_validation_runtime_identity", runtimeWorkerVersionId: "target", method: "GET", pathname: "/", validationNeuronBudgetPresent: true, validationExperimentIdPresent: true, validationRunTokenPresent: true, validationStatus: "valid" };
   assert.equal(verifyRuntimeVersionDiagnostic({ result: { events: [{ logs: [JSON.stringify(event)] }] } }, { version: "target" }).runtimeWorkerVersionId, "target");
   assert.throws(() => verifyRuntimeVersionDiagnostic({ logs: [JSON.stringify({ ...event, runtimeWorkerVersionId: "other" })] }, { version: "target" }), /MISMATCH/);
+  assert.throws(() => verifyRuntimeVersionDiagnostic({ logs: [JSON.stringify(event), JSON.stringify({ ...event, runtimeWorkerVersionId: "other" })] }, { version: "target" }), /MISMATCH/);
   assert.throws(() => verifyRuntimeVersionDiagnostic({}, { version: "target" }), /UNKNOWN/);
 });

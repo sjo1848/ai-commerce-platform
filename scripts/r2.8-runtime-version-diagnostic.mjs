@@ -24,19 +24,17 @@ function jsonValues(value, output = []) {
  */
 export function verifyRuntimeVersionDiagnostic(payload, { version, method = "GET", pathname = "/", status = "valid" }) {
   if (!version) throw new Error("exact version required");
-  const candidates = jsonValues(payload).filter((item) => item
-    && item.runtimeWorkerVersionId === version
+  const diagnostics = jsonValues(payload).filter((item) => item
+    && item.event === EVENT
     && item.method === method
     && item.pathname === pathname
     && item.validationStatus === status
     && item.validationNeuronBudgetPresent === true
     && item.validationExperimentIdPresent === true
     && item.validationRunTokenPresent === true);
-  if (candidates.length !== 1) {
-    const mismatched = jsonValues(payload).some((item) => item?.event === EVENT
-      && item.method === method && item.pathname === pathname && item.validationStatus === status
-      && item.validationNeuronBudgetPresent === true && item.validationExperimentIdPresent === true && item.validationRunTokenPresent === true);
-    throw new Error(`${mismatched ? "MISMATCH" : "UNKNOWN"}: expected one exact runtime version diagnostic`);
+  const candidates = diagnostics.filter((item) => item.runtimeWorkerVersionId === version);
+  if (candidates.length !== 1 || diagnostics.some((item) => item.runtimeWorkerVersionId !== version)) {
+    throw new Error(`${diagnostics.length ? "MISMATCH" : "UNKNOWN"}: expected one exact runtime version diagnostic`);
   }
   return { event: EVENT, runtimeWorkerVersionId: version, method, pathname, validationStatus: status };
 }
