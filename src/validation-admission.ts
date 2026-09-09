@@ -113,12 +113,13 @@ export function admitValidationRequest(
   request: Request,
   config: ValidationAdmissionConfig | ValidationConfiguration,
   next: (admittedRequest: Request) => Promise<Response>,
+  validationDeniedResponse?: () => Response,
 ): Promise<Response> {
   const configuration = "status" in config ? config : parseValidationConfiguration(config);
   const admission = validationAdmissionFor(configuration);
   if (!admission.active) return next(request);
   if (!admission.expectedToken || !tokensMatch(request.headers.get(VALIDATION_RUN_TOKEN_HEADER), admission.expectedToken)) {
-    return Promise.resolve(new Response("Forbidden", { status: 403 }));
+    return Promise.resolve(validationDeniedResponse?.() ?? new Response("Forbidden", { status: 403 }));
   }
   return next(withoutValidationToken(request));
 }

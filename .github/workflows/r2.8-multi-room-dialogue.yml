@@ -487,33 +487,30 @@ jobs:
           ')"
           echo "AI_COMMERCE_STAGING_URL=https://$WORKER_NAME.$subdomain.workers.dev" >> "$GITHUB_ENV"
 
-      - name: Prove full RUN 1 live readiness before provider runner
+      - name: Prove full RUN 1 readiness response before provider runner
         shell: bash
         run: |
           set -euo pipefail
-          : > /tmp/r28-r4-readiness-tail.log
-          timeout 75s script -qefc "./node_modules/.bin/wrangler tail '$WORKER_NAME' --version-id '$R28_VERSION_ID' --format=json" /tmp/r28-r4-readiness-tail.log > /dev/null 2>&1 &
-          READINESS_TAIL_PID=$!
-          cleanup_readiness_tail() { kill -INT "$READINESS_TAIL_PID" 2>/dev/null || true; wait "$READINESS_TAIL_PID" 2>/dev/null || true; }
-          trap cleanup_readiness_tail EXIT INT TERM
-          sleep 4
-          if ! kill -0 "$READINESS_TAIL_PID" 2>/dev/null; then echo "exact-version live tail exited before readiness GET" >&2; exit 1; fi
-          status="$(curl -sS --max-time 10 -o /tmp/r28-r4-root.html -w '%{http_code}' "$AI_COMMERCE_STAGING_URL/" || true)"
+          status="$(curl -sS --max-time 10 -D /tmp/r28-r4-readiness-headers.txt -o /tmp/r28-r4-root.html -w '%{http_code}' "$AI_COMMERCE_STAGING_URL/" || true)"
           if [[ "$status" != "403" ]]; then
             echo "Validation admission readiness returned HTTP ${status:-curl-error}; expected exactly 403." >&2
             exit 1
           fi
-          captured=false
-          for poll in $(seq 1 15); do
-            if grep -Fq '"pathname":"/"' /tmp/r28-r4-readiness-tail.log; then captured=true; break; fi
-            if ! kill -0 "$READINESS_TAIL_PID" 2>/dev/null; then echo "exact-version live tail exited before readiness identity" >&2; exit 1; fi
-            sleep 2
-          done
-          if [[ "$captured" != "true" ]]; then echo "UNKNOWN: exact-version live tail did not capture the unauthenticated GET /" >&2; exit 1; fi
-          cleanup_readiness_tail
-          trap - EXIT INT TERM
-          node scripts/redact-validation-tail.mjs /tmp/r28-r4-readiness-tail.log
-          R28_READINESS_ROOT_ONLY=true R28_VERSION_ID="$R28_VERSION_ID" node scripts/r2.8-validation-preflight.mjs /tmp/r28-r4-readiness-tail.log > /tmp/r28-r4-runtime-identity-proof.json
+          R28_VERSION_ID="$R28_VERSION_ID" node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from "node:fs";
+          const raw = readFileSync("/tmp/r28-r4-readiness-headers.txt", "utf8");
+          const blocks = raw.trim().split(/\r?\n\r?\n/);
+          const response = blocks.at(-1);
+          if (!response?.startsWith("HTTP/")) throw new Error("readiness response headers unavailable");
+          const headers = new Headers(response.split(/\r?\n/).slice(1).flatMap((line) => {
+            const separator = line.indexOf(":");
+            return separator < 1 ? [] : [[line.slice(0, separator), line.slice(separator + 1).trim()]];
+          }));
+          const runtimeVersionId = headers.get("x-acp-validation-runtime-version");
+          if (!runtimeVersionId) throw new Error("readiness response omitted immutable runtime version header");
+          if (runtimeVersionId !== process.env.R28_VERSION_ID) throw new Error("readiness response runtime version does not match exact active version");
+          writeFileSync("/tmp/r28-r4-runtime-identity-proof.json", JSON.stringify({ event: "EXACT_ACTIVE_RUNTIME_RESPONSE", status: 403, runtimeVersionId }));
+          NODE
           echo "R28_EVIDENCE_FROM_MS=$(date +%s%3N)" >> "$GITHUB_ENV"
 
       - name: Prove foreground tail and unauthenticated observability probe
@@ -804,7 +801,7 @@ jobs:
           set -euo pipefail
           node scripts/redact-validation-tail.mjs /tmp/r28-r4-probe-tail.log /tmp/r28-r4-tail.log
           shopt -s nullglob
-          historical=(/tmp/r28-r4-historical-preflight.json /tmp/r28-r4-historical.json /tmp/r28-r4-readiness-historical-*.json)
+          historical=(/tmp/r28-r4-historical-preflight.json /tmp/r28-r4-historical.json)
           node scripts/r2.8-redact-historical.mjs "${historical[@]}"
 
       - name: Preserve R2.8.4 evidence
@@ -826,7 +823,7 @@ jobs:
             /tmp/r28-r4-historical.json
             /tmp/r28-r4-historical-summary.json
             /tmp/r28-r4-runtime-identity-proof.json
-            /tmp/r28-r4-readiness-tail.log
+            /tmp/r28-r4-readiness-headers.txt
             /tmp/r28-r4-tail.log
             /tmp/r28-r4-report.json
             /tmp/r28-r4-model-telemetry.json

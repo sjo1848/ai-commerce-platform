@@ -40,14 +40,16 @@ test("R2.8.4 staging binds evidence to exact deployed version and shared concurr
 
 test("validation deployment readiness rejects 2xx and 404 instead of treating them as admitted", () => {
   const readiness = workflow.slice(
-    workflow.indexOf("- name: Prove full RUN 1 live readiness before provider runner"),
+    workflow.indexOf("- name: Prove full RUN 1 readiness response before provider runner"),
     workflow.indexOf("- name: Prove foreground tail and unauthenticated observability probe"),
   );
   assert.match(readiness, /if \[\[ "\$status" != "403" \]\]/);
   assert.match(readiness, /expected exactly 403/);
   assert.doesNotMatch(readiness, /\$status" == 2\*/);
-  assert.match(readiness, /wrangler tail/);
-  assert.match(readiness, /r2\.8-validation-preflight\.mjs/);
+  assert.match(readiness, /-D \/tmp\/r28-r4-readiness-headers\.txt/);
+  assert.match(readiness, /x-acp-validation-runtime-version/);
+  assert.match(readiness, /runtimeVersionId !== process\.env\.R28_VERSION_ID/);
+  assert.doesNotMatch(readiness, /wrangler tail|r2\.8-validation-preflight\.mjs/);
   assert.doesNotMatch(readiness, /query-workers-observability\.mjs/);
   assert.match(readiness, /\$status" != "403"/);
 });

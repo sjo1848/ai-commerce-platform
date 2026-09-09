@@ -51,6 +51,19 @@ test("A: absent validation configuration preserves the normal request path", asy
   assert.deepEqual(validationAdmission({}), { active: false });
 });
 
+test("validation-only denials may add an immutable identity response header without changing disabled or admitted traffic", async () => {
+  const version = "immutable-worker-version";
+  const denied = await admitValidationRequest(request(), configured, async () => new Response("unexpected"), () => new Response("Forbidden", { status: 403, headers: { "x-acp-validation-runtime-version": version } }));
+  assert.equal(denied.status, 403);
+  assert.equal(denied.headers.get("x-acp-validation-runtime-version"), version);
+
+  const disabled = await admitValidationRequest(request(), {}, async () => new Response("normal"), () => new Response("unexpected", { headers: { "x-acp-validation-runtime-version": version } }));
+  assert.equal(disabled.headers.get("x-acp-validation-runtime-version"), null);
+
+  const admitted = await admitValidationRequest(request({ [VALIDATION_RUN_TOKEN_HEADER]: token }), configured, async () => new Response("admitted"), () => new Response("unexpected", { headers: { "x-acp-validation-runtime-version": version } }));
+  assert.equal(admitted.headers.get("x-acp-validation-runtime-version"), null);
+});
+
 test("B: whitespace-only budget fails closed before downstream", () => rejected({ ...configured, ACP_VALIDATION_NEURON_BUDGET: " \t " }));
 test("C: malformed JSON budget fails closed before downstream", () => rejected({ ...configured, ACP_VALIDATION_NEURON_BUDGET: "{" }));
 test("D: JSON array budget fails closed before downstream", () => rejected({ ...configured, ACP_VALIDATION_NEURON_BUDGET: "[]" }));

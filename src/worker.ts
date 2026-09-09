@@ -23,6 +23,8 @@ import { createWebchatHandler } from "./webchat/handler.js";
 
 export { SessionDurableObject };
 
+export const VALIDATION_RUNTIME_VERSION_HEADER = "x-acp-validation-runtime-version";
+
 type Env = {
   AI: WorkersAiBinding;
   HMS: HmsRpcService;
@@ -101,6 +103,16 @@ function recordValidationRuntimeDiagnostic(request: Request, env: Env, status: V
   console.log(JSON.stringify(diagnostic));
 }
 
+function validationDeniedResponse(env: Env): Response {
+  const headers = new Headers();
+  // This is an immutable runtime identity, not deploy/request/secret input.
+  // Omit it rather than substituting a value when version metadata is absent.
+  if (typeof env.CF_VERSION_METADATA?.id === "string" && env.CF_VERSION_METADATA.id) {
+    headers.set(VALIDATION_RUNTIME_VERSION_HEADER, env.CF_VERSION_METADATA.id);
+  }
+  return new Response("Forbidden", { status: 403, headers });
+}
+
 function handler(env: Env, validationConfiguration: ValidationConfiguration): (request: Request) => Promise<Response> {
   if (handle) return handle;
   const reservationOperations = new DurableObjectReservationOperationStore(env.SESSIONS);
@@ -144,6 +156,11 @@ export default {
   fetch(request: Request, env: Env): Promise<Response> {
     const validationConfiguration = parseValidationConfiguration(env);
     recordValidationRuntimeDiagnostic(request, env, validationConfiguration.status);
-    return admitValidationRequest(request, validationConfiguration, (admittedRequest) => handler(env, validationConfiguration)(admittedRequest));
+    return admitValidationRequest(
+      request,
+      validationConfiguration,
+      (admittedRequest) => handler(env, validationConfiguration)(admittedRequest),
+      validationConfiguration.status === "disabled" ? undefined : () => validationDeniedResponse(env),
+    );
   },
 };
