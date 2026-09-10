@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { classifyHistoricalObservability } from "../scripts/r2.8-historical-observability-status.mjs";
+import { classifyDurableBudgetReconciliation, classifyHistoricalObservability } from "../scripts/r2.8-historical-observability-status.mjs";
 
 const workflow = readFileSync(new URL("../.github/workflows/r2.8-multi-room-dialogue.yml", import.meta.url), "utf8");
 const worker = readFileSync(new URL("../src/worker.ts", import.meta.url), "utf8");
@@ -10,6 +10,21 @@ test("empty or unavailable historical observability is UNKNOWN_NOT_VISIBLE, neve
   assert.deepEqual(classifyHistoricalObservability({ raw: JSON.stringify({ success: true, result: { events: [] } }) }), { classification: "UNKNOWN_NOT_VISIBLE", querySucceeded: true });
   assert.deepEqual(classifyHistoricalObservability({ exitCode: 1 }), { classification: "UNKNOWN_NOT_VISIBLE", querySucceeded: false });
   assert.doesNotMatch(JSON.stringify(classifyHistoricalObservability({ raw: JSON.stringify({ success: true, result: { events: [] } }) })), /consumption|zero|0/i);
+});
+
+test("durable budget reconciliation requires correlated final zero-reservation snapshot", () => {
+  const experimentId = "r28-run";
+  const versionId = "version-1";
+  const snapshot = (updatedAt, values) => ({ event: "agent_core_experiment_budget", experimentId, updatedAt, status: "ACTIVE", configuredMaxNeurons: 7000, configuredReserve: 0, observedProviderNeurons: values.observedProviderNeurons, inferenceCount: values.inferenceCount, activeReservationCount: values.activeReservationCount, totalReservedAllowance: values.totalReservedAllowance });
+  const outer = (record) => ({ $workers: { event: { scriptVersion: { id: versionId } } }, logs: [{ message: JSON.stringify(record) }] });
+  const payload = { success: true, result: { events: [outer(snapshot("2030-01-01T00:00:00.000Z", { observedProviderNeurons: 0, inferenceCount: 0, activeReservationCount: 1, totalReservedAllowance: 180 })), outer(snapshot("2030-01-01T00:01:00.000Z", { observedProviderNeurons: 10, inferenceCount: 1, activeReservationCount: 0, totalReservedAllowance: 0 }))] } };
+  const result = classifyDurableBudgetReconciliation({ raw: JSON.stringify(payload), experimentId, workerVersionId: versionId });
+  assert.equal(result.classification, "DURABLE_BUDGET_RECONCILIATION_PASS");
+  assert.equal(result.finalSnapshot.activeReservationCount, 0);
+  assert.equal(classifyDurableBudgetReconciliation({ raw: JSON.stringify(payload), experimentId, workerVersionId: "wrong" }).classification, "BUDGET_RECONCILIATION_NOT_PROVEN");
+  const unreconciledPayload = structuredClone(payload);
+  unreconciledPayload.result.events[1].logs[0].message = JSON.stringify(snapshot("2030-01-01T00:01:00.000Z", { observedProviderNeurons: 10, inferenceCount: 1, activeReservationCount: 1, totalReservedAllowance: 180 }));
+  assert.equal(classifyDurableBudgetReconciliation({ raw: JSON.stringify(unreconciledPayload), experimentId, workerVersionId: versionId }).classification, "BUDGET_RECONCILIATION_NOT_PROVEN");
 });
 
 test("full runner starts only after bounded GET convergence and synchronous admission; transport is supplemental", () => {
@@ -28,6 +43,8 @@ test("full runner starts only after bounded GET convergence and synchronous admi
   assert.match(historical, /UNKNOWN_NOT_VISIBLE, never zero consumption/);
   assert.match(broadHistorical, /set \+e/);
   assert.match(broadHistorical, /UNKNOWN_NOT_VISIBLE, never zero consumption/);
+  assert.match(broadHistorical, /R28_REQUIRE_DURABLE_BUDGET_RECONCILIATION=true/);
+  assert.match(workflow, /r28-r4-budget-reconciliation\.json/);
   assert.equal(workflow.indexOf("- name: Real-model natural multi-room dialogue") > workflow.indexOf("- name: Prove synchronous unauthenticated admission"), true);
   assert.match(workflow, /if \[\[ "\$code" -ne 0 \]\]; then[\s\S]*?exit 0[\s\S]*?node scripts\/r2\.8\.4-llm-language-corpus/);
 });

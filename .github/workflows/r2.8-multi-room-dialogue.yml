@@ -573,6 +573,7 @@ jobs:
           historical_code=$?
           set -e
           R28_HISTORICAL_QUERY_EXIT="$historical_code" node scripts/r2.8-historical-observability-status.mjs /tmp/r28-r4-historical.json > /tmp/r28-r4-historical-summary.json
+          R28_HISTORICAL_QUERY_EXIT="$historical_code" R28_REQUIRE_DURABLE_BUDGET_RECONCILIATION=true R28_VALIDATION_EXPERIMENT_ID="$R28_VALIDATION_EXPERIMENT_ID" R28_VERSION_ID="$R28_VERSION_ID" node scripts/r2.8-historical-observability-status.mjs /tmp/r28-r4-historical.json > /tmp/r28-r4-budget-reconciliation.json
 
       - name: Remove remotely deployed validation configuration
         if: always()
@@ -637,6 +638,7 @@ jobs:
             /tmp/r28-r4-historical-preflight-summary.json
             /tmp/r28-r4-historical.json
             /tmp/r28-r4-historical-summary.json
+            /tmp/r28-r4-budget-reconciliation.json
             /tmp/r28-r4-runtime-identity-proof.json
             /tmp/r28-r4-readiness-headers.txt
             /tmp/r28-r4-tail.log

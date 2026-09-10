@@ -2,9 +2,21 @@
 
 Phase: `ACP INTEGRATION — PHASE 2.6`
 Task: `ACP-2.6.9-R2-NATURAL-RECEPTIONIST`
-Status: `IN PROGRESS — R2.7 TECHNICAL_PASS / CLOSED`
+Status: `ACTIVE / ARCHITECTURAL_REWORK`
 Current sub-stage: `2.6.9-R2.8.4 — NLU BOUNDARY REWORK — ACTIVE / ARCHITECTURAL_REWORK`
 Last closed sub-stage: `2.6.9-R2.7 — ADVERSARIAL QA + INDEPENDENT CRITIC — TECHNICAL_PASS / CLOSED`
+
+## Current source identity
+
+- Phase: `ACP INTEGRATION — PHASE 2.6`.
+- Task: `ACP-2.6.9-R2-NATURAL-RECEPTIONIST`.
+- Current stage: `2.6.9-R2.8 — Real-Model Receptionist Staging E2E`.
+- Current block: `R2.8.4 — NLU Boundary Rework`.
+- `SUBSTANTIVE_PRODUCT_SHA`: `a1c40743db8099c97ae596e81ddcc8ef0931c77f`.
+- `EXECUTION_HEAD`: `PR #63 / current PR HEAD at gate time`.
+- The exact execution SHA must be captured by the actual gate/run evidence and is not stored here.
+- R2.8.4: `NOT CLOSED`.
+- R2.8.5: `BLOCKED`.
 
 ## Why R2 remains open
 Human Product Acceptance remains `REWORK` until the final natural-receptionist human gate. R2.1 through R2.7 are technically closed. R2.8 must now prove the full receptionist experience against the real authorized model and HMS staging before R2.9 can be presented to the user.
@@ -78,7 +90,7 @@ It must exercise the authorized baseline model on real staging with natural lang
 - real provider failure/fallback behavior where safely reproducible;
 - audit/usage/latency evidence.
 
-Mandatory R2.8 quality probe: earlier handoffs recorded historical R2.4 wording in `llm-model.ts`; the current exact candidate has removed that wording and its prompt-golden regression asserts its absence. R2.8 must still prove that the real model completes the multi-room flow naturally; local prompt evidence and R2.7 fallback evidence do not waive that requirement.
+Mandatory R2.8 quality probe: earlier handoffs recorded historical R2.4 wording in `llm-model.ts`; the last substantive product artifact has removed that wording and its prompt-golden regression asserts its absence. R2.8 must still prove that the real model completes the multi-room flow naturally; local prompt evidence and R2.7 fallback evidence do not waive that requirement.
 
 ## Gate to Fase 3
 Fase 3 — Alquileres remains blocked until `2.6.9-R2.9` receives explicit human `ACCEPT`.

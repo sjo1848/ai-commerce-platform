@@ -9,9 +9,10 @@
   "next_action": "HUMAN_GATE_ZERO_INFERENCE_VALIDATION_DEPLOYMENT_AND_PROBE",
   "stop_reason": "RUNTIME_BINDING_OR_VERSION_DISCREPANCY_REQUIRES_METADATA_AND_REMOTE_PROOF",
   "technical_rework_checkpoint": {
-    "status": "READY_FOR_EXACT_HEAD_CI_AND_HUMAN_GATE",
-    "candidate_worktree": "547a6f91d43cb5318129929d2f621903849b3e9d",
-    "local_npm_qa": "324/324_PASS",
+    "status": "READY_FOR_GATE_ON_CURRENT_PR_HEAD",
+    "substantive_product_sha": "a1c40743db8099c97ae596e81ddcc8ef0931c77f",
+    "execution_head": "PR #63 / current PR HEAD at gate time",
+    "last_substantive_product_npm_qa": "354/354_PASS",
     "wrangler_dry_run": "PASS",
     "workflow_provider_trigger": "MANUAL_ONLY",
     "workflow_push_provider_execution": false,
@@ -21,9 +22,9 @@
     "approval_consumptions_this_rework": 0,
     "hms_mutations_this_rework": 0,
     "evidence": ".orchestration/evidence/ACP-2.6.9-R2.8.4-RUN1-READINESS-REWORK.md",
-    "latest_candidate_ci_push_run": 34291722979,
-    "latest_candidate_ci_pr_run": 34291727306,
-    "latest_candidate_engineering_qa": "QA_PASS",
+    "last_substantive_product_ci_push_run": 34415997932,
+    "last_substantive_product_ci_pr_run": 34415993605,
+    "last_substantive_product_engineering_qa": "QA_PASS",
     "remote_zero_inference_validation": "REQUIRES_NEW_HUMAN_GATE"
   },
   "observability_recovery": {
@@ -216,8 +217,13 @@
   "r2_8": {
     "status": "IN_PROGRESS_ARCHITECTURAL_REWORK",
     "current_block": "R2.8.4_NLU_BOUNDARY_REWORK",
-    "candidate_exact_head": "19af869b0c448f69a939698fe7ef0385fe2ad229",
-    "candidate_parent": "ecda93fddaf0975ca087b699709462270a5b7101",
+    "substantive_product_sha": "a1c40743db8099c97ae596e81ddcc8ef0931c77f",
+    "execution_head": "PR #63 / current PR HEAD at gate time",
+    "historical_candidate_heads": [
+      "19af869b0c448f69a939698fe7ef0385fe2ad229",
+      "547a6f91d43cb5318129929d2f621903849b3e9d",
+      "dd5251b0f4af85ea553736da916f36cad4a65634"
+    ],
     "contract": ".orchestration/contracts/ACP-2.6.9-R2.8.4-NLU-BOUNDARY-REWORK.md",
     "r2_8_5_blocked": true,
     "mandatory_quality_probes": [
@@ -231,8 +237,8 @@
     "open_p0_p1_p2": null,
     "local_npm_qa": "354/354_PASS",
     "engineering_qa": "QA_PASS",
-    "latest_candidate_ci_push_run": 34415811956,
-    "latest_candidate_ci_pr_run": 34415815653,
+    "last_substantive_product_ci_push_run": 34415997932,
+    "last_substantive_product_ci_pr_run": 34415993605,
     "remote_zero_inference_validation": "NOT_EXECUTED_REQUIRES_NEW_HUMAN_GATE",
     "evidence_policy": "DIRECT_SYNCHRONOUS_READINESS_AND_SERVER_AUTHORED_FUNCTIONAL_PROOF; LIVE_HISTORICAL_TELEMETRY_SUPPLEMENTAL_UNKNOWN; CAPTURED_INVALID_BLOCKING",
     "ch1_zero_inference": {
