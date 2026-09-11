@@ -64,6 +64,22 @@ test("MR-103 consistent explicit occupancy is preserved and validated against to
   assert.equal(multiRoomConversationIssue(selected), undefined);
 });
 
+test("global party size does not require room-level occupancy", () => {
+  const selected = applyConversationStatePatch(groundedAvailability(4), {
+    selectedRoomNumbers: ["101", "102"],
+  });
+  assert.deepEqual(selected.roomOccupancy, []);
+  assert.equal(multiRoomConversationIssue(selected), undefined);
+});
+
+test("complete explicit occupancy remains valid for the global party size", () => {
+  const selected = applyConversationStatePatch(groundedAvailability(4), {
+    selectedRoomNumbers: ["101", "102"],
+    roomOccupancy: [{ roomNumber: "101", guests: 2 }, { roomNumber: "102", guests: 2 }],
+  });
+  assert.equal(multiRoomConversationIssue(selected), undefined);
+});
+
 test("CLR-102 inconsistent occupancy is clarification-worthy and never auto-completed", () => {
   const selected = applyConversationStatePatch(groundedAvailability(5), {
     selectedRoomNumbers: ["101", "102"],
@@ -71,6 +87,14 @@ test("CLR-102 inconsistent occupancy is clarification-worthy and never auto-comp
   });
   assert.equal(multiRoomConversationIssue(selected), "occupancy_distribution");
   assert.equal(selected.roomOccupancy.reduce((sum, item) => sum + item.guests, 0), 4);
+});
+
+test("partial explicit occupancy remains clarification-worthy", () => {
+  const selected = applyConversationStatePatch(groundedAvailability(4), {
+    selectedRoomNumbers: ["101", "102"],
+    roomOccupancy: [{ roomNumber: "101", guests: 2 }],
+  });
+  assert.equal(multiRoomConversationIssue(selected), "occupancy_distribution");
 });
 
 test("CLR-101 requested room count without exact rooms remains unresolved rather than choosing candidates", () => {

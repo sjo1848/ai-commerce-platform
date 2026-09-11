@@ -73,6 +73,8 @@ test("router prompt separates capability requirements and exposes only model-saf
   assert.match(system, /Never ask again for a value already present there/i);
   assert.match(system, /Critical arguments are dates \+ guests ONLY/i);
   assert.match(system, /reservation request NEVER needs guest count/i);
+  assert.match(system, /Total party size and room-level allocation are different facts/i);
+  assert.match(system, /known global guests count does not require roomOccupancy/i);
   assert.match(system, /server may fill omitted arguments from durable state/i);
   assert.match(system, /del 15 al 17 de enero de 2027/i);
   assert.match(system, /para las que te dije ya/i);
