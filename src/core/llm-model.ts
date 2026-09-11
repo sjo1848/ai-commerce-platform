@@ -596,6 +596,22 @@ export class LLMModelRouter implements ModelRouter {
       if (!clarification || !statePatch) return this.fallbackRoute("invalid_route_state_shape", message, context, availableTools, conversation, state);
 
       if (value.kind === "message") {
+        const selectionClarificationCanBeRepaired = clarification.reason === "missing"
+          && clarification.missing.includes("selection")
+          && isReservationIntent(message)
+          && state.availabilityRoomIds.length > 0
+          && availableTools.some((tool) => tool.risk === "write" && (tool.id === "hms.createReservation" || tool.id === "hms.createMultiReservation"));
+        if (selectionClarificationCanBeRepaired) {
+          let repairFailureCategory: string | undefined;
+          const repairPromptTelemetry = {
+            ...promptTelemetry,
+            inferenceOrdinal: ++this.inferenceOrdinal,
+            repairTrigger: true,
+          };
+          const repaired = await this.repairContradictoryToolRoute(value, system, message, context, availableTools, state, repairPromptTelemetry, (category) => { repairFailureCategory = category; });
+          if (repaired) return { ...repaired, ...this.validationRouteProvenance("baseline_llm") };
+          return this.fallbackRoute("invalid_selection_clarification", message, context, availableTools, conversation, state, repairFailureCategory);
+        }
         if (value.mutationGrounding !== null) return this.fallbackRoute("message_mutation_grounding", message, context, availableTools, conversation, state);
         if (value.toolId !== "" || !isRecord(value.input) || Object.keys(value.input).length !== 0 || clarification.reason === "none" || (clarification.missing.length !== 0 && clarification.reason !== "missing" && clarification.reason !== "ambiguous")) {
           return this.fallbackRoute("invalid_message_route", message, context, availableTools, conversation, state);
