@@ -88,21 +88,16 @@ test("2.6 fallback clarifies missing guest count instead of guessing one", async
   assert.match(result.message, /cuántas personas/i);
 });
 
-test("2.6 fallback reservation does not require or emit a guest UUID when identity is server-bound", async () => {
+test("R2.8.4 deterministic fallback never prepares a natural-language reservation write", async () => {
   const router = new DeterministicModelRouter();
   const result = await router.route(
     `reservar habitación ${roomId} del 2034-02-10 al 2034-02-12`,
     {},
     [reservationTool26],
   );
-  assert.deepEqual(result, {
-    kind: "tool",
-    plan: {
-      toolId: "hms.createReservation",
-      input: { roomId, checkIn: "2034-02-10", checkOut: "2034-02-12" },
-    },
-  });
-  assert.equal(Object.hasOwn(result.plan.input, "guestId"), false);
+  assert.equal(result.kind, "message");
+  assert.equal(Object.hasOwn(result, "plan"), false);
+  assert.equal(Object.hasOwn(result, "statePatch"), false);
 });
 
 test("legacy schema-less reservation fallback still requires explicit guest identity", async () => {
@@ -110,18 +105,20 @@ test("legacy schema-less reservation fallback still requires explicit guest iden
   const legacy = { id: "hms.createReservation", primitive: "RESERVE", description: "legacy reserve", risk: "write" };
   const missing = await router.route(`reservar habitación ${roomId} del 2034-02-10 al 2034-02-12`, {}, [legacy]);
   assert.equal(missing.kind, "message");
-  assert.match(missing.message, /huésped/i);
+  assert.equal(Object.hasOwn(missing, "plan"), false);
+  assert.equal(Object.hasOwn(missing, "statePatch"), false);
 
   const explicit = await router.route(
     `reservar habitación ${roomId} huésped ${guestId} del 2034-02-10 al 2034-02-12`,
     {},
     [legacy],
   );
-  assert.equal(explicit.kind, "tool");
-  assert.equal(explicit.plan.input.guestId, guestId);
+  assert.equal(explicit.kind, "message");
+  assert.equal(Object.hasOwn(explicit, "plan"), false);
+  assert.equal(Object.hasOwn(explicit, "statePatch"), false);
 });
 
-test("R2.8.4 fallback resolves explicit room numbers only against authoritative availability before composite routing", async () => {
+test("R2.8.4 deterministic fallback does not derive room selection from natural language", async () => {
   const router = new DeterministicModelRouter();
   const state = {
     stay: { checkIn: "2030-01-01", checkOut: "2030-01-03", guests: 4 },
@@ -141,16 +138,7 @@ test("R2.8.4 fallback resolves explicit room numbers only against authoritative 
     state,
   );
 
-  assert.deepEqual(result, {
-    kind: "tool",
-    plan: {
-      toolId: "hms.createMultiReservation",
-      input: {
-        roomIds: [roomId, roomId102],
-        checkIn: "2030-01-01",
-        checkOut: "2030-01-03",
-      },
-    },
-    statePatch: { selectedRoomIds: [roomId, roomId102] },
-  });
+  assert.equal(result.kind, "message");
+  assert.equal(Object.hasOwn(result, "plan"), false);
+  assert.equal(Object.hasOwn(result, "statePatch"), false);
 });

@@ -3,6 +3,20 @@ import type { ConversationStore } from "../core/conversation.js";
 import type { ReservationOperationBinding, ReservationOperationLookup, ReservationOperationStore } from "../core/reservation-operation-store.js";
 import type { SessionStore } from "../core/session.js";
 import type { ModelConversationTurn, Session, ToolPlan } from "../core/types.js";
+import { VALIDATION_EXPERIMENT_ID_PATTERN } from "../validation-admission.js";
+import {
+  experimentBudgetSnapshot,
+  parseExperimentBudgetSnapshot,
+  parseStoredExperimentBudget,
+  reconcileExperimentBudgetStatus,
+} from "../core/neuron-budget.js";
+import type {
+  ExperimentBudgetReservation,
+  ExperimentBudgetSnapshot,
+  ExperimentNeuronBudgetStore,
+  StoredExperimentBudget,
+  ValidationExperimentBudgetConfig,
+} from "../core/neuron-budget.js";
 import {
   approvalFingerprint,
   MAX_APPROVAL_RECOVERY_ATTEMPTS,
@@ -21,6 +35,16 @@ const CONVERSATION_URL = "https://session.internal/conversation";
 const APPROVAL_URL = "https://session.internal/approval";
 const APPROVAL_CONSUME_URL = "https://session.internal/approval/consume";
 const RESERVATION_OPERATION_URL = "https://session.internal/reservation-operation";
+const EXPERIMENT_BUDGET_RESERVE_URL = "https://session.internal/experiment-budget/reserve";
+const EXPERIMENT_BUDGET_SETTLE_URL = "https://session.internal/experiment-budget/settle";
+const EXPERIMENT_BUDGET_RELEASE_URL = "https://session.internal/experiment-budget/release";
+const EXPERIMENT_BUDGET_KEY = "experiment-budget";
+
+export function experimentBudgetDurableObjectName(experimentId: string): string {
+  if (!VALIDATION_EXPERIMENT_ID_PATTERN.test(experimentId)) throw new Error("Invalid validation experiment id");
+  return `experiment-budget:${experimentId}`;
+}
+function isFiniteNonNegative(value: unknown): value is number { return typeof value === "number" && Number.isFinite(value) && value >= 0; }
 
 function isSession(value: unknown): value is Session {
   if (!value || typeof value !== "object") return false;
@@ -84,6 +108,66 @@ export class SessionDurableObject extends DurableObject<Env> {
 
   override async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
+    if (url.pathname.startsWith("/experiment-budget/")) {
+      // This object name is server-derived from a validated experiment id. Every
+      // state transition below is synchronous after body parsing, so one DO name
+      // performs check+reserve as one serialized storage transition.
+      if (!this.ctx.id.name?.startsWith("experiment-budget:")) return new Response(null, { status: 409 });
+      const experimentId = this.ctx.id.name.slice("experiment-budget:".length);
+      const persist = (state: StoredExperimentBudget): ExperimentBudgetSnapshot => {
+        state.status = reconcileExperimentBudgetStatus(state);
+        state.updatedAt = new Date().toISOString();
+        this.ctx.storage.kv.put(EXPERIMENT_BUDGET_KEY, JSON.stringify(state));
+        return experimentBudgetSnapshot(state);
+      };
+      const snapshotResponse = (snapshot: ExperimentBudgetSnapshot): Response => new Response(JSON.stringify(snapshot), { status: 200, headers: { "content-type": "application/json; charset=utf-8" } });
+      if (request.method !== "POST") return new Response(null, { status: 405 });
+      const bodyValue = await request.json() as unknown;
+      if (!bodyValue || typeof bodyValue !== "object" || Array.isArray(bodyValue)) return new Response(null, { status: 400 });
+      const body = bodyValue as Record<string, unknown>;
+      if (url.pathname === "/experiment-budget/reserve") {
+        const config = body.config as Record<string, unknown> | undefined;
+        if (!config || !isFiniteNonNegative(config.configuredMaxNeurons) || !isFiniteNonNegative(config.configuredReserve)
+          || !isFiniteNonNegative(config.conservativeNextCallAllowance) || config.conservativeNextCallAllowance <= 0 || config.configuredReserve > config.configuredMaxNeurons) return new Response(null, { status: 400 });
+        const raw = this.ctx.storage.kv.get<string>(EXPERIMENT_BUDGET_KEY);
+        const state: StoredExperimentBudget = raw === undefined
+          ? { experimentId, configuredMaxNeurons: config.configuredMaxNeurons, configuredReserve: config.configuredReserve, conservativeNextCallAllowance: config.conservativeNextCallAllowance, observedProviderNeurons: 0, inferenceCount: 0, updatedAt: new Date().toISOString(), status: "ACTIVE", reservations: {} }
+          : parseStoredExperimentBudget(raw);
+        if (state.experimentId !== experimentId || state.configuredMaxNeurons !== config.configuredMaxNeurons || state.configuredReserve !== config.configuredReserve || state.conservativeNextCallAllowance !== config.conservativeNextCallAllowance) return new Response(null, { status: 409 });
+        const admissionStatus = reconcileExperimentBudgetStatus(state);
+        if (admissionStatus !== "ACTIVE") {
+          state.status = admissionStatus;
+          persist(state);
+          return new Response(null, { status: 409 });
+        }
+        const token = crypto.randomUUID();
+        state.reservations[token] = { allowance: state.conservativeNextCallAllowance, state: "reserved" };
+        return new Response(JSON.stringify({ token, snapshot: persist(state) }), { status: 200, headers: { "content-type": "application/json; charset=utf-8" } });
+      }
+      const raw = this.ctx.storage.kv.get<string>(EXPERIMENT_BUDGET_KEY);
+      if (raw === undefined) return new Response(null, { status: 404 });
+      const state = parseStoredExperimentBudget(raw);
+      const token = typeof body.token === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body.token) ? body.token : "";
+      const reservation = state.reservations[token];
+      if (!reservation) return new Response(null, { status: 404 });
+      if (url.pathname === "/experiment-budget/settle") {
+        const providerNeurons = body.providerNeurons;
+        // Settlement is valid only for measured provider usage. A missing value is
+        // unknown consumption, so leave the reservation held for reconciliation.
+        if (!isFiniteNonNegative(providerNeurons)) return new Response(null, { status: 400 });
+        if (reservation.state === "reserved") {
+          reservation.state = "settled";
+          state.inferenceCount += 1;
+          state.observedProviderNeurons += providerNeurons;
+        }
+        return snapshotResponse(persist(state));
+      }
+      if (url.pathname === "/experiment-budget/release") {
+        if (reservation.state === "reserved") reservation.state = "released";
+        return snapshotResponse(persist(state));
+      }
+      return new Response(null, { status: 404 });
+    }
     if (url.pathname === "/session") {
       if (request.method === "GET") {
         const raw = this.ctx.storage.kv.get<string>(SESSION_KEY);
@@ -172,6 +256,32 @@ export class SessionDurableObject extends DurableObject<Env> {
       return new Response(null, { status: 405 });
     }
     return new Response(null, { status: 404 });
+  }
+}
+
+export class DurableObjectExperimentNeuronBudgetStore implements ExperimentNeuronBudgetStore {
+  constructor(private readonly namespace: DurableObjectNamespace<SessionDurableObject>, private readonly experimentId: string) {
+    experimentBudgetDurableObjectName(experimentId);
+  }
+  private stub() { return this.namespace.getByName(experimentBudgetDurableObjectName(this.experimentId)); }
+  async reserve(config: ValidationExperimentBudgetConfig): Promise<ExperimentBudgetReservation | null> {
+    const response = await this.stub().fetch(new Request(EXPERIMENT_BUDGET_RESERVE_URL, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ config }) }));
+    if (response.status === 409) return null;
+    if (!response.ok) throw new Error(`Experiment budget reservation failed (${response.status})`);
+    const payload: unknown = await response.json();
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new Error("Experiment budget returned an invalid reservation");
+    const reservation = payload as Record<string, unknown>;
+    if (Object.keys(reservation).length !== 2 || typeof reservation.token !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(reservation.token) || !reservation.snapshot || typeof reservation.snapshot !== "object" || Array.isArray(reservation.snapshot)) throw new Error("Experiment budget returned an invalid reservation");
+    return { token: reservation.token, snapshot: parseExperimentBudgetSnapshot(JSON.stringify(reservation.snapshot)) };
+  }
+  async settle(token: string, providerNeurons: number): Promise<ExperimentBudgetSnapshot> {
+    return this.transition(EXPERIMENT_BUDGET_SETTLE_URL, { token, providerNeurons });
+  }
+  async release(token: string): Promise<ExperimentBudgetSnapshot> { return this.transition(EXPERIMENT_BUDGET_RELEASE_URL, { token }); }
+  private async transition(url: string, body: Record<string, unknown>): Promise<ExperimentBudgetSnapshot> {
+    const response = await this.stub().fetch(new Request(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }));
+    if (!response.ok) throw new Error(`Experiment budget transition failed (${response.status})`);
+    return parseExperimentBudgetSnapshot(await response.text());
   }
 }
 

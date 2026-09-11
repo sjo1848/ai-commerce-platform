@@ -173,3 +173,37 @@ test("invalid timeout configuration fails at construction", () => {
   assert.throws(() => new WorkersAiModelProvider(ai, { timeoutMs: 100 }), /timeout must be between/i);
   assert.throws(() => new WorkersAiModelProvider(ai, { timeoutMs: 31_000 }), /timeout must be between/i);
 });
+
+test("Workers AI provider preserves only valid provider neuron and cache metrics", async () => {
+  const ai = {
+    async run() {
+      return { response: { ok: true }, usage: { neurons: 12.5, cached_input_tokens: 40 } };
+    },
+  };
+  const result = await new WorkersAiModelProvider(ai).completeStructured(request);
+  assert.deepEqual(result.value, { ok: true });
+  assert.equal(result.providerNeurons, 12.5);
+  assert.equal(result.cachedInputTokens, 40);
+});
+
+test("Workers AI provider omits absent or invalid provider-only metrics without inventing aliases", async () => {
+  const metrics = [undefined, { neurons: -1, cached_input_tokens: "40" }, { neuron_count: 8, cached_tokens: 4 }];
+  for (const usage of metrics) {
+    const provider = new WorkersAiModelProvider({ async run() { return { response: { ok: true }, ...(usage ? { usage } : {}) }; } });
+    const result = await provider.completeStructured(request);
+    assert.equal(result.providerNeurons, undefined);
+    assert.equal(result.cachedInputTokens, undefined);
+  }
+});
+
+test("session affinity is opt-in, adapter-only, and keeps Gateway cache controls unchanged", async () => {
+  const calls = [];
+  await new WorkersAiModelProvider(meteredAi(calls), { enableSessionAffinity: true }).completeStructured({ ...request, sessionAffinity: "server-session-1" });
+  assert.deepEqual(calls[0].options.gateway.extraHeaders, { "x-session-affinity": "server-session-1" });
+  assert.equal(calls[0].options.gateway.skipCache, true);
+  assert.equal(calls[0].input.messages.some((message) => message.content.includes("server-session-1")), false);
+
+  const withoutOptIn = [];
+  await new WorkersAiModelProvider(meteredAi(withoutOptIn)).completeStructured({ ...request, sessionAffinity: "server-session-1" });
+  assert.equal(withoutOptIn[0].options.gateway.extraHeaders, undefined);
+});

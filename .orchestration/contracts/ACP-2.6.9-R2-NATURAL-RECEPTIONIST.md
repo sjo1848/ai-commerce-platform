@@ -172,4 +172,12 @@ Verdicts:
 Only one R2 substage is active at a time. A substage must meet its exit criteria and evidence must be persisted before the next substage becomes active. Ordinary technical REWORK returns automatically to implementation; only genuine product/risk decisions create a Human Gate.
 
 ## Current active substage
-`2.6.9-R2.4 — Multi-Room Conversation Model`.
+`2.6.9-R2.8 — Real-Model Receptionist Staging E2E`.
+
+Current active block: `R2.8.4 — NLU Boundary Rework`.
+
+The last substantive product artifact is identified by
+`SUBSTANTIVE_PRODUCT_SHA = a1c40743db8099c97ae596e81ddcc8ef0931c77f`.
+The executable artifact is resolved as `PR #63 / current PR HEAD at gate time`;
+the execution SHA is captured only in the evidence produced by that gate/run.
+R2.8.4 remains `NOT CLOSED` and R2.8.5 remains `BLOCKED`.

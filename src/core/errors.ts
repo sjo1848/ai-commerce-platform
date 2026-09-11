@@ -1,4 +1,4 @@
-import type { ToolPlan } from "./types.js";
+import type { ToolPlan, ValidationRouteProvenanceReceipt } from "./types.js";
 
 export type CoreErrorCode =
   | "BAD_REQUEST"
@@ -30,6 +30,7 @@ export class CoreError extends Error {
 }
 
 export class ApprovalRequiredError extends CoreError {
+  public validationRouteProvenance?: ValidationRouteProvenanceReceipt;
   public constructor(
     public readonly operationFingerprint: string,
     public readonly plan: ToolPlan,

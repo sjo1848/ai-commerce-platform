@@ -2,11 +2,11 @@
 
 const [fromArg, toArg, needleArg = ""] = process.argv.slice(2);
 const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
-const apiToken = process.env.CLOUDFLARE_API_TOKEN;
+const apiToken = process.env.CLOUDFLARE_OBSERVABILITY_API_TOKEN;
 const service = process.env.WORKER_NAME;
 
 if (!accountId || !apiToken || !service) {
-  throw new Error("CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN and WORKER_NAME are required");
+  throw new Error("CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_OBSERVABILITY_API_TOKEN and WORKER_NAME are required");
 }
 
 const from = Number(fromArg);
@@ -58,13 +58,37 @@ try {
 }
 
 if (!response.ok || payload?.success === false) {
-  const messages = [
+  const endpoint = "https://api.cloudflare.com/client/v4/accounts/[redacted]/workers/observability/telemetry/query";
+  const sanitize = (value) => {
+    let sanitized = String(value)
+      .replaceAll(accountId, "[redacted]")
+      .replaceAll(apiToken, "[redacted]")
+      .replace(/Bearer\s+[^\s,;]+/gi, "Bearer [redacted]")
+      .replace(/(?:token|authorization|api[_-]?key)[=:]\s*[^\s,;]+/gi, "[redacted]");
+    if (needleArg) sanitized = sanitized.replaceAll(needleArg, "[redacted]");
+    return sanitized;
+  };
+  const safePrimitive = (value) => value === null ||
+    ["string", "number", "boolean"].includes(typeof value);
+  const responseErrors = [
     ...(Array.isArray(payload?.errors) ? payload.errors : []),
     ...(Array.isArray(payload?.messages) ? payload.messages : []),
+  ];
+  const metadata = responseErrors
+    .filter((item) => item && typeof item === "object")
+    .slice(0, 5)
+    .map((item) => ({
+      ...(safePrimitive(item.code) ? { code: sanitize(item.code) } : {}),
+      ...(safePrimitive(item.message) ? { message: sanitize(item.message) } : {}),
+      ...(safePrimitive(item.documentation_url) ? { documentation_url: sanitize(item.documentation_url) } : {}),
+    }))
+    .filter((item) => Object.keys(item).length > 0);
+  const messages = [
+    ...metadata.map((item) => item.code ?? item.message ?? "api_error"),
   ]
-    .map((item) => item && typeof item === "object" ? String(item.code ?? item.message ?? "api_error") : String(item))
+    .map((item) => sanitize(item))
     .slice(0, 5);
-  throw new Error(`Workers Observability query failed HTTP ${response.status}${messages.length ? `: ${messages.join(", ")}` : ""}`);
+  throw new Error(`Workers Observability query failed ${JSON.stringify({ endpoint, status: response.status, errors: metadata })}${messages.length ? `: ${messages.join(", ")}` : ""}`);
 }
 
 process.stdout.write(JSON.stringify(payload));

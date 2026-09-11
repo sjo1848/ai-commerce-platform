@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ai-commerce-r2-6-model-eval
+  group: ai-commerce-staging
   cancel-in-progress: false
 
 jobs:

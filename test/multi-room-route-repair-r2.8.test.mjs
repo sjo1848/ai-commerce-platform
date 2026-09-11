@@ -53,11 +53,25 @@ const state = {
   roomOccupancy: [],
 };
 
-function sequenceProvider() {
+function sequenceProvider({ messageFirst = false } = {}) {
   return {
     requests: [],
     async completeStructured(request) {
       this.requests.push(request);
+      if (this.requests.length === 1 && messageFirst) {
+        return {
+          model: "fake",
+          value: {
+            kind: "message",
+            toolId: "",
+            input: {},
+            clarificationReason: "missing",
+            missing: ["selection"],
+            statePatch: {},
+            mutationGrounding: null,
+          },
+        };
+      }
       if (this.requests.length === 1) {
         // Mirrors the exact R2.8.4 staging failure class: the model recognizes
         // the composite tool but contradicts itself by declaring already-known
@@ -71,6 +85,7 @@ function sequenceProvider() {
             clarificationReason: "missing",
             missing: ["room", "dates"],
             statePatch: { selectedRoomNumbers: ["101", "102"] },
+            mutationGrounding: null,
           },
         };
       }
@@ -83,6 +98,7 @@ function sequenceProvider() {
           clarificationReason: "none",
           missing: [],
           statePatch: { selectedRoomNumbers: ["101", "102"] },
+          mutationGrounding: { kind: "reservation", checkIn: "2030-01-01", checkOut: "2030-01-03", roomIds: ["room-101", "room-102"] },
         },
       };
     },
@@ -113,4 +129,18 @@ test("R2.8.4 contradictory multi-room tool shape gets one bounded model repair b
   assert.match(provider.requests[1].messages[0].content, /repair one contradictory route candidate/i);
   assert.match(provider.requests[1].messages[0].content, /do not invent missing fields/i);
   assert.equal(fallback.calls, 0, "successful model repair must not depend on deterministic fallback");
+});
+
+test("R2.8.4 selection clarification gets one bounded model repair when reservation candidates exist", async () => {
+  const provider = sequenceProvider({ messageFirst: true });
+  fallback.calls = 0;
+  const router = new LLMModelRouter(provider, fallback);
+
+  const result = await router.route("Quiero reservar las dos primeras habitaciones.", context, tools, [], state);
+
+  assert.equal(result.kind, "tool");
+  assert.equal(result.plan.toolId, "hms.createMultiReservation");
+  assert.equal(provider.requests.length, 2, "one repair inference should be attempted");
+  assert.equal(provider.requests[1].label, "agent_core_route_repair");
+  assert.equal(fallback.calls, 0);
 });

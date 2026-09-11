@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { HmsServiceBindingAdapter } from "../dist/adapters/hms-service-binding.js";
 import { AgentCoreRuntime } from "../dist/core/runtime.js";
-import { DeterministicModelRouter } from "../dist/core/deterministic-model.js";
 import { operationFingerprint } from "../dist/core/operation-fingerprint.js";
 import { InMemoryReservationOperationStore } from "../dist/core/reservation-operation-store.js";
 import { InMemoryApprovalStore } from "../dist/webchat/approval.js";
 import { createWebchatHandler } from "../dist/webchat/handler.js";
+import { emptyConversationState, updateConversationStateFromTool } from "../dist/core/conversation-state.js";
+import { hmsAgentTools } from "../dist/adapters/hms-agent-tools.js";
 
 const hotelId = "10000000-0000-0000-0000-000000000001";
 const roomId = "11000000-0000-0000-0000-000000000001";
@@ -16,6 +17,7 @@ const bookingId = "13000000-0000-0000-0000-000000000099";
 const now = () => new Date("2026-08-30T01:30:00.000Z");
 const reserveMessage = `reservar habitacion ${roomId} huesped ${guestId} del 2027-02-10 al 2027-02-12`;
 const invalidReserveMessage = `reservar habitacion ${roomId} huesped ${guestId}`;
+const seededSessions = new WeakMap();
 
 function tenant() {
   return {
@@ -59,21 +61,41 @@ function mockService() {
   };
 }
 
+const structuredReservationModel = {
+  async route(message) {
+    if (/cancelar reserva/.test(message)) return { kind: "tool", plan: { toolId: "hms.cancelReservation", input: { bookingId } }, mutationGrounding: { kind: "cancellation", scope: "single", bookingId } };
+    return { kind: "tool", plan: { toolId: "hms.createReservation", input: { roomId, guestId, checkIn: "2027-02-10", checkOut: "2027-02-12" } }, mutationGrounding: { kind: "reservation", checkIn: "2027-02-10", checkOut: "2027-02-12", roomIds: [roomId] } };
+  },
+};
+
 function setup({ approvalStore = new InMemoryApprovalStore(now), model } = {}) {
   const mock = mockService();
   const reservationOperations = new InMemoryReservationOperationStore();
   const adapter = new HmsServiceBindingAdapter(mock.service, { "hotel-demo": { hotelId } }, reservationOperations);
   const runtime = new AgentCoreRuntime({
     tenants: [tenant()],
-    tools: [adapter.checkAvailabilityTool(), adapter.getQuoteTool(), adapter.createReservationTool(), adapter.cancelReservationTool()],
+    tools: hmsAgentTools(adapter, { guestIdByTenantActor: { "hotel-demo": { "visitor-demo": guestId } } }),
     now,
-    ...(model ? { model } : {}),
+    model: model ?? structuredReservationModel,
   });
   const handler = createWebchatHandler(runtime, { fixedTenantId: "hotel-demo", fixedActorId: "visitor-demo", approvalStore });
+  const contextReady = runtime.createContext({ tenantId: "hotel-demo", actor: actor("hms.reservation.write", "hms.reservation.cancel"), channel: "webchat" }).then(async (context) => {
+    const state = updateConversationStateFromTool(
+      emptyConversationState(),
+      "hms.checkAvailability",
+      { checkIn: "2027-02-10", checkOut: "2027-02-12", guests: 1 },
+      { rooms: [{ id: roomId, roomNumber: "101", capacity: 2 }, { id: otherRoomId, roomNumber: "102", capacity: 2 }] },
+    );
+    await runtime.conversationState.put(context.session.id, state);
+    seededSessions.set(handler, context.session.id);
+  });
+  seededSessions.set(handler, contextReady);
   return { mock, runtime, handler, approvalStore, reservationOperations };
 }
 
-function request(handler, path, body, headers = {}) {
+async function request(handler, path, body, headers = {}) {
+  const ready = seededSessions.get(handler);
+  if (ready) { await ready; const sessionId = seededSessions.get(handler); if (path === "/api/chat" && typeof sessionId === "string") body = { ...body, sessionId }; }
   return handler(new Request(`https://agent.example${path}`, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) }));
 }
 
@@ -133,7 +155,7 @@ test("approval challenge is bound to message/key and single-use", async () => {
 
 test("approval executes the exact validated plan without rerouting the model", async () => {
   let routeCount = 0;
-  const model = { async route() { routeCount += 1; return { kind: "tool", plan: { toolId: "hms.createReservation", input: { guestId, roomId: routeCount === 1 ? roomId : otherRoomId, checkIn: "2027-02-10", checkOut: "2027-02-12" } } }; } };
+  const model = { async route() { routeCount += 1; return { kind: "tool", plan: { toolId: "hms.createReservation", input: { guestId, roomId: routeCount === 1 ? roomId : otherRoomId, checkIn: "2027-02-10", checkOut: "2027-02-12" } }, mutationGrounding: { kind: "reservation", checkIn: "2027-02-10", checkOut: "2027-02-12", roomIds: [roomId] } }; } };
   const routed = setup({ model });
   const pending = await pendingApproval(routed.handler, "reserve-op-reroute");
   assert.equal(routeCount, 1);
@@ -148,7 +170,9 @@ test("approval executes the exact validated plan without rerouting the model", a
   const invalid = setup({ model: invalidModel });
   const bad = await request(invalid.handler, "/api/chat", { message: invalidReserveMessage }, { "idempotency-key": "invalid-plan" });
   const badBody = await bad.json();
-  assert.equal(bad.status, 400);
+  assert.equal(bad.status, 200);
+  assert.equal(badBody.outcome, "clarification");
+  assert.ok(Array.isArray(badBody.missing) && badBody.missing.length > 0);
   assert.equal(badBody.approvalToken, undefined);
   assert.equal(invalid.mock.calls.length, 0);
 });
@@ -206,19 +230,19 @@ test("cancellation fails closed without trusted ownership binding", async () => 
   assert.equal(mock.calls.filter((call) => call.method === "cancelReservation").length, 0);
 });
 
-test("deterministic model routes reserve/cancel intent but never execution metadata", async () => {
+test("deterministic fallback never prepares natural-language reserve/cancel writes", async () => {
+  const { DeterministicModelRouter } = await import("../dist/core/deterministic-model.js");
   const model = new DeterministicModelRouter();
   const tools = [
     { id: "hms.createReservation", primitive: "RESERVE", description: "reserve", risk: "write" },
     { id: "hms.cancelReservation", primitive: "CANCEL", description: "cancel", risk: "write" },
   ];
   const reserve = await model.route(reserveMessage, {}, tools);
-  assert.equal(reserve.kind, "tool");
-  assert.equal(reserve.plan.toolId, "hms.createReservation");
-  assert.deepEqual(Object.keys(reserve.plan).sort(), ["input", "toolId"]);
-  assert.deepEqual(reserve.plan.input, { roomId, guestId, checkIn: "2027-02-10", checkOut: "2027-02-12" });
+  assert.equal(reserve.kind, "message");
+  assert.equal(Object.hasOwn(reserve, "plan"), false);
+  assert.equal(Object.hasOwn(reserve, "statePatch"), false);
   const cancel = await model.route(`cancelar reserva ${bookingId}`, {}, tools);
-  assert.equal(cancel.kind, "tool");
-  assert.equal(cancel.plan.toolId, "hms.cancelReservation");
-  assert.deepEqual(cancel.plan.input, { bookingId });
+  assert.equal(cancel.kind, "message");
+  assert.equal(Object.hasOwn(cancel, "plan"), false);
+  assert.equal(Object.hasOwn(cancel, "statePatch"), false);
 });

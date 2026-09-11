@@ -1,5 +1,5 @@
 import { ApprovalRequiredError, CoreError } from "../core/errors.js";
-import type { Actor, ToolExecutionMeta, ToolPlan } from "../core/types.js";
+import type { Actor, ToolExecutionMeta, ToolPlan, ValidationRouteProvenanceReceipt } from "../core/types.js";
 import type { AgentCoreRuntime } from "../core/runtime.js";
 import {
   MAX_APPROVAL_RECOVERY_ATTEMPTS,
@@ -59,7 +59,23 @@ export type WebchatHandlerConfig = {
   fixedActorId?: string;
   /** Server-side single-use approval challenges. Required for /api/approve. */
   approvalStore?: ApprovalStore;
+  /** Validation-only response receipt; never enable for ordinary traffic. */
+  exposeValidationRouteProvenance?: boolean;
 };
+
+function validationReceipt(value: unknown): ValidationRouteProvenanceReceipt | undefined {
+  const receipt = record(value).validationRouteProvenance;
+  if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) return undefined;
+  const route = (receipt as Record<string, unknown>).route;
+  return route === "baseline_llm" || route === "deterministic_fallback" ? { route } : undefined;
+}
+
+function validationResponse(value: unknown, enabled: boolean): unknown {
+  const payload = record(value);
+  const { validationRouteProvenance: _receipt, ...withoutReceipt } = payload;
+  const receipt = enabled ? validationReceipt(value) : undefined;
+  return receipt ? { ...withoutReceipt, validationRouteProvenance: receipt } : withoutReceipt;
+}
 
 export function createWebchatHandler(runtime: AgentCoreRuntime, config: WebchatHandlerConfig = {}) {
   return async function handle(request: Request): Promise<Response> {
@@ -137,12 +153,12 @@ export function createWebchatHandler(runtime: AgentCoreRuntime, config: WebchatH
         trustedMeta.approvedOperationFingerprint = consumedApproval.operationFingerprint;
         trustedMeta.recoveryAttempt = consumedApproval.recoveryAttempt;
         stage = "execute_approved_plan";
-        return json(await runtime.orchestrator.executeApprovedPlan(consumedApproval.plan, context, trustedMeta));
+        return json(validationResponse(await runtime.orchestrator.executeApprovedPlan(consumedApproval.plan, context, trustedMeta), Boolean(config.exposeValidationRouteProvenance)));
       }
 
       stage = "orchestrator";
       const result = await runtime.orchestrator.chat(message, context, trustedMeta);
-      return json(result);
+      return json(validationResponse(result, Boolean(config.exposeValidationRouteProvenance)));
     } catch (error) {
       if (
         error instanceof ApprovalRequiredError
@@ -169,12 +185,19 @@ export function createWebchatHandler(runtime: AgentCoreRuntime, config: WebchatH
             plan: error.plan,
             recoveryAttempt: 0,
           });
+          const approvalState = await runtime.conversationState.get(activeSessionId!);
+          const receipt = config.exposeValidationRouteProvenance
+            ? validationReceipt({ validationRouteProvenance: error.validationRouteProvenance })
+            : undefined;
           return json({
             error: { code: error.code, message: error.message },
             sessionId: activeSessionId,
+            approvalPlan: { toolId: error.plan.toolId, input: error.plan.input },
+            approvalContext: { stay: approvalState.stay, selectedRoomIds: approvalState.selectedRoomIds, roomOccupancy: approvalState.roomOccupancy },
             approvalToken: challenge.token,
             approvalExpiresAt: challenge.expiresAt,
             approvalSummary: approvalSummaryForPlan(error.plan),
+            ...(receipt ? { validationRouteProvenance: receipt } : {}),
           }, error.status);
         } catch (approvalError) {
           console.error(JSON.stringify({

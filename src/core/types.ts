@@ -1,4 +1,5 @@
 import type { ConversationState, ConversationStatePatch } from "./conversation-state.js";
+import type { MutationGrounding } from "./mutation-grounding.js";
 
 export type TenantStatus = "active" | "suspended";
 export type Channel = "webchat" | "whatsapp" | "email";
@@ -92,16 +93,23 @@ export type ToolPlan = {
 
 export type ModelMessagePurpose = "clarification" | "unsupported" | "greeting" | "social" | "help" | "policy" | "acknowledgement";
 export type ModelClarificationField = "dates" | "guests" | "room" | "booking" | "selection" | "occupancy";
+/** Validation-only, server/router-issued route receipt. It intentionally has no request or runtime identity. */
+export type ValidationRouteProvenanceReceipt = { route: "baseline_llm" | "deterministic_fallback" };
 
 export type ModelRouteResult =
-  | { kind: "tool"; plan: ToolPlan; statePatch?: ConversationStatePatch }
+  | { kind: "tool"; plan: ToolPlan; statePatch?: ConversationStatePatch; mutationGrounding?: MutationGrounding | null; validationRouteProvenance?: ValidationRouteProvenanceReceipt }
   | {
       kind: "message";
       message: string;
       purpose?: ModelMessagePurpose;
       missing?: readonly ModelClarificationField[];
       statePatch?: ConversationStatePatch;
+      mutationGrounding?: null;
+      validationRouteProvenance?: ValidationRouteProvenanceReceipt;
+      /** Internal marker: route provider failed, so response composition must not retry it. */
+      providerFailure?: true;
     };
+export type ModelRoutingState = ConversationState & { activeBookings?: readonly { bookingId: string; roomNumber?: string }[] };
 
 export type ModelConversationTurn = {
   role: "user" | "assistant" | "tool";
@@ -115,7 +123,7 @@ export interface ModelRouter {
     context: ExecutionContext,
     availableTools: readonly ToolDescriptor[],
     conversation?: readonly ModelConversationTurn[],
-    state?: Readonly<ConversationState>,
+    state?: Readonly<ModelRoutingState>,
   ): Promise<ModelRouteResult>;
 }
 

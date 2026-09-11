@@ -44,7 +44,8 @@ test("successful LLM routing records model, token, latency and cost telemetry", 
   const route = await router.route("Somos dos, ¿qué hay?", context, tools);
   assert.equal(route.kind, "tool");
   assert.equal(usage.events.length, 1);
-  assert.deepEqual(usage.events[0], {
+  const { promptTelemetry, ...event } = usage.events[0];
+  assert.deepEqual(event, {
     timestamp: context.now,
     tenantId: "hotel-demo",
     sessionId: "session-telemetry",
@@ -57,6 +58,12 @@ test("successful LLM routing records model, token, latency and cost telemetry", 
     outputTokens: 30,
     latencyMs: 85,
     logId: "gateway-log-1",
+  });
+  assert.deepEqual(promptTelemetry, {
+    routeOrdinal: 1, inferenceOrdinal: 1, repairTrigger: false, initialValidity: "valid",
+    systemBytes: 12140, systemRulesBytes: 6178, capabilityRequirementsBytes: 94,
+    toolTextBytes: 254, modelVisibleStateBytes: 76, historyTextBytes: 0,
+    examplesAndInstructionsBytes: 5593, userMessageBytes: 22,
   });
 });
 
@@ -98,6 +105,17 @@ test("provider failure keeps stable fallback reason and records only a bounded s
   assert.equal(usage.events[0].fallbackReason, "provider_failure");
   assert.equal(usage.events[0].failureCategory, "CloudflareError3036");
   assert.equal(JSON.stringify(usage.events).includes("private upstream detail"), false);
+});
+
+test("durable provider uncertainty records both uncertainty and bounded upstream category", async () => {
+  const usage = new InMemoryUsageSink();
+  const provider = { async completeStructured() {
+    throw new ModelProviderError("budget uncertainty", "EXPERIMENT_BUDGET_PROVIDER_UNCERTAIN", "CloudflareError3036");
+  } };
+  const router = new LLMModelRouter(provider, { async route() { return { kind: "message", message: "fallback" }; } }, usage);
+  await router.route("consulta", context, tools);
+  assert.equal(usage.events[0].failureCategory, "EXPERIMENT_BUDGET_PROVIDER_UNCERTAIN");
+  assert.equal(usage.events[0].underlyingFailureCategory, "CloudflareError3036");
 });
 
 test("natural grounded response records inference telemetry while Core hydrates authoritative facts", async () => {

@@ -7,6 +7,7 @@ import {
   emptyConversationState,
   InMemoryConversationStateStore,
   ConversationBackedStateStore,
+  updateConversationStateFromTool,
 } from "../dist/core/conversation-state.js";
 import { AgentCoreRuntime } from "../dist/core/runtime.js";
 import { InMemorySessionStore } from "../dist/core/session.js";
@@ -53,7 +54,7 @@ function contextScope(context) {
   return { tenantId: context.tenant.id, actorId: context.actor.id, sessionId: context.session.id };
 }
 
-test("current-turn dates and guests are durable before model routing with user provenance", async () => {
+test("structured dates and guests become durable after model routing with user provenance", async () => {
   const stateStore = new InMemoryConversationStateStore();
   let observed;
   const runtime = new AgentCoreRuntime({
@@ -63,26 +64,21 @@ test("current-turn dates and guests are durable before model routing with user p
     model: {
       async route(_message, _context, _tools, _history, state) {
         observed = structuredClone(state);
-        return { kind: "message", purpose: "help", message: "Seguimos cuando quieras." };
+        return { kind: "message", purpose: "help", message: "Seguimos cuando quieras.", statePatch: { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 2 } };
       },
     },
   });
   const context = await runtime.createContext({ tenantId: tenant.id, actor, channel: "webchat" });
   await runtime.orchestrator.chat("Somos dos del 15 al 17 de enero de 2027", context);
 
-  assert.deepEqual(observed.stay, { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 2 });
-  assert.equal(observed.semanticMemory.stay.checkIn.source, "user");
-  assert.equal(observed.semanticMemory.stay.checkOut.source, "user");
-  assert.equal(observed.semanticMemory.stay.guests.source, "user");
-  assert.equal(observed.semanticMemory.activeIntent.value, "availability");
-  assert.deepEqual(observed.semanticMemory.scope, contextScope(context));
+  assert.deepEqual(observed.stay, {});
 
   const stored = await stateStore.get(context.session.id);
-  assert.deepEqual(stored.stay, observed.stay);
+  assert.deepEqual(stored.stay, { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 2 });
   assert.ok(stored.semanticMemory.revision >= 1);
 });
 
-test("explicit guest correction wins and stale model semantic patch cannot overwrite it", async () => {
+test("explicit structured guest correction replaces prior interpretation", async () => {
   const stateStore = new InMemoryConversationStateStore();
   let call = 0;
   const runtime = new AgentCoreRuntime({
@@ -95,7 +91,7 @@ test("explicit guest correction wins and stale model semantic patch cannot overw
           purpose: "clarification",
           missing: ["dates"],
           message: "¿Para qué fechas sería?",
-          statePatch: { guests: call === 1 ? 7 : 2 },
+          statePatch: { guests: call === 1 ? 2 : 3 },
         };
       },
     },
@@ -124,7 +120,7 @@ test("date correction inherits known month/year and preserves guest count", () =
   assert.equal(corrected.semanticMemory.stay.guests.source, "user");
 });
 
-test("stay correction invalidates room availability and selection before the model can reuse them", async () => {
+test("structured stay correction invalidates room availability before a later write can reuse it", async () => {
   const stateStore = new InMemoryConversationStateStore();
   let observed;
   const runtime = new AgentCoreRuntime({
@@ -132,20 +128,26 @@ test("stay correction invalidates room availability and selection before the mod
     model: {
       async route(_message, _context, _tools, _history, state) {
         observed = structuredClone(state);
-        return { kind: "message", purpose: "help", message: "Perfecto." };
+        return { kind: "message", purpose: "help", message: "Perfecto.", statePatch: {checkIn:"2027-01-16",checkOut:"2027-01-18"} };
       },
     },
   });
   const context = await runtime.createContext({ tenantId: tenant.id, actor, channel: "webchat" });
-  const seeded = applyUserSemanticTurn(emptyConversationState(), "Somos dos del 15 al 17 de enero de 2027", contextScope(context));
-  seeded.availabilityRoomIds = ["room-old-dates"];
-  seeded.selectedRoomId = "room-old-dates";
+  const userSeeded = applyUserSemanticTurn(emptyConversationState(), "Somos dos del 15 al 17 de enero de 2027", contextScope(context));
+  const seeded = updateConversationStateFromTool(
+    userSeeded,
+    "hms.checkAvailability",
+    { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 2 },
+    { rooms: [{ id: "room-old-dates", roomNumber: "101" }] },
+  );
   await stateStore.put(context.session.id, seeded);
 
   await runtime.orchestrator.chat("Me equivoqué, del 16 al 18", context);
-  assert.deepEqual(observed.stay, { checkIn: "2027-01-16", checkOut: "2027-01-18", guests: 2 });
-  assert.deepEqual(observed.availabilityRoomIds, []);
-  assert.equal(observed.selectedRoomId, undefined);
+  assert.deepEqual(observed.stay, {checkIn:"2027-01-15",checkOut:"2027-01-17",guests:2});
+  const correctedState = await stateStore.get(context.session.id);
+  assert.deepEqual(correctedState.stay, { checkIn: "2027-01-16", checkOut: "2027-01-18", guests: 2 });
+  assert.deepEqual(correctedState.availabilityRoomIds, []);
+  assert.equal(correctedState.selectedRoomId, undefined);
 });
 
 test("explicit clear removes the value but keeps a user tombstone", () => {
@@ -159,7 +161,7 @@ test("explicit clear removes the value but keeps a user tombstone", () => {
   assert.equal(cleared.stay.checkOut, "2027-01-17");
 });
 
-test("known semantic memory overrides conflicting model tool arguments", async () => {
+test("structured tool arguments are not overwritten by raw language parsing", async () => {
   const executions = [];
   const runtime = new AgentCoreRuntime({
     tenants: [tenant],
@@ -176,7 +178,7 @@ test("known semantic memory overrides conflicting model tool arguments", async (
   });
   const context = await runtime.createContext({ tenantId: tenant.id, actor, channel: "webchat" });
   await runtime.orchestrator.chat("Somos tres del 15 al 17 de enero de 2027, ¿hay lugar?", context);
-  assert.deepEqual(executions[0], { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 3 });
+  assert.deepEqual(executions[0], { checkIn: "2030-02-01", checkOut: "2030-02-02", guests: 1 });
 });
 
 test("preferences are bounded user context and memory-poisoning text is not persisted", () => {
@@ -238,7 +240,7 @@ test("semantic memory survives conversation compaction and runtime replacement w
   const replacementContext = await runtime2.createContext({ tenantId: tenant.id, actor, channel: "webchat", sessionId: context.session.id });
   await runtime2.orchestrator.chat("¿Qué tenés?", replacementContext);
 
-  assert.deepEqual(observed.state.stay, { checkIn: "2027-01-15", checkOut: "2027-01-17", guests: 5 });
-  assert.equal(observed.state.semanticMemory.stay.guests.source, "user");
+  assert.deepEqual(observed.state.stay, {});
+  assert.equal(observed.state.semanticMemory.stay.guests, undefined);
   assert.ok(observed.history.every((turn) => turn.toolId !== "__conversation_state"));
 });

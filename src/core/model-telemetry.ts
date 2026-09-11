@@ -12,6 +12,7 @@ export async function recordModelInference(
   context: ExecutionContext,
   label: string,
   result: StructuredModelResult,
+  promptTelemetry?: import("./model-provider.js").ModelPromptTelemetry,
 ): Promise<void> {
   if (!usage) return;
   await usage.record({
@@ -25,6 +26,9 @@ export async function recordModelInference(
     ...(result.model ? { model: result.model } : {}),
     ...(result.inputTokens !== undefined ? { inputTokens: result.inputTokens } : {}),
     ...(result.outputTokens !== undefined ? { outputTokens: result.outputTokens } : {}),
+    ...(result.providerNeurons !== undefined ? { providerNeurons: result.providerNeurons } : {}),
+    ...(result.cachedInputTokens !== undefined ? { cachedInputTokens: result.cachedInputTokens } : {}),
+    ...(promptTelemetry ? { promptTelemetry } : {}),
     ...(result.latencyMs !== undefined ? { latencyMs: result.latencyMs } : {}),
     ...(result.logId ? { logId: result.logId } : {}),
   });
@@ -36,9 +40,11 @@ export async function recordModelFallback(
   label: string,
   reason: string,
   failureCategory?: string,
+  underlyingFailureCategory?: string,
 ): Promise<void> {
   if (!usage) return;
   const bounded = boundedFailureCategory(failureCategory);
+  const boundedUnderlying = boundedFailureCategory(underlyingFailureCategory);
   await usage.record({
     timestamp: context.now,
     tenantId: context.tenant.id,
@@ -49,5 +55,6 @@ export async function recordModelFallback(
     label,
     fallbackReason: reason,
     ...(bounded ? { failureCategory: bounded } : {}),
+    ...(boundedUnderlying ? { underlyingFailureCategory: boundedUnderlying } : {}),
   });
 }

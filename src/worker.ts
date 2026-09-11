@@ -4,6 +4,7 @@ import { WorkersAiModelProvider, type WorkersAiBinding } from "./adapters/cloudf
 import {
   DurableObjectApprovalStore,
   DurableObjectConversationStore,
+  DurableObjectExperimentNeuronBudgetStore,
   DurableObjectReservationOperationStore,
   DurableObjectSessionStore,
   SessionDurableObject,
@@ -13,11 +14,17 @@ import { ConversationBackedStateStore } from "./core/conversation-state.js";
 import { DeterministicModelRouter } from "./core/deterministic-model.js";
 import { LLMModelRouter } from "./core/llm-model.js";
 import { LLMGroundedResponder } from "./core/model-responder.js";
+import { DurableExperimentBudgetProvider, validationExperimentBudget, type ExperimentBudgetTelemetry } from "./core/neuron-budget.js";
 import { AgentCoreRuntime } from "./core/runtime.js";
 import { ConsoleUsageSink } from "./core/usage.js";
+import { runtimeValidationDiagnostic } from "./runtime-validation-diagnostic.js";
+import { admitValidationRequest, parseValidationConfiguration, type ValidationConfiguration } from "./validation-admission.js";
 import { createWebchatHandler } from "./webchat/handler.js";
 
 export { SessionDurableObject };
+
+export const VALIDATION_RUNTIME_VERSION_HEADER = "x-acp-validation-runtime-version";
+const BASELINE_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 
 type Env = {
   AI: WorkersAiBinding;
@@ -25,6 +32,16 @@ type Env = {
   SESSIONS: DurableObjectNamespace<SessionDurableObject>;
   /** Evaluation-only deployment override. Omit in normal staging/production config to retain the default model. */
   ACP_MODEL_ID?: string;
+  /** Validation-harness-only JSON configuration. It is intentionally absent from normal deployments. */
+  ACP_VALIDATION_NEURON_BUDGET?: string;
+  /** Server-owned validation ledger key; never derived from a conversation session. */
+  ACP_VALIDATION_EXPERIMENT_ID?: string;
+  /** Server-owned credential admitting a request to a validation deployment. */
+  ACP_VALIDATION_RUN_TOKEN?: string;
+  /** Opt-in Gateway affinity for validation only; absent/false preserves production behavior. */
+  ACP_VALIDATION_SESSION_AFFINITY?: string;
+  /** Immutable metadata supplied by Wrangler's official version_metadata binding. */
+  CF_VERSION_METADATA?: { id?: unknown };
 };
 
 const tenant = {
@@ -59,7 +76,53 @@ const stagingIdentity = {
 
 let handle: ((request: Request) => Promise<Response>) | undefined;
 
-function handler(env: Env): (request: Request) => Promise<Response> {
+function validationSessionAffinity(value: string | undefined): boolean {
+  if (value === undefined || value === "") return false;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  throw new Error("ACP_VALIDATION_SESSION_AFFINITY must be true or false");
+}
+
+function recordExperimentBudgetTelemetry(telemetry: ExperimentBudgetTelemetry): void {
+  // Validation-only, token-free reconciliation record. This is not an API and
+  // exposes no mutable ledger capability.
+  console.log(JSON.stringify({ event: "agent_core_experiment_budget", ...telemetry }));
+}
+
+function recordValidationRuntimeDiagnostic(request: Request, env: Env, status: ValidationConfiguration["status"]): void {
+  // This event is emitted before admission and construction, including when
+  // bindings are absent (disabled), and contains presence only: never
+  // configuration values, credentials, headers, or request query data.
+  const diagnostic = runtimeValidationDiagnostic({
+    request,
+    runtimeWorkerVersionId: env.CF_VERSION_METADATA?.id,
+    validationNeuronBudgetPresent: env.ACP_VALIDATION_NEURON_BUDGET !== undefined,
+    validationExperimentIdPresent: env.ACP_VALIDATION_EXPERIMENT_ID !== undefined,
+    validationRunTokenPresent: env.ACP_VALIDATION_RUN_TOKEN !== undefined,
+    validationStatus: status,
+  });
+  console.log(JSON.stringify(diagnostic));
+}
+
+function validationDeniedResponse(env: Env): Response {
+  const headers = new Headers();
+  // This is an immutable runtime identity, not deploy/request/secret input.
+  // Omit it rather than substituting a value when version metadata is absent.
+  if (typeof env.CF_VERSION_METADATA?.id === "string" && env.CF_VERSION_METADATA.id) {
+    headers.set(VALIDATION_RUNTIME_VERSION_HEADER, env.CF_VERSION_METADATA.id);
+  }
+  return new Response("Forbidden", { status: 403, headers });
+}
+
+function validationAdmittedResponse(response: Response, env: Env): Response {
+  const headers = new Headers(response.headers);
+  if (typeof env.CF_VERSION_METADATA?.id === "string" && env.CF_VERSION_METADATA.id) {
+    headers.set(VALIDATION_RUNTIME_VERSION_HEADER, env.CF_VERSION_METADATA.id);
+  }
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
+function handler(env: Env, validationConfiguration: ValidationConfiguration): (request: Request) => Promise<Response> {
   if (handle) return handle;
   const reservationOperations = new DurableObjectReservationOperationStore(env.SESSIONS);
   const hms = new HmsServiceBindingAdapter(env.HMS, {
@@ -67,8 +130,21 @@ function handler(env: Env): (request: Request) => Promise<Response> {
   }, reservationOperations);
   const usage = new ConsoleUsageSink();
   const audit = new ConsoleAuditSink();
-  const provider = new WorkersAiModelProvider(env.AI, env.ACP_MODEL_ID ? { model: env.ACP_MODEL_ID } : {});
-  const model = new LLMModelRouter(provider, new DeterministicModelRouter(), usage);
+  const workersAiProvider = new WorkersAiModelProvider(env.AI, {
+    ...(env.ACP_MODEL_ID ? { model: env.ACP_MODEL_ID } : {}),
+    enableSessionAffinity: validationSessionAffinity(env.ACP_VALIDATION_SESSION_AFFINITY),
+  });
+  // Only an explicitly configured validation deployment uses this durable, experiment-scoped guard.
+  const validationBudget = validationConfiguration.status === "valid" ? validationConfiguration.budget : undefined;
+  const provider = validationBudget && validationConfiguration.status === "valid"
+    ? new DurableExperimentBudgetProvider(workersAiProvider, new DurableObjectExperimentNeuronBudgetStore(env.SESSIONS, validationConfiguration.experimentId), validationExperimentBudget(validationBudget), recordExperimentBudgetTelemetry)
+    : workersAiProvider;
+  const model = new LLMModelRouter(
+    provider,
+    new DeterministicModelRouter(),
+    usage,
+    validationConfiguration.status === "valid" && (!env.ACP_MODEL_ID || env.ACP_MODEL_ID === BASELINE_MODEL),
+  );
   const responder = new LLMGroundedResponder(provider, undefined, usage);
   const conversationStore = new DurableObjectConversationStore(env.SESSIONS);
   const runtime = new AgentCoreRuntime({
@@ -86,10 +162,20 @@ function handler(env: Env): (request: Request) => Promise<Response> {
     fixedTenantId: "hotel-demo",
     fixedActorId: "visitor-demo",
     approvalStore: new DurableObjectApprovalStore(env.SESSIONS),
+    exposeValidationRouteProvenance: validationConfiguration.status === "valid" && (!env.ACP_MODEL_ID || env.ACP_MODEL_ID === BASELINE_MODEL),
   });
   return handle;
 }
 
 export default {
-  fetch(request: Request, env: Env): Promise<Response> { return handler(env)(request); },
+  fetch(request: Request, env: Env): Promise<Response> {
+    const validationConfiguration = parseValidationConfiguration(env);
+    recordValidationRuntimeDiagnostic(request, env, validationConfiguration.status);
+    return admitValidationRequest(
+      request,
+      validationConfiguration,
+      async (admittedRequest) => validationAdmittedResponse(await handler(env, validationConfiguration)(admittedRequest), env),
+      validationConfiguration.status === "disabled" ? undefined : () => validationDeniedResponse(env),
+    );
+  },
 };

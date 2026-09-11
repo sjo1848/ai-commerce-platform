@@ -23,6 +23,8 @@ export type WorkersAiModelProviderOptions = {
   outputPerMillionUsd?: number;
   /** User-facing inference deadline. Timed-out calls fall back at the router/responder layer. */
   timeoutMs?: number;
+  /** Opt-in only. When enabled, forwards the server-owned request session key to Gateway. */
+  enableSessionAffinity?: boolean;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -106,6 +108,7 @@ export class WorkersAiModelProvider implements ModelProvider {
   readonly inputPerMillionUsd: number | undefined;
   readonly outputPerMillionUsd: number | undefined;
   readonly timeoutMs: number;
+  readonly enableSessionAffinity: boolean;
   /**
    * Automatic provider retries are intentionally zero. A timed-out inference may
    * still be running remotely, so retrying here can duplicate cost and worsen tail
@@ -120,6 +123,7 @@ export class WorkersAiModelProvider implements ModelProvider {
     this.model = options.model ?? DEFAULT_WORKERS_AI_MODEL;
     this.gatewayId = options.gatewayId ?? "default";
     this.timeoutMs = normalizedTimeout(options.timeoutMs);
+    this.enableSessionAffinity = options.enableSessionAffinity === true;
 
     // Public Cloudflare Workers AI pricing snapshot verified for R2.6 on 2026-08-31/2026-09-01.
     // Unknown/custom models intentionally remain unpriced unless the caller supplies explicit rates.
@@ -151,6 +155,9 @@ export class WorkersAiModelProvider implements ModelProvider {
               id: this.gatewayId,
               skipCache: true,
               collectLog: true,
+              ...(this.enableSessionAffinity && request.sessionAffinity
+                ? { extraHeaders: { "x-session-affinity": request.sessionAffinity } }
+                : {}),
               ...(request.label ? { metadata: { label: request.label } } : {}),
             },
           },
@@ -179,6 +186,8 @@ export class WorkersAiModelProvider implements ModelProvider {
       const usage = isRecord(raw.usage) ? raw.usage : {};
       const inputTokens = numberField(usage.input_tokens) ?? numberField(usage.prompt_tokens);
       const outputTokens = numberField(usage.output_tokens) ?? numberField(usage.completion_tokens);
+      const providerNeurons = numberField(usage.neurons);
+      const cachedInputTokens = numberField(usage.cached_input_tokens);
       const inputCost = inputTokens !== undefined && this.inputPerMillionUsd !== undefined
         ? (inputTokens / 1_000_000) * this.inputPerMillionUsd
         : undefined;
@@ -195,6 +204,8 @@ export class WorkersAiModelProvider implements ModelProvider {
         ...(outputTokens !== undefined ? { outputTokens } : {}),
         latencyMs: Date.now() - started,
         ...(estimatedCostUsd !== undefined ? { estimatedCostUsd } : {}),
+        ...(providerNeurons !== undefined ? { providerNeurons } : {}),
+        ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
         ...(this.ai.aiGatewayLogId ? { logId: this.ai.aiGatewayLogId } : {}),
       };
     } catch (error) {
