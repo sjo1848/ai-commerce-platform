@@ -1,4 +1,4 @@
-import { ModelProviderError, type ModelProvider, type StructuredModelRequest, type StructuredModelResult } from "./model-provider.js";
+import { ModelProviderError, safeUnderlyingProviderCategory, type ModelProvider, type StructuredModelRequest, type StructuredModelResult } from "./model-provider.js";
 
 /** Validation/harness-only circuit breaker. It has no quota authority. */
 export type ValidationNeuronBudgetConfig = {
@@ -241,11 +241,15 @@ export class DurableExperimentBudgetProvider implements ModelProvider {
     let result: StructuredModelResult;
     try {
       result = await this.provider.completeStructured(request);
-    } catch {
+    } catch (error) {
       // Dispatch may have consumed provider quota even without a usable result.
       // No ModelProvider failure currently proves pre-dispatch non-consumption.
       // Preserve the durable allowance; never turn UNKNOWN consumption into zero.
-      throw new ModelProviderError("Validation experiment provider consumption is uncertain", "EXPERIMENT_BUDGET_PROVIDER_UNCERTAIN");
+      throw new ModelProviderError(
+        "Validation experiment provider consumption is uncertain",
+        "EXPERIMENT_BUDGET_PROVIDER_UNCERTAIN",
+        safeUnderlyingProviderCategory(error),
+      );
     }
     if (result.providerNeurons === undefined) {
       // A successful provider response without usage is unknown consumption, never zero.

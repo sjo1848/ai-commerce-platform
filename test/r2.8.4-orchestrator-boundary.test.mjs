@@ -113,6 +113,20 @@ test("route clarification is observable as outcome and missing fields", async ()
   assert.deepEqual({ outcome: result.outcome, missing: result.missing }, { outcome: "clarification", missing: ["dates"] });
 });
 
+test("provider route failure composes the fallback without a second responder call", async () => {
+  let compositions = 0;
+  const runtime = new AgentCoreRuntime({
+    tools: baseTools,
+    tenants: [{ id: "hotel-a", slug: "hotel-a", status: "active", allowedToolIds: ["hms.checkAvailability"] }],
+    model: { async route() { return { kind: "message", message: "No pude procesar la solicitud con seguridad.", purpose: "clarification", missing: ["selection"], statePatch: {}, providerFailure: true }; } },
+    responder: { async compose() { compositions += 1; throw new Error("LLM responder must not be retried"); } },
+  });
+  const context = await runtime.createContext({ tenantId: "hotel-a", actor, channel: "webchat" });
+  const result = await runtime.orchestrator.chat("reservá", context);
+  assert.equal(result.outcome, "clarification");
+  assert.equal(compositions, 0);
+});
+
 test("cancellation scope and booking are structured; contradictory wording cannot override grounding", async () => {
   const route = { kind: "tool", plan: { toolId: "hms.cancelReservation", input: {} }, statePatch: {}, mutationGrounding: { kind: "cancellation", scope: "single", bookingId: "booking-1" } };
   const { runtime, context } = await setup(route, ["hms.cancelReservation"], { "hms.cancelReservation": "approval" });

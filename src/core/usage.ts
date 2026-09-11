@@ -19,6 +19,7 @@ export type UsageEvent = {
   logId?: string;
   fallbackReason?: string;
   failureCategory?: string;
+  underlyingFailureCategory?: string;
 };
 
 export interface UsageSink { record(event: UsageEvent): void | Promise<void>; }

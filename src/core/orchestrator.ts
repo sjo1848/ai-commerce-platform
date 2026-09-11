@@ -24,7 +24,7 @@ import {
   type ReservationGroupStateStore,
 } from "./reservation-group-state.js";
 import type { AgentCoreExecutor } from "./executor.js";
-import type { ModelResponder } from "./model-responder.js";
+import { DeterministicGroundedResponder, type ModelResponder } from "./model-responder.js";
 import type {
   ModelRouter,
   ModelRoutingState,
@@ -236,6 +236,7 @@ function sameBookingGrounding(left: readonly ReservationGroupBooking[], right: r
 
 export class ChatOrchestrator {
   private readonly reservationGroupState: ReservationGroupStateStore;
+  private readonly deterministicResponder = new DeterministicGroundedResponder();
 
   private withValidationRouteProvenance(result: ChatResult, provenance?: ValidationRouteProvenanceReceipt): ChatResult {
     return provenance ? { ...result, validationRouteProvenance: provenance } : result;
@@ -484,7 +485,8 @@ export class ChatOrchestrator {
       const issue = hasMultiRoomStatePatch(route.statePatch) ? multiRoomConversationIssue(durableNextState) : undefined;
       const bounded = issue ? multiRoomClarification(issue) : undefined;
       const conversationalContext = modelVisibleConversation(await this.conversation.list(context.session.id, 32));
-      const reply = await this.responder.compose({
+      const responseComposer = route.providerFailure ? this.deterministicResponder : this.responder;
+      const reply = await responseComposer.compose({
         kind: "message",
         purpose: bounded || route.missing?.length ? "clarification" : route.purpose ?? "clarification",
         baseMessage: bounded?.message ?? route.message,

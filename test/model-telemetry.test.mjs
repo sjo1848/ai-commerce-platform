@@ -107,6 +107,17 @@ test("provider failure keeps stable fallback reason and records only a bounded s
   assert.equal(JSON.stringify(usage.events).includes("private upstream detail"), false);
 });
 
+test("durable provider uncertainty records both uncertainty and bounded upstream category", async () => {
+  const usage = new InMemoryUsageSink();
+  const provider = { async completeStructured() {
+    throw new ModelProviderError("budget uncertainty", "EXPERIMENT_BUDGET_PROVIDER_UNCERTAIN", "CloudflareError3036");
+  } };
+  const router = new LLMModelRouter(provider, { async route() { return { kind: "message", message: "fallback" }; } }, usage);
+  await router.route("consulta", context, tools);
+  assert.equal(usage.events[0].failureCategory, "EXPERIMENT_BUDGET_PROVIDER_UNCERTAIN");
+  assert.equal(usage.events[0].underlyingFailureCategory, "CloudflareError3036");
+});
+
 test("natural grounded response records inference telemetry while Core hydrates authoritative facts", async () => {
   const usage = new InMemoryUsageSink();
   let fail = false;

@@ -52,8 +52,26 @@ export interface ModelProvider {
 }
 
 export class ModelProviderError extends Error {
-  constructor(message: string, public readonly causeName?: string) {
+  constructor(
+    message: string,
+    public readonly causeName?: string,
+    public readonly underlyingCauseName?: string,
+  ) {
     super(message);
     this.name = "ModelProviderError";
   }
+}
+
+const SAFE_PROVIDER_CATEGORY = /^[A-Za-z][A-Za-z0-9_.:-]{0,63}$/;
+
+export function safeProviderCategory(error: unknown): string | undefined {
+  const candidate = error instanceof ModelProviderError ? error.causeName : undefined;
+  return candidate && SAFE_PROVIDER_CATEGORY.test(candidate) ? candidate : undefined;
+}
+
+export function safeUnderlyingProviderCategory(error: unknown): string | undefined {
+  const candidate = error instanceof ModelProviderError
+    ? error.underlyingCauseName ?? error.causeName
+    : undefined;
+  return candidate && SAFE_PROVIDER_CATEGORY.test(candidate) ? candidate : undefined;
 }

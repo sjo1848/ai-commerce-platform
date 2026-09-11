@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DurableExperimentBudgetProvider, ValidationNeuronBudgetProvider, experimentBudgetSnapshot, parseExperimentBudgetSnapshot, parseStoredExperimentBudget, reconcileExperimentBudgetStatus, validationExperimentBudget } from "../dist/core/neuron-budget.js";
+import { ModelProviderError } from "../dist/core/model-provider.js";
 
 const request = { messages: [{ role: "user", content: "local fixture" }], schema: { type: "object" } };
 
@@ -170,6 +171,23 @@ test("provider failure retains reservation without attempting release", async ()
   assert.equal(outcome[0].reason?.causeName, "EXPERIMENT_BUDGET_PROVIDER_UNCERTAIN");
   assert.equal(outcome[0].value, undefined, "failure must not return a successful result");
   assert.equal([...ledger.state.reservations.values()].filter((item) => item.state === "reserved").length, 1, "uncertain release retains the reservation");
+});
+
+test("uncertain provider failure preserves only its bounded underlying category", async () => {
+  const ledger = new FakeSerializedExperimentLedger("exp-category");
+  let releases = 0;
+  let settles = 0;
+  ledger.release = async () => { releases += 1; throw new Error("must not release"); };
+  ledger.settle = async () => { settles += 1; throw new Error("must not settle"); };
+  const safe = new ModelProviderError("private", "CloudflareError3036");
+  const provider = new DurableExperimentBudgetProvider({ async completeStructured() { throw safe; } }, ledger, experimentConfig);
+  await assert.rejects(provider.completeStructured(request), error => error?.causeName === "EXPERIMENT_BUDGET_PROVIDER_UNCERTAIN" && error?.underlyingCauseName === "CloudflareError3036");
+  assert.equal(releases, 0);
+  assert.equal(settles, 0);
+  assert.equal(ledger.snapshot().activeReservationCount, 1);
+
+  const arbitrary = new DurableExperimentBudgetProvider({ async completeStructured() { throw new ModelProviderError("secret", "EXPERIMENT_BUDGET_PROVIDER_UNCERTAIN", "private raw detail"); } }, new FakeSerializedExperimentLedger("exp-arbitrary"), experimentConfig);
+  await assert.rejects(arbitrary.completeStructured(request), error => error?.underlyingCauseName === undefined);
 });
 
 test("settlement failure remains uncertain, retains the reservation, and emits no successful result", async () => {

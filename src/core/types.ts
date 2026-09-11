@@ -106,6 +106,8 @@ export type ModelRouteResult =
       statePatch?: ConversationStatePatch;
       mutationGrounding?: null;
       validationRouteProvenance?: ValidationRouteProvenanceReceipt;
+      /** Internal marker: route provider failed, so response composition must not retry it. */
+      providerFailure?: true;
     };
 export type ModelRoutingState = ConversationState & { activeBookings?: readonly { bookingId: string; roomNumber?: string }[] };
 

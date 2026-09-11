@@ -1,6 +1,6 @@
 import type { ConversationState, ConversationStatePatch } from "./conversation-state.js";
 import { applyConversationStatePatch, canonicalSelectedRoomIds, emptyConversationState } from "./conversation-state.js";
-import { ModelProviderError, type ModelProvider } from "./model-provider.js";
+import { ModelProviderError, safeProviderCategory, type ModelProvider } from "./model-provider.js";
 import { recordModelFallback, recordModelInference } from "./model-telemetry.js";
 import type {
   ExecutionContext,
@@ -339,11 +339,13 @@ function isSocialReason(reason: ClarificationReason): boolean {
 }
 
 function safeProviderFailureCategory(error: unknown): string | undefined {
-  const candidate = error instanceof ModelProviderError
-    ? error.causeName
-    : error instanceof Error
-      ? error.name
-      : undefined;
+  const candidate = safeProviderCategory(error) ?? (error instanceof Error ? error.name : undefined);
+  if (!candidate || !/^[A-Za-z][A-Za-z0-9_.:-]{0,63}$/.test(candidate)) return undefined;
+  return candidate;
+}
+
+function safeUnderlyingProviderFailureCategory(error: unknown): string | undefined {
+  const candidate = error instanceof ModelProviderError ? error.underlyingCauseName : undefined;
   if (!candidate || !/^[A-Za-z][A-Za-z0-9_.:-]{0,63}$/.test(candidate)) return undefined;
   return candidate;
 }
@@ -400,19 +402,21 @@ export class LLMModelRouter implements ModelRouter {
     conversation: readonly ModelConversationTurn[],
     state: Readonly<ModelRoutingState>,
     failureCategory?: string,
+    underlyingFailureCategory?: string,
   ): Promise<ModelRouteResult> {
-    await recordModelFallback(this.usage, context, "agent_core_route", reason, failureCategory);
+    await recordModelFallback(this.usage, context, "agent_core_route", reason, failureCategory, underlyingFailureCategory);
+    const providerFailure = reason === "provider_failure" ? { providerFailure: true as const } : {};
     const fallbackResult = await this.fallback.route(message, context, availableTools, conversation, state);
     if (fallbackResult.kind === "message") {
       const { statePatch: _discardedStatePatch, mutationGrounding: _discardedMutationGrounding, ...safeMessage } = fallbackResult;
       if (safeMessage.purpose === "clarification" && (!safeMessage.missing || safeMessage.missing.length === 0)) {
-        return { ...safeMessage, missing: ["selection"], ...this.validationRouteProvenance("deterministic_fallback") };
+        return { ...safeMessage, missing: ["selection"], ...providerFailure, ...this.validationRouteProvenance("deterministic_fallback") };
       }
-      return { ...safeMessage, ...this.validationRouteProvenance("deterministic_fallback") };
+      return { ...safeMessage, ...providerFailure, ...this.validationRouteProvenance("deterministic_fallback") };
     }
     const tool = availableTools.find((candidate) => candidate.id === fallbackResult.plan.toolId);
     if (!tool || tool.risk !== "read") {
-      return { kind: "message", purpose: "clarification", message: "No pude procesar la solicitud con seguridad. ¿Podés reformularla?", missing: ["selection"], ...this.validationRouteProvenance("deterministic_fallback") };
+      return { kind: "message", purpose: "clarification", message: "No pude procesar la solicitud con seguridad. ¿Podés reformularla?", missing: ["selection"], ...providerFailure, ...this.validationRouteProvenance("deterministic_fallback") };
     }
     return { kind: "tool", plan: fallbackResult.plan, ...this.validationRouteProvenance("deterministic_fallback") };
   }
@@ -663,6 +667,7 @@ export class LLMModelRouter implements ModelRouter {
         conversation,
         state,
         safeProviderFailureCategory(error),
+        safeUnderlyingProviderFailureCategory(error),
       );
     }
   }

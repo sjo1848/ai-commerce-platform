@@ -40,9 +40,11 @@ export async function recordModelFallback(
   label: string,
   reason: string,
   failureCategory?: string,
+  underlyingFailureCategory?: string,
 ): Promise<void> {
   if (!usage) return;
   const bounded = boundedFailureCategory(failureCategory);
+  const boundedUnderlying = boundedFailureCategory(underlyingFailureCategory);
   await usage.record({
     timestamp: context.now,
     tenantId: context.tenant.id,
@@ -53,5 +55,6 @@ export async function recordModelFallback(
     label,
     fallbackReason: reason,
     ...(bounded ? { failureCategory: bounded } : {}),
+    ...(boundedUnderlying ? { underlyingFailureCategory: boundedUnderlying } : {}),
   });
 }
