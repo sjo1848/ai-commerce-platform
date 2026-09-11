@@ -61,7 +61,7 @@ test("successful LLM routing records model, token, latency and cost telemetry", 
   });
   assert.deepEqual(promptTelemetry, {
     routeOrdinal: 1, inferenceOrdinal: 1, repairTrigger: false, initialValidity: "valid",
-    systemBytes: 11109, systemRulesBytes: 5147, capabilityRequirementsBytes: 94,
+    systemBytes: 11401, systemRulesBytes: 5439, capabilityRequirementsBytes: 94,
     toolTextBytes: 254, modelVisibleStateBytes: 76, historyTextBytes: 0,
     examplesAndInstructionsBytes: 5593, userMessageBytes: 22,
   });

@@ -177,8 +177,8 @@ test("Q: prompt golden is unchanged and fallback remains unable to authorize a n
   const admitted = await promptFor({ [VALIDATION_RUN_TOKEN_HEADER]: token });
   const normal = await promptFor({}, {});
   assert.equal(admitted, normal);
-  assert.equal(Buffer.byteLength(admitted), 10981);
-  assert.equal(createHash("sha256").update(admitted).digest("hex"), "4989b5d3a4aff1992bdd1f43f4ca699c9df3f33da973afed2ae24147aa41961c");
+  assert.equal(Buffer.byteLength(admitted), 11273);
+  assert.equal(createHash("sha256").update(admitted).digest("hex"), "2d31c902167ef607b58b00545044a5a10c9d66e7ee568844d6af38a597e08dc9");
   const result = await new DeterministicModelRouter().route("reservar la habitación 101 del 2034-02-10 al 2034-02-12", { now: "2026-08-30T14:00:00.000Z", tenant: { id: "hotel-demo" }, session: { id: "regression-session" } }, [{ id: "hms.createReservation", description: "create", risk: "write", inputSchema: { type: "object", properties: {}, required: [] } }]);
   assert.equal(result.kind, "message");
   assert.equal("plan" in result, false);

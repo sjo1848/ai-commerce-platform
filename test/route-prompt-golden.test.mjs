@@ -17,6 +17,6 @@ test("route prompt assembly remains byte-for-byte stable for the golden fixture"
   }, [{ id: "hms.checkAvailability", description: "availability", risk: "read", inputSchema: { type: "object", properties: {}, required: [] } }], [], {
     stay: { guests: 2 }, availabilityRoomIds: [], availabilityRooms: [], selectedRoomIds: [], roomOccupancy: [],
   });
-  assert.equal(Buffer.byteLength(system), 10981);
-  assert.equal(createHash("sha256").update(system).digest("hex"), "4989b5d3a4aff1992bdd1f43f4ca699c9df3f33da973afed2ae24147aa41961c");
+  assert.equal(Buffer.byteLength(system), 11273);
+  assert.equal(createHash("sha256").update(system).digest("hex"), "2d31c902167ef607b58b00545044a5a10c9d66e7ee568844d6af38a597e08dc9");
 });

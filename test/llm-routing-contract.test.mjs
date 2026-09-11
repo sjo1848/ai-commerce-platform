@@ -79,6 +79,7 @@ test("router prompt separates capability requirements and exposes only model-saf
   assert.match(system, /Pure greeting with no operational request/i);
   assert.match(system, /Social-only turns never clear/i);
   assert.match(system, /explicit room-count declaration must match the final explicit room reference set/i);
+  assert.match(system, /de la 101 a la 103.*selectedRoomNumbers=\['101','102','103'\]/i);
   assert.match(system, /If they differ, ask for selection clarification; never acknowledge or route a write/i);
   assert.match(system, /Quiero reservar la 101 y la 102.*mutationGrounding=\{kind:'reservation',checkIn:'2027-01-15',checkOut:'2027-01-17',roomIds:\['roomA','roomB'\]\}/i);
   assert.match(system, /reservá esas dos.*mutationGrounding=\{kind:'reservation',checkIn:'2027-01-15',checkOut:'2027-01-17',roomIds:\['roomA','roomB'\]\}/i);
