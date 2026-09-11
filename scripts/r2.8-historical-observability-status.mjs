@@ -35,9 +35,12 @@ function collectBudgetEvents(value, workerEvent, found = []) {
     return found;
   }
   if (!value || typeof value !== "object") return found;
-  const outer = value?.$workers?.event ?? workerEvent;
-  if (value.event === "agent_core_experiment_budget") found.push({ record: value, workerEvent: outer });
-  Object.values(value).forEach((item) => collectBudgetEvents(item, outer, found));
+  const workers = value?.$workers;
+  const outer = workers?.event ?? workerEvent;
+  const scriptVersion = workers?.scriptVersion ?? outer?.scriptVersion;
+  const correlatedWorkerEvent = scriptVersion ? { ...(outer ?? {}), scriptVersion } : outer;
+  if (value.event === "agent_core_experiment_budget") found.push({ record: value, workerEvent: correlatedWorkerEvent });
+  Object.values(value).forEach((item) => collectBudgetEvents(item, correlatedWorkerEvent, found));
   return found;
 }
 

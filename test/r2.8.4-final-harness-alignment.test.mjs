@@ -27,6 +27,14 @@ test("durable budget reconciliation requires correlated final zero-reservation s
   assert.equal(classifyDurableBudgetReconciliation({ raw: JSON.stringify(unreconciledPayload), experimentId, workerVersionId: versionId }).classification, "BUDGET_RECONCILIATION_NOT_PROVEN");
 });
 
+test("durable budget reconciliation reads the historical Workers version from the real envelope location", () => {
+  const experimentId = "r28-real-envelope";
+  const versionId = "version-real-envelope";
+  const snapshot = { event: "agent_core_experiment_budget", experimentId, updatedAt: "2030-01-01T00:00:00.000Z", status: "ACTIVE", configuredMaxNeurons: 7000, configuredReserve: 0, observedProviderNeurons: 12, inferenceCount: 1, activeReservationCount: 0, totalReservedAllowance: 0 };
+  const payload = { success: true, result: { events: [{ $workers: { scriptVersion: { id: versionId }, event: { request: {} } }, source: snapshot }] } };
+  assert.equal(classifyDurableBudgetReconciliation({ raw: JSON.stringify(payload), experimentId, workerVersionId: versionId }).classification, "DURABLE_BUDGET_RECONCILIATION_PASS");
+});
+
 test("full runner starts only after bounded GET convergence and synchronous admission; transport is supplemental", () => {
   const readiness = workflow.slice(workflow.indexOf("- name: Prove full RUN 1 readiness response before provider runner"), workflow.indexOf("- name: Prove synchronous unauthenticated admission"));
   const admission = workflow.slice(workflow.indexOf("- name: Prove synchronous unauthenticated admission"), workflow.indexOf("- name: Historical observability preflight query"));
