@@ -48,6 +48,9 @@ async function chat(message, sessionId) {
   const raw = await response.text(); let body;
   try { body = JSON.parse(raw); } catch { body = { raw }; }
   const item = { requestId, status: response.status, body, user: message };
+  const runtimeVersion = response.headers.get("x-acp-validation-runtime-version");
+  if (process.env.R28_VERSION_ID) requirePass(runtimeVersion === process.env.R28_VERSION_ID, "missing or mismatched direct runtime version proof");
+  if (runtimeVersion) item.runtimeVersion = runtimeVersion;
   current.turns.push(item);
   if (mutationFields.test(JSON.stringify(body))) mutationSignals.push({ caseId: current.id, requestId });
   requirePass(mutationSignals.length === 0, "response mutation signal");

@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   VALIDATION_RUN_TOKEN_HEADER,
   validationRequestHeaders,
+  VERSION_OVERRIDE_HEADER,
 } from "../scripts/validation-request-headers.mjs";
 
 test("absent validation token adds no validation header and preserves request headers", () => {
@@ -50,4 +51,13 @@ test("present validation token is confined to the validation header and preserve
   assert.equal(Object.keys(headers).filter((name) => name.toLowerCase() === VALIDATION_RUN_TOKEN_HEADER).length, 1);
   assert.deepEqual(Object.values(headers).filter((value) => value === token), [token]);
   assert.equal(JSON.stringify(logRecord).includes(token), false);
+});
+
+test("exact validation runs pin every request to the configured Worker Version", () => {
+  const headers = validationRequestHeaders(
+    { [VERSION_OVERRIDE_HEADER]: 'ai-commerce-agent-core="old"', "x-request-id": "request-3" },
+    { R28_VERSION_ID: "new-version", R28_WORKER_NAME: "ai-commerce-agent-core" },
+  );
+  assert.equal(headers[VERSION_OVERRIDE_HEADER], 'ai-commerce-agent-core="new-version"');
+  assert.equal(Object.keys(headers).filter((name) => name.toLowerCase() === VERSION_OVERRIDE_HEADER.toLowerCase()).length, 1);
 });

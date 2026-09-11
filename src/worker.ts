@@ -114,6 +114,14 @@ function validationDeniedResponse(env: Env): Response {
   return new Response("Forbidden", { status: 403, headers });
 }
 
+function validationAdmittedResponse(response: Response, env: Env): Response {
+  const headers = new Headers(response.headers);
+  if (typeof env.CF_VERSION_METADATA?.id === "string" && env.CF_VERSION_METADATA.id) {
+    headers.set(VALIDATION_RUNTIME_VERSION_HEADER, env.CF_VERSION_METADATA.id);
+  }
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
 function handler(env: Env, validationConfiguration: ValidationConfiguration): (request: Request) => Promise<Response> {
   if (handle) return handle;
   const reservationOperations = new DurableObjectReservationOperationStore(env.SESSIONS);
@@ -166,7 +174,7 @@ export default {
     return admitValidationRequest(
       request,
       validationConfiguration,
-      (admittedRequest) => handler(env, validationConfiguration)(admittedRequest),
+      async (admittedRequest) => validationAdmittedResponse(await handler(env, validationConfiguration)(admittedRequest), env),
       validationConfiguration.status === "disabled" ? undefined : () => validationDeniedResponse(env),
     );
   },

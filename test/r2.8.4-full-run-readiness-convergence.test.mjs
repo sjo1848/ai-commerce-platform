@@ -38,6 +38,7 @@ test("full-run readiness retries a transient 200 then accepts exact 403 runtime 
   assert.equal(requests.length, 2);
   assert.deepEqual(requests.map(({ url, options }) => [url, options.method]), [["https://example.test/", "GET"], ["https://example.test/", "GET"]]);
   assert.equal(requests.every(({ options }) => options.redirect === "manual"), true);
+  assert.equal(requests.every(({ options }) => options.headers["Cloudflare-Workers-Version-Overrides"] === `ai-commerce-agent-core="${versionId}"`), true);
   assert.deepEqual(sleeps, [5_000]);
 });
 

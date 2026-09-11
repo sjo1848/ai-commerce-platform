@@ -68,6 +68,9 @@ async function chat(caseId, message, sessionId, { idempotent = false } = {}) {
     body,
     latencyMs: Date.now() - started,
   };
+  const runtimeVersion = response.headers.get("x-acp-validation-runtime-version");
+  if (process.env.R28_VERSION_ID && runtimeVersion !== process.env.R28_VERSION_ID) throw Error(`${caseId}: missing or mismatched direct runtime version proof`);
+  if (runtimeVersion) item.runtimeVersion = runtimeVersion;
   transcript.push(item);
   if (sessionId && body.sessionId !== sessionId) throw Error(`${caseId}: session identity changed`);
   if (hasMutationResult(item)) throw Error(`${caseId}: response contained mutation result`);

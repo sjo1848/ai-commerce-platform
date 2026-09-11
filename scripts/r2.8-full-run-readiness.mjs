@@ -1,4 +1,5 @@
 import { pathToFileURL } from "node:url";
+import { validationRequestHeaders } from "./validation-request-headers.mjs";
 
 const MAX_HORIZON_MS = 30_000;
 const OBSERVATION_INTERVAL_MS = 5_000;
@@ -27,6 +28,7 @@ export async function proveFullRunReadiness({
       const response = await fetchImpl(url, {
         method: "GET",
         redirect: "manual",
+        headers: validationRequestHeaders({}, { ...process.env, R28_VERSION_ID: versionId }),
         signal: AbortSignal.timeout(Math.max(1, Math.min(10_000, deadline - now))),
       });
       const observedVersionId = runtimeVersion(response);
