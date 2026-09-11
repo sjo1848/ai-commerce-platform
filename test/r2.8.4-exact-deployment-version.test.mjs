@@ -18,6 +18,7 @@ test("R2.8.4 staging binds evidence to exact deployed version and shared concurr
   assert.match(workflow, /"\$status" != "403"/);
   assert.match(workflow, /validation admission probe returned HTTP/);
   assert.match(workflow, /if \[\[ "\$status" != "403" \]\]/);
+  assert.match(workflow, /Cloudflare-Workers-Version-Overrides: \$WORKER_NAME=.*R28_VERSION_ID/);
   assert.doesNotMatch(workflow, /status" == 2\* \|\| "\$status" == "403"/);
   assert.match(workflow, /r28-r4-llm-corpus-report/); assert.match(workflow, /r28-r4-llm-corpus-code/); assert.match(workflow, /timeout 600s/); assert.match(workflow, /r2\.8\.4-llm-language-corpus/); assert.match(workflow, /ai-commerce-staging/); assert.match(evalWorkflow, /group: ai-commerce-staging/);
   assert.match(workflow, /EXPECTED_MODEL/); assert.match(workflow, /UNKNOWN_NOT_CAPTURED/);

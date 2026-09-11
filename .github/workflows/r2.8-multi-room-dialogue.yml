@@ -422,7 +422,7 @@ jobs:
         run: |
           set -euo pipefail
           probe_path="/__r28-admission-probe?run=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          status="$(curl -sS --max-time 10 -X POST -o /tmp/r28-r4-tail-probe.txt -w '%{http_code}' "$AI_COMMERCE_STAGING_URL$probe_path" || true)"
+          status="$(curl -sS --max-time 10 -X POST -H "Cloudflare-Workers-Version-Overrides: $WORKER_NAME=\"$R28_VERSION_ID\"" -o /tmp/r28-r4-tail-probe.txt -w '%{http_code}' "$AI_COMMERCE_STAGING_URL$probe_path" || true)"
           printf '%s' "$status" > /tmp/r28-r4-probe-status.txt
           if [[ "$status" != "403" ]]; then
             echo "validation admission probe returned HTTP ${status:-curl-error}; expected exactly 403" >&2
