@@ -1,0 +1,351 @@
+name: ACP-3 J01 provider semantic preflight
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: "Exact commit SHA to validate; must equal the selected workflow ref HEAD"
+        required: true
+        type: string
+      authorization:
+        description: "Type I_AUTHORIZE_ONE_ACP3_J01_PROVIDER_PREFLIGHT"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-commerce-staging
+  cancel-in-progress: false
+
+jobs:
+  semantic-preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      WORKER_NAME: ai-commerce-agent-core
+      EXPECTED_MODEL: '@cf/meta/llama-3.3-70b-instruct-fp8-fast'
+      ACP_VALIDATION_NEURON_BUDGET: ${{ vars.ACP_VALIDATION_NEURON_BUDGET }}
+      PREFLIGHT_PATH: /__validation/acp3/j01-provider-preflight
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Require exact explicit authorization
+        shell: bash
+        env:
+          REQUESTED_SHA: ${{ inputs.candidate_sha }}
+          AUTHORIZATION: ${{ inputs.authorization }}
+        run: |
+          set -euo pipefail
+          test "$AUTHORIZATION" = "I_AUTHORIZE_ONE_ACP3_J01_PROVIDER_PREFLIGHT"
+          test "$REQUESTED_SHA" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Install locked toolchain
+        run: npm ci
+
+      - name: Foundation gate
+        run: npm run qa
+
+      - name: Verify Cloudflare credentials and fixed validation budget
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${CLOUDFLARE_API_TOKEN//[[:space:]]/}"
+          test -n "${CLOUDFLARE_ACCOUNT_ID//[[:space:]]/}"
+          test -n "${ACP_VALIDATION_NEURON_BUDGET//[[:space:]]/}"
+          ./node_modules/.bin/wrangler whoami
+          ACP_VALIDATION_NEURON_BUDGET="$ACP_VALIDATION_NEURON_BUDGET" node --input-type=module <<'NODE'
+          const supplied = JSON.parse(process.env.ACP_VALIDATION_NEURON_BUDGET);
+          const approved = {
+            maxNeuronsPerRun: 7000,
+            configuredAvailableBudget: 7000,
+            configuredReserve: 0,
+            conservativeExpectedCost: 180,
+          };
+          if (Object.keys(supplied).length !== 4 || Object.entries(approved).some(([key, value]) => supplied[key] !== value)) {
+            throw new Error("validation budget differs from the previously bounded validation budget");
+          }
+          NODE
+
+      - name: Capture exact current 100 percent deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$WORKER_NAME/deployments" \
+            > /tmp/acp3-j01-prior-deployment.json
+          PRIOR_VERSION_ID="$(node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          const payload = JSON.parse(readFileSync("/tmp/acp3-j01-prior-deployment.json", "utf8"));
+          const deployment = payload?.result?.deployments?.[0];
+          if (!payload?.success || !deployment || !Array.isArray(deployment.versions) || deployment.versions.length !== 1) {
+            throw new Error("active deployment is not a single-version deployment; refusing to alter it");
+          }
+          const current = deployment.versions[0];
+          if (current?.percentage !== 100 || typeof current.version_id !== "string" || !current.version_id) {
+            throw new Error("active deployment is not exactly one version at 100 percent");
+          }
+          process.stdout.write(current.version_id);
+          NODE
+          )"
+          test -n "$PRIOR_VERSION_ID"
+          echo "PRIOR_VERSION_ID=$PRIOR_VERSION_ID" >> "$GITHUB_ENV"
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from "node:fs";
+          const payload = JSON.parse(readFileSync("/tmp/acp3-j01-prior-deployment.json", "utf8"));
+          const deployment = payload.result.deployments[0];
+          writeFileSync("/tmp/acp3-j01-prior-summary.json", JSON.stringify({
+            event: "ACP3_J01_PRIOR_DEPLOYMENT",
+            deploymentId: deployment.id ?? null,
+            versionId: deployment.versions[0].version_id,
+            percentage: 100,
+          }));
+          NODE
+
+      - name: Prepare ephemeral validation version configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXPERIMENT_ID="acp3-j01-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          TOKEN_FILE="$(mktemp /tmp/acp3-j01-token.XXXXXX)"
+          SECRETS_FILE="$(mktemp /tmp/acp3-j01-secrets.XXXXXX.json)"
+          CURL_CONFIG="$(mktemp /tmp/acp3-j01-curl.XXXXXX.conf)"
+          chmod 600 "$TOKEN_FILE" "$SECRETS_FILE" "$CURL_CONFIG"
+          openssl rand -hex 32 > "$TOKEN_FILE"
+          EXPERIMENT_ID="$EXPERIMENT_ID" TOKEN_FILE="$TOKEN_FILE" SECRETS_FILE="$SECRETS_FILE" CURL_CONFIG="$CURL_CONFIG" node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from "node:fs";
+          const token = readFileSync(process.env.TOKEN_FILE, "utf8").trim();
+          if (!/^[0-9a-f]{64}$/.test(token)) throw new Error("ephemeral validation token generation failed");
+          writeFileSync(process.env.SECRETS_FILE, JSON.stringify({ ACP_VALIDATION_RUN_TOKEN: token }));
+          writeFileSync(process.env.CURL_CONFIG, `header = "x-acp-validation-run-token: ${token}"\n`);
+          NODE
+          echo "ACP3_EXPERIMENT_ID=$EXPERIMENT_ID" >> "$GITHUB_ENV"
+          echo "ACP3_TOKEN_FILE=$TOKEN_FILE" >> "$GITHUB_ENV"
+          echo "ACP3_SECRETS_FILE=$SECRETS_FILE" >> "$GITHUB_ENV"
+          echo "ACP3_CURL_CONFIG=$CURL_CONFIG" >> "$GITHUB_ENV"
+
+      - name: Upload exact candidate version without deploying traffic
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -r "$ACP3_SECRETS_FILE"
+          UPLOAD_OUTPUT="$(./node_modules/.bin/wrangler versions upload \
+            --tag "$GITHUB_SHA" \
+            --message "ACP-3 J01 provider preflight $GITHUB_SHA" \
+            --var "ACP_MODEL_ID:$EXPECTED_MODEL" \
+            --var "ACP_VALIDATION_SESSION_AFFINITY:false" \
+            --var "ACP_VALIDATION_NEURON_BUDGET:$ACP_VALIDATION_NEURON_BUDGET" \
+            --var "ACP_VALIDATION_EXPERIMENT_ID:$ACP3_EXPERIMENT_ID" \
+            --secrets-file "$ACP3_SECRETS_FILE" 2>&1)"
+          printf '%s\n' "$UPLOAD_OUTPUT" > /tmp/acp3-j01-upload.log
+          CANDIDATE_VERSION_ID="$(printf '%s\n' "$UPLOAD_OUTPUT" | grep -oE 'Worker Version ID: [0-9a-f-]{36}' | tail -1 | sed 's/Worker Version ID: //')"
+          test -n "$CANDIDATE_VERSION_ID"
+          test "$CANDIDATE_VERSION_ID" != "$PRIOR_VERSION_ID"
+          echo "CANDIDATE_VERSION_ID=$CANDIDATE_VERSION_ID" >> "$GITHUB_ENV"
+
+      - name: Verify immutable candidate version metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$WORKER_NAME/versions/$CANDIDATE_VERSION_ID" \
+            > /tmp/acp3-j01-candidate-version.json
+          CANDIDATE_VERSION_ID="$CANDIDATE_VERSION_ID" CANDIDATE_SHA="$GITHUB_SHA" node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from "node:fs";
+          const payload = JSON.parse(readFileSync("/tmp/acp3-j01-candidate-version.json", "utf8"));
+          const version = payload.result ?? payload;
+          if (payload.success === false || version?.id !== process.env.CANDIDATE_VERSION_ID) throw new Error("candidate version identity mismatch");
+          if (version.annotations?.["workers/tag"] !== process.env.CANDIDATE_SHA) throw new Error("candidate version tag is not exact GITHUB_SHA");
+          const bindings = Array.isArray(version?.resources?.bindings) ? version.resources.bindings : [];
+          const byName = new Map(bindings.map(({ name, type }) => [name, type]));
+          for (const name of ["AI", "HMS", "SESSIONS", "ACP_MODEL_ID", "ACP_VALIDATION_SESSION_AFFINITY", "ACP_VALIDATION_NEURON_BUDGET", "ACP_VALIDATION_EXPERIMENT_ID", "ACP_VALIDATION_RUN_TOKEN", "CF_VERSION_METADATA"]) {
+            if (!byName.has(name)) throw new Error(`candidate version missing binding: ${name}`);
+          }
+          if (byName.get("ACP_VALIDATION_RUN_TOKEN") !== "secret_text") throw new Error("validation token is not secret_text");
+          writeFileSync("/tmp/acp3-j01-candidate-summary.json", JSON.stringify({
+            event: "ACP3_J01_CANDIDATE_VERSION",
+            versionId: version.id,
+            candidateSha: process.env.CANDIDATE_SHA,
+            tag: version.annotations?.["workers/tag"] ?? null,
+            bindingNames: [...byName.keys()].sort(),
+          }));
+          NODE
+
+      - name: Add candidate at zero percent for exact version override only
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "ACP3_DEPLOYMENT_CHANGE_ATTEMPTED=true" >> "$GITHUB_ENV"
+          ./node_modules/.bin/wrangler versions deploy \
+            "$PRIOR_VERSION_ID@100%" \
+            "$CANDIDATE_VERSION_ID@0%" \
+            -y \
+            --message "ACP-3 J01 override-only preflight $GITHUB_SHA"
+
+      - name: Verify prior remains 100 percent and candidate is zero percent
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$WORKER_NAME/deployments" \
+            > /tmp/acp3-j01-split-deployment.json
+          PRIOR_VERSION_ID="$PRIOR_VERSION_ID" CANDIDATE_VERSION_ID="$CANDIDATE_VERSION_ID" node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from "node:fs";
+          const payload = JSON.parse(readFileSync("/tmp/acp3-j01-split-deployment.json", "utf8"));
+          const versions = payload?.result?.deployments?.[0]?.versions;
+          if (!payload?.success || !Array.isArray(versions)) throw new Error("split deployment metadata unavailable");
+          const prior = versions.find((item) => item.version_id === process.env.PRIOR_VERSION_ID);
+          const candidate = versions.find((item) => item.version_id === process.env.CANDIDATE_VERSION_ID);
+          if (!prior || prior.percentage !== 100) throw new Error("prior version is not still at 100 percent");
+          if (!candidate || candidate.percentage !== 0) throw new Error("candidate version is not exactly at zero percent");
+          writeFileSync("/tmp/acp3-j01-split-summary.json", JSON.stringify({
+            event: "ACP3_J01_OVERRIDE_ONLY_DEPLOYMENT",
+            priorVersionId: prior.version_id,
+            priorPercentage: prior.percentage,
+            candidateVersionId: candidate.version_id,
+            candidatePercentage: candidate.percentage,
+          }));
+          NODE
+
+      - name: Resolve staging URL
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain")"
+          subdomain="$(printf '%s' "$payload" | node -e 'const fs=require("fs");const p=JSON.parse(fs.readFileSync(0,"utf8"));if(!p?.success||!p?.result?.subdomain)process.exit(2);process.stdout.write(p.result.subdomain)')"
+          test -n "$subdomain"
+          echo "AI_COMMERCE_STAGING_URL=https://$WORKER_NAME.$subdomain.workers.dev" >> "$GITHUB_ENV"
+
+      - name: Prove exact candidate is denied without validation credential
+        shell: bash
+        run: |
+          set -euo pipefail
+          status="$(curl -sS --max-time 15 \
+            -D /tmp/acp3-j01-denied-headers.txt \
+            -o /tmp/acp3-j01-denied-body.txt \
+            -w '%{http_code}' \
+            -H "Cloudflare-Workers-Version-Overrides: $WORKER_NAME=\"$CANDIDATE_VERSION_ID\"" \
+            -X POST "$AI_COMMERCE_STAGING_URL$PREFLIGHT_PATH" || true)"
+          DENIED_STATUS="$status" CANDIDATE_VERSION_ID="$CANDIDATE_VERSION_ID" node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from "node:fs";
+          const headers = readFileSync("/tmp/acp3-j01-denied-headers.txt", "utf8");
+          const version = headers.match(/^x-acp-validation-runtime-version:\s*([^\r\n]+)$/im)?.[1]?.trim();
+          if (process.env.DENIED_STATUS !== "403") throw new Error(`expected credential-free request to be 403, got ${process.env.DENIED_STATUS}`);
+          if (version !== process.env.CANDIDATE_VERSION_ID) throw new Error("credential-free override did not reach exact candidate version");
+          writeFileSync("/tmp/acp3-j01-denied-summary.json", JSON.stringify({
+            event: "ACP3_J01_PRE_ADMISSION_DENY",
+            status: 403,
+            runtimeWorkerVersionId: version,
+          }));
+          NODE
+
+      - name: Execute exactly one budgeted ACP-3 semantic preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          status="$(curl -sS --max-time 45 \
+            --config "$ACP3_CURL_CONFIG" \
+            -D /tmp/acp3-j01-preflight-headers.txt \
+            -o /tmp/acp3-j01-preflight.json \
+            -w '%{http_code}' \
+            -H "Cloudflare-Workers-Version-Overrides: $WORKER_NAME=\"$CANDIDATE_VERSION_ID\"" \
+            -X POST "$AI_COMMERCE_STAGING_URL$PREFLIGHT_PATH" || true)"
+          PREFLIGHT_STATUS="$status" CANDIDATE_VERSION_ID="$CANDIDATE_VERSION_ID" EXPECTED_MODEL="$EXPECTED_MODEL" node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from "node:fs";
+          const body = JSON.parse(readFileSync("/tmp/acp3-j01-preflight.json", "utf8"));
+          const headers = readFileSync("/tmp/acp3-j01-preflight-headers.txt", "utf8");
+          const version = headers.match(/^x-acp-validation-runtime-version:\s*([^\r\n]+)$/im)?.[1]?.trim();
+          if (process.env.PREFLIGHT_STATUS !== "200") throw new Error(`J01 provider preflight returned HTTP ${process.env.PREFLIGHT_STATUS}`);
+          if (version !== process.env.CANDIDATE_VERSION_ID) throw new Error("preflight response did not come from exact candidate version");
+          if (body?.ok !== true || body?.kind !== "ACP3_J01_PROVIDER_PREFLIGHT_PASS") throw new Error("preflight did not return PASS receipt");
+          if (body?.nextStep?.kind !== "CALL_TOOL" || body.nextStep.capabilityId !== "availability" || body.nextStep.effectClass !== "read") throw new Error("preflight did not stop at read-only availability");
+          const expectedInput = { checkIn: "2027-02-10", checkOut: "2027-02-12", guests: 2 };
+          if (JSON.stringify(body.nextStep.groundedInput) !== JSON.stringify(expectedInput)) throw new Error("preflight grounded input mismatch");
+          if (body?.operationalState?.pendingToolInvocation !== false || body?.operationalState?.preparedOperation !== false || body?.operationalState?.executionStatus !== "not_started") throw new Error("preflight crossed the operational admission boundary");
+          if (body?.receipt?.model !== process.env.EXPECTED_MODEL) throw new Error(`model mismatch: ${body?.receipt?.model}`);
+          if (!Number.isFinite(body?.receipt?.inputTokens) || body.receipt.inputTokens <= 0) throw new Error("missing input token receipt");
+          if (!Number.isFinite(body?.receipt?.outputTokens) || body.receipt.outputTokens <= 0) throw new Error("missing output token receipt");
+          if (!Number.isFinite(body?.receipt?.providerNeurons) || body.receipt.providerNeurons < 0) throw new Error("missing provider neuron receipt");
+          const serialized = JSON.stringify(body);
+          for (const forbidden of ["toolId", "operationFingerprint", "preparedOperation", "bookingId", "roomId", "guestId"]) {
+            if (serialized.includes(forbidden)) throw new Error(`preflight response leaked forbidden operational field: ${forbidden}`);
+          }
+          writeFileSync("/tmp/acp3-j01-preflight-summary.json", JSON.stringify({
+            event: "ACP3_J01_PROVIDER_PREFLIGHT_PASS",
+            runtimeWorkerVersionId: version,
+            model: body.receipt.model,
+            inputTokens: body.receipt.inputTokens,
+            outputTokens: body.receipt.outputTokens,
+            providerNeurons: body.receipt.providerNeurons,
+            nextStep: body.nextStep,
+            operationalState: body.operationalState,
+          }));
+          NODE
+
+      - name: Restore exact prior deployment
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${PRIOR_VERSION_ID:-}" || "${ACP3_DEPLOYMENT_CHANGE_ATTEMPTED:-}" != "true" ]]; then
+            echo "No deployment change attempted; restore not required."
+            exit 0
+          fi
+          ./node_modules/.bin/wrangler versions deploy \
+            "$PRIOR_VERSION_ID@100%" \
+            -y \
+            --message "Restore pre-ACP3-J01 deployment after $GITHUB_RUN_ID"
+          curl -fsS \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$WORKER_NAME/deployments" \
+            > /tmp/acp3-j01-restored-deployment.json
+          PRIOR_VERSION_ID="$PRIOR_VERSION_ID" node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from "node:fs";
+          const payload = JSON.parse(readFileSync("/tmp/acp3-j01-restored-deployment.json", "utf8"));
+          const versions = payload?.result?.deployments?.[0]?.versions;
+          if (!payload?.success || !Array.isArray(versions) || versions.length !== 1 || versions[0]?.version_id !== process.env.PRIOR_VERSION_ID || versions[0]?.percentage !== 100) {
+            throw new Error("prior deployment was not restored exactly at 100 percent");
+          }
+          writeFileSync("/tmp/acp3-j01-restore-summary.json", JSON.stringify({
+            event: "ACP3_J01_PRIOR_DEPLOYMENT_RESTORED",
+            versionId: versions[0].version_id,
+            percentage: 100,
+          }));
+          NODE
+
+      - name: Remove sensitive temporary files
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f "${ACP3_TOKEN_FILE:-}" "${ACP3_SECRETS_FILE:-}" "${ACP3_CURL_CONFIG:-}"
+          rm -f /tmp/acp3-j01-preflight.json /tmp/acp3-j01-denied-body.txt
+
+      - name: Preserve sanitized preflight evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: acp3-j01-provider-preflight-${{ github.run_id }}
+          path: |
+            /tmp/acp3-j01-prior-summary.json
+            /tmp/acp3-j01-candidate-summary.json
+            /tmp/acp3-j01-split-summary.json
+            /tmp/acp3-j01-denied-summary.json
+            /tmp/acp3-j01-preflight-summary.json
+            /tmp/acp3-j01-restore-summary.json
+          if-no-files-found: warn
+          retention-days: 14
