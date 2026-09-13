@@ -139,6 +139,10 @@ export type PendingToolInvocation = {
 export type PreparedOperation = {
   operationId: string;
   operationType: OperationKind;
+  /** Exact server-built domain capability approved/prepared for later execution. */
+  capabilityId: "reserve_single" | "reserve_multi" | "cancel_single" | "cancel_multi" | "modify";
+  /** Exact registry binding. Approval resume must never infer a tool from operationType. */
+  toolId: string;
   operationFingerprint: OperationFingerprint;
   dependencyFingerprint: DependencyFingerprint;
   dependencyKeys: readonly TaskDependencyKey[];
