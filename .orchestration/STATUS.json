@@ -3,11 +3,11 @@
   "runtime_status": "IN_PROGRESS",
   "resume_authorized": true,
   "active_task": "ACP-3.0.8-IMPLEMENTATION-FOUNDATION",
-  "last_completed_task": "ACP-3.0.8.6B-RESPONSE-BOUNDARY",
-  "last_completed_head": "373bc9c99a5aa74ffff1cfc299c4921b46475a26",
-  "current_substage": "ACP-3.0.8.6C_FULL_OFFLINE_OBSERVATION_TO_PUBLICATION_LOOP",
-  "next_action": "PROVE_FULL_OFFLINE_OBSERVATION_TO_PUBLICATION_LOOP",
-  "stop_reason": null,
+  "last_completed_task": "ACP-3.0.8.7B-J01-PROVIDER-PREFLIGHT-READY",
+  "last_completed_head": "6df40c6f850cd5ebcb3c70c5e4c71b3754d4ea27",
+  "current_substage": "ACP-3.0.8.7C_PROVIDER_BACKED_J01_EXECUTION_GATE",
+  "next_action": "AWAIT_PROVIDER_CALL_AUTHORIZATION_FOR_ONE_BUDGETED_SEMANTIC_PREFLIGHT",
+  "stop_reason": "PROVIDER_CALLS_NOT_AUTHORIZED",
   "baseline": {
     "source_pr": 63,
     "source_head": "10c649507b524c44fc4ed4fd1d0dd1e63cd13185"
@@ -22,7 +22,10 @@
     "orchestration_boundary": {"status":"ORCHESTRATION_BOUNDARY_PASS","head":"1694b0df4aacb1771a9143a73fcba92704a4bd50","ci":34764771302,"runtime_cutover":false,"max_internal_steps":3,"intermediate_non_gate_head":"9e988094c107e593188067fed5790a2b6a85fb51"},
     "orchestration_integration": {"status":"ORCHESTRATION_INTEGRATION_PASS","head":"b6020d62b36481ae4efaa7f0db313997c6e31a0d","ci":34769395411,"tests":475,"runtime_cutover":false,"tool_execution":false,"failed_candidate":{"head":"9c1b4a817a173b692e39d5c3493afcdcc8281ff3","ci":34769238836,"reason":"TYPE_NARROWING_ONLY"},"corrected_admission_head":"7276fe562543f402afbd8eb502390c1816c786e1","corrected_admission_ci":34769314148},
     "observation_mapper_replan": {"status":"OBSERVATION_MAPPER_REPLAN_PASS","head":"9abbf75390d568765f293269569d645acdf36a29","ci":34770532449,"tests":488,"runtime_cutover":false,"raw_tool_payload_to_planner":false,"hms_mutations":false,"failed_candidate":{"head":"2190514e2170a1584d61f39a41a29e968804ebc7","ci":34770094605,"tests_passed":483,"tests_failed":3,"reason":"EXECUTION_FAILURE_PRIORITY_MASKED_BY_STALE_PREPARED_WAIT"}},
-    "response_boundary": {"status":"RESPONSE_BOUNDARY_PASS","head":"373bc9c99a5aa74ffff1cfc299c4921b46475a26","ci":34771062223,"tests":501,"runtime_cutover":false,"raw_tool_payload_to_renderer":false,"opaque_response_fingerprint":true,"publication_requires_channel_acceptance":true,"dialogue_anchor_activation":"POST_PUBLICATION_REDUCER_EVENT"}
+    "response_boundary": {"status":"RESPONSE_BOUNDARY_PASS","head":"373bc9c99a5aa74ffff1cfc299c4921b46475a26","ci":34771062223,"tests":501,"runtime_cutover":false,"raw_tool_payload_to_renderer":false,"opaque_response_fingerprint":true,"publication_requires_channel_acceptance":true,"dialogue_anchor_activation":"POST_PUBLICATION_REDUCER_EVENT"},
+    "full_offline_observation_publication": {"status":"FULL_OFFLINE_OBSERVATION_TO_PUBLICATION_PASS","head":"50987d0cea718114590317c8263574606591ad9d","ci":34771449532,"runtime_cutover":false,"provider_calls":false,"hms_mutations":false},
+    "j01_offline_implementation": {"status":"J01_OFFLINE_IMPLEMENTATION_PASS","head":"6623ff2599c3eb613217f7b0f3567e10c2b5ab63","ci":34776183968,"tests":504,"real_provider_calls":false,"real_hms_calls":false,"real_approval_consumption":false,"failed_candidate":{"head":"2c6a3dee7913052f2a92e334bd4d62f6da9d15eb","ci":34776089467,"reason":"TEST_EXPECTATION_MISMATCH_APPROVAL_WORDING_ONLY"}},
+    "j01_provider_preflight": {"status":"J01_PROVIDER_PREFLIGHT_READY","head":"6df40c6f850cd5ebcb3c70c5e4c71b3754d4ea27","ci":34776673474,"provider_calls_executed":false,"requires_durable_experiment_budget":true,"tool_admission":false,"hms_calls":false,"approval_consumption":false,"failed_candidates":[{"head":"0677220d7709a0dc6f441790e0329a01da695ba8","ci":34776420997,"reason":"EXACT_OPTIONAL_PROPERTY_TYPE_ONLY"},{"head":"a96e127954d772d159ccdd0648e09eb68059b542","ci":34776469990,"reason":"TEST_IMPORT_PATH_ONLY"}]}
   },
   "constraints": {
     "production": false,
@@ -33,8 +36,8 @@
     "second_vertical": false
   },
   "event": {
-    "id": "ACP-3.0.8.6C-FULL-OFFLINE-OBSERVATION-TO-PUBLICATION-START",
-    "type": "SUBSTAGE_START",
-    "seq": 36
+    "id": "ACP-3.0.8.7B-J01-PROVIDER-PREFLIGHT-READY",
+    "type": "SUBGATE_PASS",
+    "seq": 39
   }
 }
