@@ -96,6 +96,24 @@ Run component/integration tests, then the provider-backed real J01 only after th
 - targeted tests pass;
 - repository typecheck/QA must pass before integration.
 
+## 3.0.8.3 acceptance
+
+`DETERMINISTIC_PLANNER_IMPLEMENTATION_PASS` requires:
+- TaskDefinition declares deterministic bindings, requirements and complete dependency keys for implemented capabilities;
+- DomainCapabilities only exposes real visible domain capabilities and does not replace Policy;
+- PlanningTrigger carries no raw text;
+- exactly one bounded NextStep is emitted;
+- every CALL_TOOL has grounded input + deterministic precondition fingerprint;
+- write preconditions include current operation/commit semantics;
+- matching pending reads are not duplicated;
+- zero-result, failure and pending remain distinct;
+- no automatic retry;
+- no dynamic tool ranking or multi-write decomposition;
+- approval/execution remain outside Planner authority;
+- J01 is traversable synthetically without LLM planning;
+- missing booking-target grounding fails closed rather than moving reference resolution into Planner;
+- focused tests and exact-head repository CI pass.
+
 ## Evidence discipline
 
 GitHub Actions and provider calls are protected resources. Prefer local/static verification during implementation. A remote cycle is justified only when it directly reduces a material integration blocker or supplies a required gate.

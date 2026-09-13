@@ -15,5 +15,7 @@ export * from "./core/task-state.js";
 export * from "./core/task-state-adapter.js";
 export * from "./core/task-events.js";
 export * from "./core/task-reducer.js";
+export * from "./core/planning.js";
+export * from "./core/hotel-task-planner.js";
 export * from "./adapters/fake-hms.js";
 export * from "./webchat/handler.js";

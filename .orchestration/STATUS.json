@@ -3,14 +3,14 @@
   "runtime_status": "IN_PROGRESS",
   "resume_authorized": true,
   "active_task": "ACP-3.0.8-IMPLEMENTATION-FOUNDATION",
-  "last_completed_task": "ACP-3.0.8.1-FOUNDATION-CONTRACTS",
-  "last_completed_head": "31d91df9c1b211263245e43860077ca8f36d7aa3",
-  "current_substage": "ACP-3.0.8.2_DETERMINISTIC_REDUCER_REVIEW_03_FINAL_CANDIDATE_CI_PENDING",
-  "next_action": "VALIDATE_REVIEW_03_EXACT_HEAD_THEN_GATE_REDUCER",
+  "last_completed_task": "ACP-3.0.8.2-DETERMINISTIC-REDUCER",
+  "last_completed_head": "5860202068eb89cce8f7b0e37d5e5dbc4225e987",
+  "current_substage": "ACP-3.0.8.3_DETERMINISTIC_PLANNER_FINAL_CANDIDATE_CI_PENDING",
+  "next_action": "VALIDATE_PLANNER_EXACT_HEAD_THEN_GATE_3_0_8_3",
   "stop_reason": null,
   "baseline": {
     "source_pr": 63,
-    "source_head": "10c649507b524c44fc4ed1d0dd1e63cd13185"
+    "source_head": "10c649507b524c44fc4ed4fd1d0dd1e63cd13185"
   },
   "active_branch": "feature/acp-3.0.8-implementation-foundation",
   "active_contract": ".orchestration/contracts/ACP-3.0.8-IMPLEMENTATION-FOUNDATION.md",
@@ -29,15 +29,24 @@
     "core_ci_run": 34754506869
   },
   "deterministic_reducer": {
-    "status": "REVIEW_03_FINAL_CANDIDATE_CI_PENDING",
-    "prior_green_heads": [
-      "d9466599dbaa6af75f986f2faf6d743562ad2627",
-      "b12751f6baeabfee3014c0e486a59a90786cce17"
-    ],
-    "local_isolated_reducer_tests": "21/21_PASS",
-    "local_isolated_projection_tests": "4/4_PASS",
-    "repository_ci_final_candidate": null,
+    "status": "DETERMINISTIC_REDUCER_PASS",
+    "exact_head": "5860202068eb89cce8f7b0e37d5e5dbc4225e987",
+    "core_ci_run": 34755757781,
+    "focused_pre_push": "25/25_PASS",
     "evidence": ".orchestration/evidence/ACP-3.0.8.2-DETERMINISTIC-REDUCER.md"
+  },
+  "deterministic_planner": {
+    "status": "FINAL_CANDIDATE_CI_PENDING",
+    "runtime_wired": false,
+    "hotel_task_definition": true,
+    "domain_capabilities": true,
+    "planning_trigger": true,
+    "bounded_next_step": true,
+    "j01_synthetic": "PASS",
+    "focused_pre_push": "27/27_PASS",
+    "booking_target_grounding": "CARRY_FORWARD_REQUIRED_FAIL_CLOSED",
+    "repository_ci_final_candidate": null,
+    "evidence": ".orchestration/evidence/ACP-3.0.8.3-DETERMINISTIC-PLANNER.md"
   },
   "constraints": {
     "production": false,
@@ -48,8 +57,8 @@
     "second_vertical": false
   },
   "event": {
-    "id": "ACP-3.0.8.2-REVIEW-03-FINAL-CANDIDATE",
-    "type": "REDUCER_FINAL_CANDIDATE",
-    "seq": 27
+    "id": "ACP-3.0.8.3-PLANNER-FINAL-CANDIDATE",
+    "type": "PLANNER_FINAL_CANDIDATE",
+    "seq": 28
   }
 }
