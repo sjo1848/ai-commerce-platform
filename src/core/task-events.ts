@@ -2,6 +2,8 @@ import type {
   AvailabilityCandidate,
   BookingObservation,
   DependencyFingerprint,
+  ExecutionOutcomeKind,
+  GuestCapacityCoverage,
   PreparedOperation,
   TaskDependencyKey,
   TaskLifecycle,
@@ -40,6 +42,7 @@ export type AvailabilityObservedEvent = TaskEventBase & {
   dependencyFingerprint: DependencyFingerprint;
   observationRevision: number;
   rooms: readonly AvailabilityCandidate[];
+  guestCapacityCoverage?: GuestCapacityCoverage;
   observedAt: string;
 };
 
@@ -102,6 +105,14 @@ export type BookingCreatedEvent = TaskEventBase & {
   booking: BookingObservation;
 };
 
+export type BookingsCreatedEvent = TaskEventBase & {
+  kind: "bookings_created";
+  operationId: string;
+  operationFingerprint: string;
+  dependencyFingerprint: string;
+  bookings: readonly BookingObservation[];
+};
+
 export type BookingCancelledEvent = TaskEventBase & {
   kind: "booking_cancelled";
   operationId: string;
@@ -110,12 +121,30 @@ export type BookingCancelledEvent = TaskEventBase & {
   booking: BookingObservation;
 };
 
+export type BookingsCancelledEvent = TaskEventBase & {
+  kind: "bookings_cancelled";
+  operationId: string;
+  operationFingerprint: string;
+  dependencyFingerprint: string;
+  bookings: readonly BookingObservation[];
+};
+
 export type BookingModifiedEvent = TaskEventBase & {
   kind: "booking_modified";
   operationId: string;
   operationFingerprint: string;
   dependencyFingerprint: string;
   booking: BookingObservation;
+};
+
+export type OperationPartialOutcomeEvent = TaskEventBase & {
+  kind: "operation_partial_outcome";
+  operationId: string;
+  operationFingerprint: string;
+  dependencyFingerprint: string;
+  outcomeKind: Extract<ExecutionOutcomeKind, "booking_created_partial" | "booking_cancelled_partial">;
+  bookings: readonly BookingObservation[];
+  failureCode: string;
 };
 
 export type OperationExecutionFailedEvent = TaskEventBase & {
@@ -143,7 +172,10 @@ export type TaskEvent =
   | ApprovalStateChangedEvent
   | ExecutionStartedEvent
   | BookingCreatedEvent
+  | BookingsCreatedEvent
   | BookingCancelledEvent
+  | BookingsCancelledEvent
   | BookingModifiedEvent
+  | OperationPartialOutcomeEvent
   | OperationExecutionFailedEvent
   | LifecycleChangedEvent;

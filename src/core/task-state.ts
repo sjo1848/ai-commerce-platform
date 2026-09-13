@@ -81,6 +81,8 @@ export type AvailabilityCandidate = {
   capacity?: number;
 };
 
+export type GuestCapacityCoverage = "enforced" | "not_modeled";
+
 export type AvailabilityObservation = {
   status: "not_queried" | "pending" | "observed" | "failed";
   observationRevision?: number;
@@ -88,6 +90,7 @@ export type AvailabilityObservation = {
   dependencyKeys: readonly TaskDependencyKey[];
   querySnapshot?: Readonly<Record<string, unknown>>;
   rooms: readonly AvailabilityCandidate[];
+  guestCapacityCoverage?: GuestCapacityCoverage;
   observedAt?: string;
 };
 
@@ -102,12 +105,21 @@ export type QuoteObservation = {
   observedAt?: string;
 };
 
+export type ExecutionOutcomeKind =
+  | "booking_created"
+  | "bookings_created"
+  | "booking_cancelled"
+  | "bookings_cancelled"
+  | "booking_modified"
+  | "booking_created_partial"
+  | "booking_cancelled_partial";
+
 export type ExecutionState = {
   status: "not_started" | "executing" | "confirmed" | "failed";
   operationId?: string;
   operationFingerprint?: OperationFingerprint;
   dependencyFingerprint?: DependencyFingerprint;
-  outcomeKind?: "booking_created" | "booking_cancelled" | "booking_modified";
+  outcomeKind?: ExecutionOutcomeKind;
   failureCode?: string;
 };
 

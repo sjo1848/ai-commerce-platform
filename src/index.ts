@@ -23,5 +23,8 @@ export * from "./core/semantic-interpreter-validation.js";
 export * from "./core/semantic-interpreter-adapter.js";
 export * from "./core/orchestration-trigger.js";
 export * from "./core/interpreter-turn-boundary.js";
+export * from "./core/planner-tool-admission.js";
+export * from "./core/observation-mapper.js";
+export * from "./core/observation-replan-boundary.js";
 export * from "./adapters/fake-hms.js";
 export * from "./webchat/handler.js";

@@ -230,6 +230,10 @@ function upsertBooking(state: TaskStateV1, booking: TaskStateV1["bookings"][numb
   state.bookings = [...remaining, structuredClone(booking)];
 }
 
+function upsertBookings(state: TaskStateV1, bookings: readonly TaskStateV1["bookings"][number][]): void {
+  for (const booking of bookings) upsertBooking(state, booking);
+}
+
 export function reduceTaskState(state: Readonly<TaskStateV1>, event: TaskEvent): ReductionResult {
   if (state.taskId !== event.taskId || state.sessionId !== event.sessionId) {
     return {
@@ -346,6 +350,7 @@ export function reduceTaskState(state: Readonly<TaskStateV1>, event: TaskEvent):
       dependencyKeys: [...pending.dependencyKeys],
       querySnapshot: structuredClone(pending.inputSnapshot),
       rooms: event.rooms.map((room) => structuredClone(room)),
+      ...(event.guestCapacityCoverage ? { guestCapacityCoverage: event.guestCapacityCoverage } : {}),
       observedAt: event.observedAt,
     };
     next.pendingToolInvocation = { ...pending, status: "succeeded" };
@@ -497,13 +502,45 @@ export function reduceTaskState(state: Readonly<TaskStateV1>, event: TaskEvent):
       };
     }
     upsertBooking(next, event.booking);
-    const outcomeKind = event.kind;
     next.execution = {
       status: "confirmed",
       operationId: event.operationId,
       operationFingerprint: event.operationFingerprint,
       dependencyFingerprint: event.dependencyFingerprint,
-      outcomeKind,
+      outcomeKind: event.kind,
+    };
+    materialChange = true;
+  } else if (event.kind === "bookings_created" || event.kind === "bookings_cancelled") {
+    if (!executionMatches(next, event.operationId, event.operationFingerprint, event.dependencyFingerprint) || event.bookings.length === 0) {
+      return {
+        nextState: structuredClone(state), accepted: false, materialChange: false, replayed: false, invalidations: [],
+        rejectionReason: "OPERATION_BINDING_MISMATCH",
+      };
+    }
+    upsertBookings(next, event.bookings);
+    next.execution = {
+      status: "confirmed",
+      operationId: event.operationId,
+      operationFingerprint: event.operationFingerprint,
+      dependencyFingerprint: event.dependencyFingerprint,
+      outcomeKind: event.kind,
+    };
+    materialChange = true;
+  } else if (event.kind === "operation_partial_outcome") {
+    if (!executionMatches(next, event.operationId, event.operationFingerprint, event.dependencyFingerprint)) {
+      return {
+        nextState: structuredClone(state), accepted: false, materialChange: false, replayed: false, invalidations: [],
+        rejectionReason: "OPERATION_BINDING_MISMATCH",
+      };
+    }
+    upsertBookings(next, event.bookings);
+    next.execution = {
+      status: "failed",
+      operationId: event.operationId,
+      operationFingerprint: event.operationFingerprint,
+      dependencyFingerprint: event.dependencyFingerprint,
+      outcomeKind: event.outcomeKind,
+      failureCode: event.failureCode,
     };
     materialChange = true;
   } else if (event.kind === "operation_execution_failed") {
