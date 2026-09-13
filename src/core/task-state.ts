@@ -162,6 +162,33 @@ export type PreparedOperation = {
   status: "prepared" | "approval_required" | "approved" | "invalidated";
 };
 
+/** User-visible semantic identity retained only after an output is actually published. */
+export type PublishedSemanticEntity =
+  | { entityType: "room"; ordinal: number; roomNumber?: string; label?: string }
+  | { entityType: "booking"; ordinal: number; bookingCode?: string; label?: string };
+
+export type PublishedDialogueAnchor = {
+  kind: "dates" | "check_out" | "guests" | "selection" | "occupancy" | "booking_reference" | "confirmation" | "other_bounded";
+  presentedEntities?: readonly PublishedSemanticEntity[];
+  focusedEntity?: PublishedSemanticEntity;
+  lastQuestionPurpose?: string;
+};
+
+export type PublishedPendingClarification = {
+  responseId: string;
+  responseDependencyFingerprint: DependencyFingerprint;
+  field: "dates" | "check_in" | "check_out" | "guests" | "selection" | "booking_reference" | "retry_target";
+  reason: string;
+};
+
+export type ConversationControlState = {
+  activeDialogueAnchor?: PublishedDialogueAnchor;
+  pendingClarification?: PublishedPendingClarification;
+  lastPublishedResponseId?: string;
+  lastPublishedResponseDependencyFingerprint?: DependencyFingerprint;
+  lastPublishedAt?: string;
+};
+
 export type TaskStateV1 = {
   taskId: string;
   sessionId: string;
@@ -183,4 +210,6 @@ export type TaskStateV1 = {
   pendingToolInvocation?: PendingToolInvocation;
   preparedOperation?: PreparedOperation;
   execution: ExecutionState;
+  /** Server-owned conversational control. Never populated before output publication commits. */
+  conversationControl?: ConversationControlState;
 };

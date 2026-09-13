@@ -26,7 +26,7 @@ export type ReductionResult = {
   materialChange: boolean;
   replayed: boolean;
   invalidations: readonly ReductionInvalidation[];
-  rejectionReason?: "TASK_SCOPE_MISMATCH" | "STATE_REVISION_CONFLICT" | "TASK_NOT_ACTIVE" | "EXECUTION_ALREADY_COMMITTED" | "STALE_DEPENDENCY" | "INVALID_GROUNDING" | "OPERATION_BINDING_MISMATCH" | "INVALID_OPERATION_TRANSITION" | "PENDING_TOOL_CONFLICT";
+  rejectionReason?: "TASK_SCOPE_MISMATCH" | "STATE_REVISION_CONFLICT" | "TASK_NOT_ACTIVE" | "EXECUTION_ALREADY_COMMITTED" | "STALE_DEPENDENCY" | "INVALID_GROUNDING" | "OPERATION_BINDING_MISMATCH" | "INVALID_OPERATION_TRANSITION" | "PENDING_TOOL_CONFLICT" | "RESPONSE_PUBLICATION_BINDING_MISMATCH";
 };
 
 function sameValue(left: unknown, right: unknown): boolean {
@@ -558,6 +558,25 @@ export function reduceTaskState(state: Readonly<TaskStateV1>, event: TaskEvent):
       failureCode: event.failureCode,
     };
     materialChange = true;
+  } else if (event.kind === "response_published") {
+    const pendingBound = !event.pendingClarification
+      || (event.pendingClarification.responseId === event.responseId
+        && event.pendingClarification.responseDependencyFingerprint === event.responseDependencyFingerprint);
+    if (!event.responseId.trim() || !event.responseDependencyFingerprint.trim() || !event.publishedAt.trim() || !pendingBound) {
+      return {
+        nextState: structuredClone(state), accepted: false, materialChange: false, replayed: false, invalidations: [],
+        rejectionReason: "RESPONSE_PUBLICATION_BINDING_MISMATCH",
+      };
+    }
+    const control = {
+      ...(event.dialogueAnchor ? { activeDialogueAnchor: structuredClone(event.dialogueAnchor) } : {}),
+      ...(event.pendingClarification ? { pendingClarification: structuredClone(event.pendingClarification) } : {}),
+      lastPublishedResponseId: event.responseId,
+      lastPublishedResponseDependencyFingerprint: event.responseDependencyFingerprint,
+      lastPublishedAt: event.publishedAt,
+    };
+    materialChange = !sameValue(next.conversationControl, control);
+    next.conversationControl = control;
   } else if (event.kind === "lifecycle_changed") {
     if (event.lifecycle !== "active" && next.execution.status === "executing") {
       return {

@@ -5,6 +5,8 @@ import type {
   ExecutionOutcomeKind,
   GuestCapacityCoverage,
   PreparedOperation,
+  PublishedDialogueAnchor,
+  PublishedPendingClarification,
   TaskDependencyKey,
   TaskLifecycle,
   UserSemanticStatePatch,
@@ -155,6 +157,15 @@ export type OperationExecutionFailedEvent = TaskEventBase & {
   failureCode: string;
 };
 
+export type ResponsePublishedEvent = RevisionGuardedTaskEventBase & {
+  kind: "response_published";
+  responseId: string;
+  responseDependencyFingerprint: DependencyFingerprint;
+  publishedAt: string;
+  dialogueAnchor?: PublishedDialogueAnchor;
+  pendingClarification?: PublishedPendingClarification;
+};
+
 export type LifecycleChangedEvent = RevisionGuardedTaskEventBase & {
   kind: "lifecycle_changed";
   lifecycle: TaskLifecycle;
@@ -178,4 +189,5 @@ export type TaskEvent =
   | BookingModifiedEvent
   | OperationPartialOutcomeEvent
   | OperationExecutionFailedEvent
+  | ResponsePublishedEvent
   | LifecycleChangedEvent;
