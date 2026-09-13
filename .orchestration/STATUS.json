@@ -3,10 +3,10 @@
   "runtime_status": "IN_PROGRESS",
   "resume_authorized": true,
   "active_task": "ACP-3.0.8-IMPLEMENTATION-FOUNDATION",
-  "last_completed_task": "ACP-3.0.8.6A-OBSERVATION-MAPPER-REPLAN",
-  "last_completed_head": "9abbf75390d568765f293269569d645acdf36a29",
-  "current_substage": "ACP-3.0.8.6B_RESPONSE_CONTEXT_FRESHNESS_PUBLICATION_CANDIDATES",
-  "next_action": "IMPLEMENT_RESPONSE_CONTEXT_FRESHNESS_AND_PUBLICATION_CANDIDATES",
+  "last_completed_task": "ACP-3.0.8.6B-RESPONSE-BOUNDARY",
+  "last_completed_head": "373bc9c99a5aa74ffff1cfc299c4921b46475a26",
+  "current_substage": "ACP-3.0.8.6C_FULL_OFFLINE_OBSERVATION_TO_PUBLICATION_LOOP",
+  "next_action": "PROVE_FULL_OFFLINE_OBSERVATION_TO_PUBLICATION_LOOP",
   "stop_reason": null,
   "baseline": {
     "source_pr": 63,
@@ -21,7 +21,8 @@
     "semantic_interpreter_adapter": {"status":"SEMANTIC_INTERPRETER_ADAPTER_PASS","head":"6ecb687f1912003c86f772420759e6d25bce720f","ci":34762941975,"runtime_wired":false,"real_provider_calls":false},
     "orchestration_boundary": {"status":"ORCHESTRATION_BOUNDARY_PASS","head":"1694b0df4aacb1771a9143a73fcba92704a4bd50","ci":34764771302,"runtime_cutover":false,"max_internal_steps":3,"intermediate_non_gate_head":"9e988094c107e593188067fed5790a2b6a85fb51"},
     "orchestration_integration": {"status":"ORCHESTRATION_INTEGRATION_PASS","head":"b6020d62b36481ae4efaa7f0db313997c6e31a0d","ci":34769395411,"tests":475,"runtime_cutover":false,"tool_execution":false,"failed_candidate":{"head":"9c1b4a817a173b692e39d5c3493afcdcc8281ff3","ci":34769238836,"reason":"TYPE_NARROWING_ONLY"},"corrected_admission_head":"7276fe562543f402afbd8eb502390c1816c786e1","corrected_admission_ci":34769314148},
-    "observation_mapper_replan": {"status":"OBSERVATION_MAPPER_REPLAN_PASS","head":"9abbf75390d568765f293269569d645acdf36a29","ci":34770532449,"tests":488,"runtime_cutover":false,"raw_tool_payload_to_planner":false,"hms_mutations":false,"failed_candidate":{"head":"2190514e2170a1584d61f39a41a29e968804ebc7","ci":34770094605,"tests_passed":483,"tests_failed":3,"reason":"EXECUTION_FAILURE_PRIORITY_MASKED_BY_STALE_PREPARED_WAIT"}}
+    "observation_mapper_replan": {"status":"OBSERVATION_MAPPER_REPLAN_PASS","head":"9abbf75390d568765f293269569d645acdf36a29","ci":34770532449,"tests":488,"runtime_cutover":false,"raw_tool_payload_to_planner":false,"hms_mutations":false,"failed_candidate":{"head":"2190514e2170a1584d61f39a41a29e968804ebc7","ci":34770094605,"tests_passed":483,"tests_failed":3,"reason":"EXECUTION_FAILURE_PRIORITY_MASKED_BY_STALE_PREPARED_WAIT"}},
+    "response_boundary": {"status":"RESPONSE_BOUNDARY_PASS","head":"373bc9c99a5aa74ffff1cfc299c4921b46475a26","ci":34771062223,"tests":501,"runtime_cutover":false,"raw_tool_payload_to_renderer":false,"opaque_response_fingerprint":true,"publication_requires_channel_acceptance":true,"dialogue_anchor_activation":"POST_PUBLICATION_REDUCER_EVENT"}
   },
   "constraints": {
     "production": false,
@@ -32,8 +33,8 @@
     "second_vertical": false
   },
   "event": {
-    "id": "ACP-3.0.8.6B-RESPONSE-CONTEXT-FRESHNESS-PUBLICATION-START",
+    "id": "ACP-3.0.8.6C-FULL-OFFLINE-OBSERVATION-TO-PUBLICATION-START",
     "type": "SUBSTAGE_START",
-    "seq": 35
+    "seq": 36
   }
 }
