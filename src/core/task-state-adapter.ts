@@ -16,10 +16,10 @@ export type TaskStateProjectionIdentity = {
  */
 export type LegacyOperationalMigrationCandidates = {
   stay: Readonly<ConversationState["stay"]>;
-  availabilityRooms: readonly ConversationState["availabilityRooms"][number][];
+  availabilityRooms: ReadonlyArray<ConversationState["availabilityRooms"][number]>;
   selectedRoomIds: readonly string[];
   requestedRoomCount?: number;
-  roomOccupancy: readonly ConversationState["roomOccupancy"][number][];
+  roomOccupancy: ReadonlyArray<ConversationState["roomOccupancy"][number]>;
   activeBookingId?: string;
   bookingStatus?: string;
   semanticRevision: number;
@@ -41,7 +41,7 @@ function userOwnedFact<T>(value: T | undefined, meta: SemanticFactProvenance | u
   };
 }
 
-function projectGoal(state: ConversationState): TaskFact<TaskGoal> | undefined {
+function projectGoal(state: Readonly<ConversationState>): TaskFact<TaskGoal> | undefined {
   const intent = state.semanticMemory.activeIntent;
   if (!intent || (intent.source !== "user" && intent.source !== "legacy")) return undefined;
   return {
@@ -50,7 +50,7 @@ function projectGoal(state: ConversationState): TaskFact<TaskGoal> | undefined {
   };
 }
 
-function assertScope(state: ConversationState, identity: TaskStateProjectionIdentity): void {
+function assertScope(state: Readonly<ConversationState>, identity: TaskStateProjectionIdentity): void {
   const scope = state.semanticMemory.scope;
   if (!scope) return;
   if (scope.sessionId !== identity.sessionId || scope.tenantId !== identity.tenantId || scope.actorId !== identity.actorId) {
@@ -70,12 +70,12 @@ export function projectConversationStateToTaskStateV1(
   state: Readonly<ConversationState>,
   identity: TaskStateProjectionIdentity,
 ): TaskStateMigrationProjection {
-  assertScope(state as ConversationState, identity);
+  assertScope(state, identity);
 
   const checkIn = userOwnedFact(state.stay.checkIn, state.semanticMemory.stay.checkIn);
   const checkOut = userOwnedFact(state.stay.checkOut, state.semanticMemory.stay.checkOut);
   const guests = userOwnedFact(state.stay.guests, state.semanticMemory.stay.guests);
-  const requestedGoal = projectGoal(state as ConversationState);
+  const requestedGoal = projectGoal(state);
 
   const taskState: TaskStateV1 = {
     taskId: identity.taskId,
