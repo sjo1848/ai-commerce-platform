@@ -357,7 +357,7 @@ test("ACP-3.0.8.7 J01 offline gate traverses interpretation, read, publication, 
     "j01-response-approval",
     "j01-publish-approval",
   );
-  assert.match(approvalPublished.text, /confirm/i);
+  assert.match(approvalPublished.text, /aprobaci[oó]n/i);
   assert.equal(JSON.stringify(approvalPublished.candidate.context).includes("guest:actor-j01"), false);
   state = approvalPublished.state;
 
