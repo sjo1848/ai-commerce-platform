@@ -3,54 +3,39 @@
 Phase: `ACP-3.0 — COGNITIVE ARCHITECTURE REDESIGN / IMPLEMENTATION`
 Task: `ACP-3.0.8 — IMPLEMENTATION FOUNDATION`
 Status: `ACTIVE / IMPLEMENTATION`
-Current sub-stage: `ACP-3.0.8.3 — HOTEL TASK DEFINITION + DETERMINISTIC PLANNER — FINAL CANDIDATE / CI PENDING`
-Last closed sub-stage: `ACP-3.0.8.2 — DETERMINISTIC_REDUCER_PASS`
+Current sub-stage: `ACP-3.0.8.4 — SEMANTIC INTERPRETER ADAPTER — FINAL CANDIDATE / CI PENDING`
+Last closed sub-stage: `ACP-3.0.8.3 — DETERMINISTIC_PLANNER_IMPLEMENTATION_PASS`
 
 Baseline: PR #63 exact head `10c649507b524c44fc4ed4fd1d0dd1e63cd13185`.
 Active branch: `feature/acp-3.0.8-implementation-foundation`.
-Active contract: `.orchestration/contracts/ACP-3.0.8-IMPLEMENTATION-FOUNDATION.md`.
 
-All ACP-3.0 design gates through `READY_FOR_IMPLEMENTATION` are PASS.
+## Closed implementation gates
 
-## Closed implementation evidence
+- 3.0.8.1 `FOUNDATION_CONTRACTS_PASS`: `31d91df9c1b211263245e43860077ca8f36d7aa3`, core-ci #639 / `34754506869` PASS.
+- 3.0.8.2 `DETERMINISTIC_REDUCER_PASS`: `5860202068eb89cce8f7b0e37d5e5dbc4225e987`, core-ci #643 / `34755757781` PASS.
+- 3.0.8.3 `DETERMINISTIC_PLANNER_IMPLEMENTATION_PASS`: `a8c91bd67fbcb1125a8f9f5daa4c97e6c6ce5102`, core-ci #646 / `34762367166` PASS.
 
-- 3.0.8.1 `FOUNDATION_CONTRACTS_PASS`: head `31d91df9c1b211263245e43860077ca8f36d7aa3`, core-ci #639 / `34754506869` PASS.
-- 3.0.8.2 `DETERMINISTIC_REDUCER_PASS`: head `5860202068eb89cce8f7b0e37d5e5dbc4225e987`, core-ci #643 / `34755757781` PASS.
+Planner Review 01 closed abort-before-cleanup, social/help/ack priority, approval-invalidated re-proposal and the malformed initial `planning.ts` candidate. Cancel/modify still fail closed until server-owned booking grounding exists.
 
-Reducer final gate preserves optimistic user/server revision guards, causal tool-observation freshness, exact PreparedOperation/approval/execution binding, bounded replay protection and fail-closed state-machine races.
+## 3.0.8.4 candidate
 
-## 3.0.8.3 final candidate
+Implemented but not runtime-wired:
+- safe InterpreterInput and minimal TaskState projection without operational room/booking IDs;
+- typed semantic output with `set | clear | omission=noChange`;
+- semantic RoomReference / BookingReference only;
+- goal distinct from `operationIntent`;
+- abort-current-operation distinct from cancel-booking;
+- bounded read/retry/interaction directives;
+- trusted temporal provenance tied to supplied server context;
+- strict output validator rejecting unknown/operational fields and invalid semantic combinations;
+- structured ModelProvider adapter using a semantic-only prompt and schema;
+- provider failure and invalid output fail closed with no deterministic NLU fallback;
+- domain semantic contract can narrow allowed goals, operation intents and reads.
 
-Implemented locally before push:
-- typed `HotelTaskDefinition` v1 with explicit real HMS capability bindings;
-- server-built `DomainCapabilities` from visible tools;
-- explicit capability requirements and dependency keys;
-- shared deterministic precondition fingerprint contract;
-- structured `PlanningTrigger` envelope;
-- bounded exactly-one `NextStep` vocabulary;
-- pure `HotelTaskPlanner`;
-- native multi-room capability use without decomposition into multiple writes;
-- read requests remain serviceable while approval is pending;
-- no automatic retry after tool failure;
-- no implicit knowledge/RAG capability;
-- J01 synthetic traversal from missing facts through availability, grounding, reserve proposal, approval wait and grounded completion.
+Focused isolated verification: strict TypeScript PASS; semantic/interpreter adapter tests `23/23 PASS` using fake providers only.
 
-Adversarial correction before push: reservation preconditions explicitly include `operationIntent`, preventing a write proposal from surviving withdrawal/change of commit semantics when room/date facts remain unchanged.
+`SEMANTIC_INTERPRETER_ADAPTER_PASS` requires exact-head repository CI plus final contradiction review.
 
-Cancellation/modification remain fail-closed with `BOOKING_TARGET_GROUNDING_REQUIRED`: current TaskState has user `bookingReference` plus tool `bookings[]`, but no server-owned `groundedBookingTarget`. The Planner is forbidden from resolving that reference itself. This is a carry-forward state/reducer boundary requirement, not capability hallucination.
+## Boundaries
 
-Focused isolated verification: planner 27/27 PASS under strict TypeScript.
-
-Evidence: `.orchestration/evidence/ACP-3.0.8.3-DETERMINISTIC-PLANNER.md`.
-
-`DETERMINISTIC_PLANNER_IMPLEMENTATION_PASS` is pending exact-head repository CI and final review only.
-
-## Authority boundaries
-
-Planner does not receive raw text, normalize language/dates, create operational truth, ground user references, authorize/approve actions, execute tools, rank tools dynamically or generate user prose. Core/Policy/Executor remain authoritative for authorization, HITL exact binding and side-effect idempotency.
-
-## Resource/safety boundary
-
-No provider inference, Worker deployment, HMS mutation, approval consumption, production action, payment action or second vertical is authorized in 3.0.8.3.
-
-Batch repository writes per logical block; avoid CI on intermediate commits.
+No runtime routing replacement, real provider inference, Worker deployment, HMS mutation, approval consumption, production action, payment action or second vertical is authorized in 3.0.8.4.
