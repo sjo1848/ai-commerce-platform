@@ -1,5 +1,6 @@
 import type {
   AvailabilityCandidate,
+  BookingObservation,
   DependencyFingerprint,
   PreparedOperation,
   TaskDependencyKey,
@@ -48,6 +49,23 @@ export type AvailabilityFailedEvent = TaskEventBase & {
   dependencyFingerprint: DependencyFingerprint;
 };
 
+export type QuoteObservedEvent = TaskEventBase & {
+  kind: "quote_observed";
+  invocationId: string;
+  dependencyFingerprint: DependencyFingerprint;
+  observationRevision: number;
+  roomIds: readonly string[];
+  amountCents: number;
+  currency: string;
+  observedAt: string;
+};
+
+export type QuoteFailedEvent = TaskEventBase & {
+  kind: "quote_failed";
+  invocationId: string;
+  dependencyFingerprint: DependencyFingerprint;
+};
+
 export type SelectionGroundedEvent = RevisionGuardedTaskEventBase & {
   kind: "selection_grounded";
   roomIds: readonly string[];
@@ -58,7 +76,54 @@ export type SelectionGroundedEvent = RevisionGuardedTaskEventBase & {
 
 export type OperationPreparedEvent = RevisionGuardedTaskEventBase & {
   kind: "operation_prepared";
-  operation: PreparedOperation;
+  operation: PreparedOperation & { status: "prepared" | "approval_required" };
+};
+
+export type ApprovalStateChangedEvent = RevisionGuardedTaskEventBase & {
+  kind: "approval_state_changed";
+  operationId: string;
+  operationFingerprint: string;
+  dependencyFingerprint: string;
+  status: "approved" | "invalidated";
+};
+
+export type ExecutionStartedEvent = RevisionGuardedTaskEventBase & {
+  kind: "execution_started";
+  operationId: string;
+  operationFingerprint: string;
+  dependencyFingerprint: string;
+};
+
+export type BookingCreatedEvent = TaskEventBase & {
+  kind: "booking_created";
+  operationId: string;
+  operationFingerprint: string;
+  dependencyFingerprint: string;
+  booking: BookingObservation;
+};
+
+export type BookingCancelledEvent = TaskEventBase & {
+  kind: "booking_cancelled";
+  operationId: string;
+  operationFingerprint: string;
+  dependencyFingerprint: string;
+  booking: BookingObservation;
+};
+
+export type BookingModifiedEvent = TaskEventBase & {
+  kind: "booking_modified";
+  operationId: string;
+  operationFingerprint: string;
+  dependencyFingerprint: string;
+  booking: BookingObservation;
+};
+
+export type OperationExecutionFailedEvent = TaskEventBase & {
+  kind: "operation_execution_failed";
+  operationId: string;
+  operationFingerprint: string;
+  dependencyFingerprint: string;
+  failureCode: string;
 };
 
 export type LifecycleChangedEvent = RevisionGuardedTaskEventBase & {
@@ -71,6 +136,14 @@ export type TaskEvent =
   | ToolInvocationStartedEvent
   | AvailabilityObservedEvent
   | AvailabilityFailedEvent
+  | QuoteObservedEvent
+  | QuoteFailedEvent
   | SelectionGroundedEvent
   | OperationPreparedEvent
+  | ApprovalStateChangedEvent
+  | ExecutionStartedEvent
+  | BookingCreatedEvent
+  | BookingCancelledEvent
+  | BookingModifiedEvent
+  | OperationExecutionFailedEvent
   | LifecycleChangedEvent;

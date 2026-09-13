@@ -58,7 +58,9 @@ test("does not silently promote legacy operational state without dependency rece
 
   assert.deepEqual(result.taskState.availability, { status: "not_queried", rooms: [], dependencyKeys: [] });
   assert.deepEqual(result.taskState.groundedSelection, { status: "none", roomIds: [], dependencyKeys: [] });
+  assert.deepEqual(result.taskState.quote, { status: "not_queried", roomIds: [], dependencyKeys: [] });
   assert.deepEqual(result.taskState.bookings, []);
+  assert.deepEqual(result.taskState.execution, { status: "not_started" });
   assert.equal(result.taskState.requestedRoomCount, undefined);
 
   assert.deepEqual(result.legacyOperationalCandidates.selectedRoomIds, ["room-102"]);

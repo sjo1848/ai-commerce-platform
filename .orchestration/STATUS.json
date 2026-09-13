@@ -5,20 +5,16 @@
   "active_task": "ACP-3.0.8-IMPLEMENTATION-FOUNDATION",
   "last_completed_task": "ACP-3.0.8.1-FOUNDATION-CONTRACTS",
   "last_completed_head": "31d91df9c1b211263245e43860077ca8f36d7aa3",
-  "current_substage": "ACP-3.0.8.2_DETERMINISTIC_REDUCER_REVIEW_01_AMENDED_CI_PENDING",
-  "next_action": "RUN_EXACT_HEAD_REPOSITORY_CI_FOR_REDUCER_REVIEW_01_AMENDMENTS",
+  "current_substage": "ACP-3.0.8.2_DETERMINISTIC_REDUCER_REVIEW_02_AMENDED_CI_PENDING",
+  "next_action": "VALIDATE_REVIEW_02_EXACT_HEAD_THEN_GATE_REDUCER",
   "stop_reason": null,
   "baseline": {
     "source_pr": 63,
-    "source_branch": "feature/r2.8.4-nlu-boundary-rework",
-    "source_head": "10c649507b524c44fc4ed4fd1d0dd1e63cd13185",
-    "historical_r2_8_4_status": "NOT_RETROACTIVELY_CLOSED_SUPERSEDED_AS_ACTIVE_PATH"
+    "source_head": "10c649507b524c44fc4ed4fd1d0dd1e63cd13185"
   },
   "active_branch": "feature/acp-3.0.8-implementation-foundation",
   "active_contract": ".orchestration/contracts/ACP-3.0.8-IMPLEMENTATION-FOUNDATION.md",
   "design_gates": {
-    "journey_specification": "PASS",
-    "cognitive_contracts": "PASS_BASE",
     "task_state_engine": "DESIGN_PASS",
     "deterministic_planner": "DESIGN_PASS",
     "semantic_interpreter": "DESIGN_PASS",
@@ -30,43 +26,35 @@
   "foundation_contracts": {
     "status": "FOUNDATION_CONTRACTS_PASS",
     "exact_head": "31d91df9c1b211263245e43860077ca8f36d7aa3",
-    "core_ci_run": 34754506869,
-    "repository_typecheck_and_tests": "PASS",
-    "evidence": ".orchestration/evidence/ACP-3.0.8.1-FOUNDATION-CONTRACTS.md"
+    "core_ci_run": 34754506869
   },
   "deterministic_reducer": {
-    "status": "REVIEW_01_AMENDED_CI_PENDING",
+    "status": "REVIEW_02_AMENDED_CI_PENDING",
     "initial_candidate_head": "d9466599dbaa6af75f986f2faf6d743562ad2627",
     "initial_core_ci_run": 34754777914,
-    "initial_core_ci": "PASS_NOT_GATE_CLOSURE",
-    "review_findings": [
-      "USER_SERVER_OPTIMISTIC_REVISION_GUARD",
-      "TERMINAL_TASK_FAIL_CLOSED",
-      "AVAILABILITY_REFRESH_CAUSAL_INVALIDATION"
+    "review_01_head": "b12751f6baeabfee3014c0e486a59a90786cce17",
+    "review_01_core_ci_run": 34754941366,
+    "review_02_findings": [
+      "EXACT_APPROVAL_EXECUTION_OUTCOME_CHAIN",
+      "WRITE_COMMIT_RACE_BOUNDARY",
+      "QUOTE_OBSERVATION_NAMESPACE"
     ],
-    "local_isolated_reducer_tests": "11/11_PASS",
+    "local_isolated_reducer_tests": "16/16_PASS",
     "local_isolated_projection_tests": "4/4_PASS",
-    "repository_ci_after_amendments": null,
-    "language_parsing": false,
-    "tool_selection": false,
-    "policy_decision": false,
-    "side_effect_execution": false,
+    "repository_ci_after_review_02": null,
     "evidence": ".orchestration/evidence/ACP-3.0.8.2-DETERMINISTIC-REDUCER.md"
   },
   "constraints": {
     "production": false,
-    "real_customer_data": false,
-    "payment_mutation": false,
-    "paid_expansion": false,
-    "second_vertical": false,
-    "provider_calls_authorized_for_current_substage": false,
-    "worker_deployment_authorized_for_current_substage": false,
-    "hms_mutations_authorized_for_current_substage": false,
-    "approval_consumption_authorized_for_current_substage": false
+    "provider_calls_authorized": false,
+    "worker_deployment_authorized": false,
+    "hms_mutations_authorized": false,
+    "approval_consumption_authorized": false,
+    "second_vertical": false
   },
   "event": {
-    "id": "ACP-3.0.8.2-REVIEW-01-AMENDED",
+    "id": "ACP-3.0.8.2-REVIEW-02-AMENDED",
     "type": "REDUCER_REVIEW_AMENDMENT",
-    "seq": 25
+    "seq": 26
   }
 }

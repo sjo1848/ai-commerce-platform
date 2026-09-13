@@ -1,62 +1,60 @@
 # ACP-3.0.8.2 — Deterministic Reducer Evidence
 
-Status: `REVIEW_01_AMENDED / EXACT-HEAD CI PENDING`
+Status: `REVIEW_02 AMENDED / EXACT-HEAD CI PENDING`
 
-## Initial candidate
+## Review 01
 
-- Candidate head: `d9466599dbaa6af75f986f2faf6d743562ad2627`.
-- `core-ci` run `34754777914` / #640: PASS.
-- Typecheck + full tests, staging E2E syntax and Wrangler config all passed.
+Initial candidate `d9466599dbaa6af75f986f2faf6d743562ad2627` passed `core-ci` run `34754777914` / #640.
 
-CI green did not close the gate by itself.
+Review 01 then closed three contract gaps:
+- optimistic revision guards for user/server mutations while tool observations remain dependency-based;
+- terminal task fail-closed behavior;
+- availability refresh invalidation of grounding/prepared operations that depended on the replaced observation.
 
-## Review 01 findings
+Review 01 amended head `b12751f6baeabfee3014c0e486a59a90786cce17` passed `core-ci` run `34754941366` / #641.
 
-### F1 — missing optimistic concurrency guard for user/server mutations
+## Review 02 findings
 
-Tool observations must remain causal and must not require exact global stateRevision, but user/server mutations need an expected revision so concurrent accepted changes cannot silently overwrite each other.
+CI green still did not prove that the reducer could represent the full J01 control/result chain.
 
-Amendment:
-- user semantic and server-control events carry `expectedStateRevision`;
-- mismatch fails closed as `STATE_REVISION_CONFLICT`;
-- availability tool results continue to use invocationId + dependencyFingerprint rather than global revision equality.
+### F4 — approval/execution/outcome authority was incomplete
 
-### F2 — terminal tasks could still accept later mutation events
+The reducer now models:
+`PreparedOperation -> approval state -> execution_started -> exact booking outcome`.
 
-A completed/abandoned/superseded task must not be rewritten to represent a new user intent.
+Approval can only advance the exact operationId + operationFingerprint + dependencyFingerprint. Execution cannot start while status is `approval_required`; it requires `prepared` (auto path) or `approved` (HITL path).
 
-Amendment:
-- non-replay events on non-active tasks fail closed with `TASK_NOT_ACTIVE`;
-- moving a task terminal supersedes pending tool work and invalidates prepared operations.
+Mutation results are accepted only for the exact executing operation.
 
-### F3 — availability refresh replaced current observation without staling dependent grounding
+### F5 — write-commit race
 
-Because the current v1 state holds one availability slot, moving that slot to `pending` must invalidate grounding/prepared operations that explicitly depend on `availability`.
+After execution is `executing` or `confirmed`, user semantic mutation in that same task fails closed as `EXECUTION_ALREADY_COMMITTED`. A later change must be represented through a new task/flow rather than pretending to rewrite a side effect already admitted.
 
-Amendment:
-- starting a new availability invocation emits causal invalidation for dependents on `availability`.
+### F6 — quote observation missing from TaskState implementation
 
-## Invariants preserved
+Quote now has a separate tool-authoritative observation namespace and the same invocation/dependency stale controls as availability.
 
-- Reducer never parses user language.
-- Reducer never chooses a tool.
-- Reducer never decides policy/approval.
-- Reducer never executes side effects or writes user prose.
-- User requested semantics, tool observations and server controls remain separate authority paths.
-- Unrelated state revisions do not make a tool observation stale when its dependency fingerprint remains valid.
-- Duplicate accepted event IDs are bounded and do not apply effects twice.
+## Preserved invariants
+
+- Reducer never parses language, chooses tools, decides policy, executes side effects or writes user prose.
+- User/server mutations use optimistic state revision guards.
+- Tool observations do not require global revision equality and remain causal by receipts.
+- Approval authority remains server/Core-owned and exact-operation-bound.
+- Booking outcomes are tool-authoritative.
+- Failure does not erase requested semantics.
+- Replay protection remains bounded.
 
 ## Focused pre-push verification
 
-Isolated strict TypeScript build: PASS.
+Strict isolated TypeScript build: PASS.
 
-Focused behavioral set:
-- reducer: 11/11 PASS;
+Focused tests:
+- deterministic reducer: 16/16 PASS;
 - compatibility projection: 4/4 PASS;
-- combined: 15/15 PASS.
+- combined: 20/20 PASS.
 
 No provider inference, Worker deployment, HMS mutation or approval consumption occurred.
 
 ## Gate
 
-`DETERMINISTIC_REDUCER_PASS` remains pending exact-head repository CI after Review 01 amendments.
+`DETERMINISTIC_REDUCER_PASS` remains pending repository CI on the Review 02 exact head.

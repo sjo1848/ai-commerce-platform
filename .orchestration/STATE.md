@@ -3,55 +3,42 @@
 Phase: `ACP-3.0 — COGNITIVE ARCHITECTURE REDESIGN / IMPLEMENTATION`
 Task: `ACP-3.0.8 — IMPLEMENTATION FOUNDATION`
 Status: `ACTIVE / IMPLEMENTATION`
-Current sub-stage: `ACP-3.0.8.2 — DETERMINISTIC REDUCER — REVIEW 01 AMENDED / CI PENDING`
-Last closed sub-stage: `ACP-3.0.8.1 — TASKSTATE CONTRACTS + COMPATIBILITY PROJECTION — FOUNDATION_CONTRACTS_PASS`
+Current sub-stage: `ACP-3.0.8.2 — DETERMINISTIC REDUCER — REVIEW 02 AMENDED / CI PENDING`
+Last closed sub-stage: `ACP-3.0.8.1 — FOUNDATION_CONTRACTS_PASS`
 
-## Current source identity
+Baseline: PR #63 exact head `10c649507b524c44fc4ed4fd1d0dd1e63cd13185`.
+Active branch: `feature/acp-3.0.8-implementation-foundation`.
+Active contract: `.orchestration/contracts/ACP-3.0.8-IMPLEMENTATION-FOUNDATION.md`.
 
-- Baseline: PR #63 `feature/r2.8.4-nlu-boundary-rework` exact head `10c649507b524c44fc4ed4fd1d0dd1e63cd13185`.
-- Active implementation branch: `feature/acp-3.0.8-implementation-foundation`.
-- Active contract: `.orchestration/contracts/ACP-3.0.8-IMPLEMENTATION-FOUNDATION.md`.
-- Resolve the moving execution HEAD at gate time.
+All ACP-3.0 design gates through `READY_FOR_IMPLEMENTATION` are PASS.
 
-## Closed design authority
+## 3.0.8.1
 
-Journey Specification, Cognitive Contracts, Task State Engine, Deterministic Planner, Semantic Interpreter, Cognitive E2E Integration, Response Composer and Architecture Integration Review are all DESIGN PASS; `READY_FOR_IMPLEMENTATION = PASS`.
+`FOUNDATION_CONTRACTS_PASS` on `31d91df9c1b211263245e43860077ca8f36d7aa3`; `core-ci` #639 / `34754506869` PASS.
 
-Governing pipeline:
-`User -> Interpreter -> validation -> Reducer -> TaskState -> PlanningTrigger -> deterministic Planner -> NextStep -> Core/Policy -> Tool -> Observation Mapper -> Reducer -> Planner -> ResponseContextBuilder -> Renderer -> publication -> DialogueAnchor`.
+## 3.0.8.2
 
-## 3.0.8.1 closure
+Initial candidate `d9466599dbaa6af75f986f2faf6d743562ad2627`: `core-ci` #640 / `34754777914` PASS.
 
-`FOUNDATION_CONTRACTS_PASS` on exact head `31d91df9c1b211263245e43860077ca8f36d7aa3`.
+Review 01 amended candidate `b12751f6baeabfee3014c0e486a59a90786cce17`: `core-ci` #641 / `34754941366` PASS.
 
-Evidence: `core-ci` run `34754506869` / #639 PASS and `.orchestration/evidence/ACP-3.0.8.1-FOUNDATION-CONTRACTS.md`.
+Review 02 closes the remaining J01 reducer authority chain:
+- exact PreparedOperation approval transition;
+- execution-start transition only from prepared/approved operation;
+- exact-operation booking create/cancel/modify outcomes;
+- execution failure state;
+- same-task semantic mutation blocked once execution is committed;
+- quote as separate operational observation.
 
-## 3.0.8.2 Review 01
-
-Initial reducer candidate `d9466599dbaa6af75f986f2faf6d743562ad2627` passed `core-ci` run `34754777914` / #640, but CI alone did not close the design/implementation gate.
-
-Adversarial review found and amended:
-1. optimistic revision guard for user/server events while keeping tool observations dependency-based;
-2. terminal tasks fail closed and terminal transitions supersede pending work / invalidate prepared operations;
-3. a new availability observation invalidates grounding and prepared operations that depended on the replaced availability.
-
-Focused pre-push verification after amendments:
-- reducer: 11/11 PASS;
-- compatibility projection: 4/4 PASS;
-- combined strict isolated verification: 15/15 PASS.
-
-Evidence: `.orchestration/evidence/ACP-3.0.8.2-DETERMINISTIC-REDUCER.md`.
+Focused isolated verification after Review 02: reducer 16/16 PASS + projection 4/4 PASS = 20/20 PASS.
 
 `DETERMINISTIC_REDUCER_PASS` remains pending exact-head repository CI.
 
-## Preserved authority
+Evidence: `.orchestration/evidence/ACP-3.0.8.2-DETERMINISTIC-REDUCER.md`.
 
-- LLM interprets user semantics only; it never creates operational truth.
-- Reducer does not parse language, choose tools, decide policy, execute side effects or generate prose.
-- PolicyEngine/AgentCoreExecutor retain authorization, HITL exact binding and side-effect idempotency.
-- Tool observations use invocation/dependency receipts; unrelated stateRevision changes do not stale them.
-- Server/user mutations use optimistic revision guards.
-- Approval resumes exact PreparedOperation after revalidation.
+## Authority boundaries
+
+Reducer does not interpret language, choose tools, decide approval/policy, execute side effects or generate prose. User/server mutation concurrency uses state revision guards; tool results use causal invocation/dependency receipts. PolicyEngine/AgentCoreExecutor remain authoritative for HITL and side-effect idempotency.
 
 ## Resource/safety boundary
 

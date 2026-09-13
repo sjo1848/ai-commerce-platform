@@ -15,7 +15,8 @@ export type TaskDependencyKey =
   | "bookingReference"
   | "operationIntent"
   | "availability"
-  | "groundedSelection";
+  | "groundedSelection"
+  | "quote";
 
 export type FactProvenance = {
   source: AuthoritySource;
@@ -90,6 +91,26 @@ export type AvailabilityObservation = {
   observedAt?: string;
 };
 
+export type QuoteObservation = {
+  status: "not_queried" | "pending" | "observed" | "failed";
+  observationRevision?: number;
+  dependencyFingerprint?: DependencyFingerprint;
+  dependencyKeys: readonly TaskDependencyKey[];
+  roomIds: readonly string[];
+  amountCents?: number;
+  currency?: string;
+  observedAt?: string;
+};
+
+export type ExecutionState = {
+  status: "not_started" | "executing" | "confirmed" | "failed";
+  operationId?: string;
+  operationFingerprint?: OperationFingerprint;
+  dependencyFingerprint?: DependencyFingerprint;
+  outcomeKind?: "booking_created" | "booking_cancelled" | "booking_modified";
+  failureCode?: string;
+};
+
 export type GroundedSelection = {
   status: "none" | "requested" | "grounded" | "ambiguous" | "stale";
   roomIds: readonly string[];
@@ -140,8 +161,10 @@ export type TaskStateV1 = {
   bookingReference?: TaskFact<BookingReference>;
   operationIntent?: OperationIntent;
   availability: AvailabilityObservation;
+  quote: QuoteObservation;
   groundedSelection: GroundedSelection;
   bookings: readonly BookingObservation[];
   pendingToolInvocation?: PendingToolInvocation;
   preparedOperation?: PreparedOperation;
+  execution: ExecutionState;
 };

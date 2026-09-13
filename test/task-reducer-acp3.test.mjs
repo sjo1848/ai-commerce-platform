@@ -11,7 +11,8 @@ function emptyState() {
     taskId:'task-1', sessionId:'session-1', taskType:'hotel_reservation_domain', lifecycle:'active',
     stateRevision:0, recentEventIds:[], requestedStay:{}, preferences:[],
     availability:{status:'not_queried', rooms:[], dependencyKeys:[]},
-    groundedSelection:{status:'none', roomIds:[], dependencyKeys:[]}, bookings:[],
+    quote:{status:'not_queried', roomIds:[], dependencyKeys:[]},
+    groundedSelection:{status:'none', roomIds:[], dependencyKeys:[]}, bookings:[], execution:{status:'not_started'},
   };
 }
 
@@ -142,4 +143,69 @@ test('terminal task rejects later mutation events and terminal transition supers
   const late = reduceTaskState(closed.nextState,{...eventBase('late'),expectedStateRevision:1,kind:'user_semantic',sourceRevision:2,patch:{guests:{op:'set',value:3}}});
   assert.equal(late.accepted,false);
   assert.equal(late.rejectionReason,'TASK_NOT_ACTIVE');
+});
+
+test('quote observation uses the same causal invocation boundary and preserves requested semantics on failure', () => {
+  let s = emptyState();
+  s.requestedStay = {checkIn:{value:'2027-01-15',provenance:{source:'user',revision:1}}};
+  let r = reduceTaskState(s,{...eventBase('q-start'),expectedStateRevision:0,kind:'tool_invocation_started',invocationId:'q-inv',capabilityId:'quote',dependencyFingerprint:'q-fp',dependencyKeys:['requestedStay.checkIn','groundedSelection'],inputSnapshot:{roomId:'r101'},startedAt:'2026-09-13T00:00:00Z'});
+  r = reduceTaskState(r.nextState,{...eventBase('q-ok'),kind:'quote_observed',invocationId:'q-inv',dependencyFingerprint:'q-fp',observationRevision:2,roomIds:['r101'],amountCents:50000,currency:'ARS',observedAt:'2026-09-13T00:00:01Z'});
+  assert.equal(r.accepted,true);
+  assert.equal(r.nextState.quote.status,'observed');
+  assert.equal(r.nextState.quote.amountCents,50000);
+  assert.equal(r.nextState.requestedStay.checkIn.value,'2027-01-15');
+});
+
+test('approval can only advance the exact prepared operation and execution requires prepared or approved status', () => {
+  let s = emptyState();
+  const operation = {operationId:'op1',operationType:'reserve',operationFingerprint:'opf1',dependencyFingerprint:'depf1',dependencyKeys:writeDeps,canonicalInputSnapshot:{roomId:'r101'},status:'approval_required'};
+  let r = reduceTaskState(s,{...eventBase('prep'),expectedStateRevision:0,kind:'operation_prepared',operation});
+  assert.equal(r.nextState.preparedOperation.status,'approval_required');
+  const wrong = reduceTaskState(r.nextState,{...eventBase('approve-wrong'),expectedStateRevision:1,kind:'approval_state_changed',operationId:'op1',operationFingerprint:'other',dependencyFingerprint:'depf1',status:'approved'});
+  assert.equal(wrong.accepted,false);
+  assert.equal(wrong.rejectionReason,'OPERATION_BINDING_MISMATCH');
+  r = reduceTaskState(r.nextState,{...eventBase('approve'),expectedStateRevision:1,kind:'approval_state_changed',operationId:'op1',operationFingerprint:'opf1',dependencyFingerprint:'depf1',status:'approved'});
+  assert.equal(r.nextState.preparedOperation.status,'approved');
+  r = reduceTaskState(r.nextState,{...eventBase('exec'),expectedStateRevision:2,kind:'execution_started',operationId:'op1',operationFingerprint:'opf1',dependencyFingerprint:'depf1'});
+  assert.equal(r.nextState.execution.status,'executing');
+});
+
+test('J01 write outcome is accepted only for the exact executing operation and produces tool-authoritative booking truth', () => {
+  let s = emptyState();
+  const operation = {operationId:'op1',operationType:'reserve',operationFingerprint:'opf1',dependencyFingerprint:'depf1',dependencyKeys:writeDeps,canonicalInputSnapshot:{roomId:'r101'},status:'prepared'};
+  let r = reduceTaskState(s,{...eventBase('prep-auto'),expectedStateRevision:0,kind:'operation_prepared',operation});
+  r = reduceTaskState(r.nextState,{...eventBase('exec-auto'),expectedStateRevision:1,kind:'execution_started',operationId:'op1',operationFingerprint:'opf1',dependencyFingerprint:'depf1'});
+  const stale = reduceTaskState(r.nextState,{...eventBase('booking-wrong'),kind:'booking_created',operationId:'op1',operationFingerprint:'wrong',dependencyFingerprint:'depf1',booking:{bookingId:'BK-X',status:'confirmed',roomIds:['r101'],observationRevision:1}});
+  assert.equal(stale.accepted,false);
+  assert.equal(stale.rejectionReason,'OPERATION_BINDING_MISMATCH');
+  r = reduceTaskState(r.nextState,{...eventBase('booking-ok'),kind:'booking_created',operationId:'op1',operationFingerprint:'opf1',dependencyFingerprint:'depf1',booking:{bookingId:'BK-123',status:'confirmed',roomIds:['r101'],observationRevision:1}});
+  assert.equal(r.accepted,true);
+  assert.equal(r.nextState.execution.status,'confirmed');
+  assert.equal(r.nextState.execution.outcomeKind,'booking_created');
+  assert.equal(r.nextState.bookings[0].bookingId,'BK-123');
+});
+
+test('once execution has started, dependent user mutation cannot rewrite the committed operation task', () => {
+  const s = emptyState();
+  s.preparedOperation = {operationId:'op1',operationType:'reserve',operationFingerprint:'opf1',dependencyFingerprint:'depf1',dependencyKeys:writeDeps,canonicalInputSnapshot:{},status:'approved'};
+  s.execution = {status:'executing',operationId:'op1',operationFingerprint:'opf1',dependencyFingerprint:'depf1'};
+  const r = reduceTaskState(s,{...eventBase('too-late'),expectedStateRevision:0,kind:'user_semantic',sourceRevision:2,patch:{checkIn:{op:'set',value:'2027-01-20'}}});
+  assert.equal(r.accepted,false);
+  assert.equal(r.rejectionReason,'EXECUTION_ALREADY_COMMITTED');
+  const confirmed = emptyState();
+  confirmed.execution = {status:'confirmed',operationId:'op1',operationFingerprint:'opf1',dependencyFingerprint:'depf1',outcomeKind:'booking_created'};
+  const afterConfirmed = reduceTaskState(confirmed,{...eventBase('too-late-confirmed'),expectedStateRevision:0,kind:'user_semantic',sourceRevision:3,patch:{guests:{op:'set',value:3}}});
+  assert.equal(afterConfirmed.accepted,false);
+  assert.equal(afterConfirmed.rejectionReason,'EXECUTION_ALREADY_COMMITTED');
+});
+
+test('execution failure is operational truth and does not erase requested semantics', () => {
+  const s = emptyState();
+  s.requestedStay = {guests:{value:2,provenance:{source:'user',revision:1}}};
+  s.preparedOperation = {operationId:'op1',operationType:'reserve',operationFingerprint:'opf1',dependencyFingerprint:'depf1',dependencyKeys:writeDeps,canonicalInputSnapshot:{},status:'approved'};
+  s.execution = {status:'executing',operationId:'op1',operationFingerprint:'opf1',dependencyFingerprint:'depf1'};
+  const r = reduceTaskState(s,{...eventBase('exec-fail'),kind:'operation_execution_failed',operationId:'op1',operationFingerprint:'opf1',dependencyFingerprint:'depf1',failureCode:'HMS_TIMEOUT'});
+  assert.equal(r.accepted,true);
+  assert.equal(r.nextState.execution.status,'failed');
+  assert.equal(r.nextState.requestedStay.guests.value,2);
 });

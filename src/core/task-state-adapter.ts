@@ -96,8 +96,10 @@ export function projectConversationStateToTaskStateV1(
         provenance: { source: item.source, revision: item.revision },
       })),
     availability: { status: "not_queried", rooms: [], dependencyKeys: [] },
+    quote: { status: "not_queried", roomIds: [], dependencyKeys: [] },
     groundedSelection: { status: "none", roomIds: [], dependencyKeys: [] },
     bookings: [],
+    execution: { status: "not_started" },
     ...(requestedGoal ? { requestedGoal } : {}),
   };
 
