@@ -112,13 +112,11 @@ export function buildHotelDomainCapabilities(
   return result;
 }
 
-export type DomainCapabilities = Readonly<Partial<Record<HotelCapabilityId, DomainCapability>>>;
-
 export function capabilityPreconditionFingerprint(
   definition: Readonly<HotelTaskDefinition>,
   capability: Readonly<DomainCapability>,
   dependencyProjection: Readonly<Record<string, unknown>>,
-(: string {
+): string {
   return `dep:v1:${stableStringify({
     taskDefinition: `${definition.id}@${definition.version}`,
     capabilityId: capability.id,
@@ -131,7 +129,7 @@ export function capabilityPreconditionFingerprint(
 export function hotelCapabilityDependencyProjection(
   state: Readonly<TaskStateV1>,
   capabilityId: HotelCapabilityId,
-(: Readonly<Record<string, unknown>> | undefined {
+): Readonly<Record<string, unknown>> | undefined {
   const checkIn = state.requestedStay.checkIn?.value;
   const checkOut = state.requestedStay.checkOut?.value;
   const guests = state.requestedStay.guests?.value;
@@ -168,16 +166,10 @@ export function hotelCapabilityDependencyProjection(
     };
   }
 
-  // Cancellation/modification remain unavailable to the planner until the
-  // server-owned grounded booking target is represented in TaskState.
   return undefined;
 }
 
-export type RetryDirective = {
-  targetCapabilityId?: HotelCapabilityId;
-  correlationId?: string;
-};
-
+export type RetryDirective = { targetCapabilityId?: HotelCapabilityId; correlationId?: string };
 export type ReadDirective =
   | { kind: "availability" }
   | { kind: "quote" }
@@ -216,27 +208,13 @@ export type PlanningContext = {
   capabilities: DomainCapabilities;
 };
 
-export type AskField =
-  | "dates"
-  | "check_in"
-  | "check_out"
-  | "guests"
-  | "selection"
-  | "booking_reference"
-  | "retry_target";
-
-export type PresentationContext = {
-  kind: "availability_options";
-  observationRevision: number;
-  roomIds: readonly string[];
-};
-
+export type AskField = "dates" | "check_in" | "check_out" | "guests" | "selection" | "booking_reference" | "retry_target";
+export type PresentationContext = { kind: "availability_options"; observationRevision: number; roomIds: readonly string[] };
 export type DialogueAnchorSpec = {
   kind: "dates" | "check_out" | "guests" | "selection" | "booking_reference" | "other_bounded";
   candidateRoomIds?: readonly string[];
   referencedObservationRevision?: number;
 };
-
 export type GroundedReference =
   | { kind: "availability"; observationRevision: number; roomIds: readonly string[] }
   | { kind: "selection"; roomIds: readonly string[] }
@@ -245,44 +223,11 @@ export type GroundedReference =
   | { kind: "operation"; operationId: string };
 
 export type NextStep =
-  | {
-      kind: "ASK";
-      field: AskField;
-      reason: string;
-      presentationContext?: PresentationContext;
-      dialogueAnchorSpec: DialogueAnchorSpec;
-    }
-  | {
-      kind: "CALL_TOOL";
-      capabilityId: HotelCapabilityId;
-      groundedInput: Readonly<Record<string, unknown>>;
-      preconditionFingerprint: string;
-      correlationIntent: string;
-      effectClass: CapabilityEffectClass;
-    }
-  | {
-      kind: "RESPOND";
-      responseIntent: string;
-      groundedReferences: readonly GroundedReference[];
-    }
-  | {
-      kind: "WAIT";
-      reason: "tool_pending" | "approval_pending" | "external_event";
-      correlationId?: string;
-    }
-  | {
-      kind: "COMPLETE";
-      completionReason: string;
-      responseIntent: string;
-      groundedReferences: readonly GroundedReference[];
-    }
-  | {
-      kind: "DEGRADE";
-      reasonCode: string;
-      recoverable: boolean;
-      responseIntent: string;
-    };
+  | { kind: "ASK"; field: AskField; reason: string; presentationContext?: PresentationContext; dialogueAnchorSpec: DialogueAnchorSpec }
+  | { kind: "CALL_TOOL"; capabilityId: HotelCapabilityId; groundedInput: Readonly<Record<string, unknown>>; preconditionFingerprint: string; correlationIntent: string; effectClass: CapabilityEffectClass }
+  | { kind: "RESPOND"; responseIntent: string; groundedReferences: readonly GroundedReference[] }
+  | { kind: "WAIT"; reason: "tool_pending" | "approval_pending" | "external_event"; correlationId?: string }
+  | { kind: "COMPLETE"; completionReason: string; responseIntent: string; groundedReferences: readonly GroundedReference[] }
+  | { kind: "DEGRADE"; reasonCode: string; recoverable: boolean; responseIntent: string };
 
-export interface DeterministicPlanner {
-  plan(context: PlanningContext): NextStep;
-}
+export interface DeterministicPlanner { plan(context: PlanningContext): NextStep; }
