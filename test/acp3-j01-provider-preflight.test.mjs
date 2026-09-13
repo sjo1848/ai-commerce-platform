@@ -7,6 +7,7 @@ import {
   runJ01ProviderSemanticPreflight,
 } from "../dist/index.js";
 import { ModelProviderError } from "../dist/core/model-provider.js";
+import { DurableExperimentBudgetProvider } from "../dist/core/neuron-budget.js";
 
 function emptyState() {
   return {
@@ -35,19 +36,6 @@ const temporalContext = {
   temporalPolicyVersion: "1",
 };
 
-function baseInput(provider, state = emptyState()) {
-  return {
-    state,
-    userMessage: "Quiero reservar una habitación del 10 al 12 de febrero de 2027 para 2 personas.",
-    temporalContext,
-    provider,
-    planner: new HotelTaskPlanner(),
-    taskDefinition: HOTEL_TASK_DEFINITION_V1,
-    capabilities,
-    meta: { eventId: "j01-provider-preflight-user", sourceRevision: 1 },
-  };
-}
-
 function validProviderOutput() {
   return {
     classification: "task",
@@ -61,10 +49,63 @@ function validProviderOutput() {
   };
 }
 
-test("J01 provider preflight performs one semantic inference and stops at read-only availability before Core/Executor", async () => {
+function budgeted(inner) {
+  const counters = { reserve: 0, settle: 0, release: 0 };
+  const snapshot = (observedProviderNeurons = 0, inferenceCount = 0, activeReservationCount = 0, totalReservedAllowance = 0) => ({
+    experimentId: "acp3-j01-provider-preflight",
+    configuredMaxNeurons: 1_000,
+    configuredReserve: 0,
+    observedProviderNeurons,
+    inferenceCount,
+    updatedAt: "2026-09-13T19:00:00Z",
+    status: "ACTIVE",
+    activeReservationCount,
+    totalReservedAllowance,
+  });
+  const store = {
+    async reserve() {
+      counters.reserve += 1;
+      return {
+        token: "00000000-0000-4000-8000-000000000001",
+        snapshot: snapshot(0, 0, 1, 100),
+      };
+    },
+    async settle(_token, neurons) {
+      counters.settle += 1;
+      return snapshot(neurons, 1, 0, 0);
+    },
+    async release() {
+      counters.release += 1;
+      return snapshot();
+    },
+  };
+  return {
+    provider: new DurableExperimentBudgetProvider(inner, store, {
+      configuredMaxNeurons: 1_000,
+      configuredReserve: 0,
+      conservativeNextCallAllowance: 100,
+    }),
+    counters,
+  };
+}
+
+function baseInput(provider, state = emptyState(), userMessage = "Quiero reservar una habitación del 10 al 12 de febrero de 2027 para 2 personas.") {
+  return {
+    state,
+    userMessage,
+    temporalContext,
+    provider,
+    planner: new HotelTaskPlanner(),
+    taskDefinition: HOTEL_TASK_DEFINITION_V1,
+    capabilities,
+    meta: { eventId: "j01-provider-preflight-user", sourceRevision: 1 },
+  };
+}
+
+test("J01 provider preflight performs one budgeted semantic inference and stops at read-only availability before Core/Executor", async () => {
   let calls = 0;
   let capturedRequest;
-  const provider = {
+  const guarded = budgeted({
     async completeStructured(request) {
       calls += 1;
       capturedRequest = request;
@@ -78,11 +119,14 @@ test("J01 provider preflight performs one semantic inference and stops at read-o
         providerNeurons: 80,
       };
     },
-  };
+  });
 
-  const result = await runJ01ProviderSemanticPreflight(baseInput(provider));
+  const result = await runJ01ProviderSemanticPreflight(baseInput(guarded.provider));
   assert.equal(result.ok, true, result.ok ? undefined : result.failureCode);
   assert.equal(calls, 1);
+  assert.equal(guarded.counters.reserve, 1);
+  assert.equal(guarded.counters.settle, 1);
+  assert.equal(guarded.counters.release, 0);
   assert.equal(capturedRequest.label, "acp.semantic_interpreter.v1");
   assert.equal(capturedRequest.temperature, 0);
   assert.equal(JSON.stringify(capturedRequest).includes("hms.checkAvailability"), false);
@@ -111,9 +155,17 @@ test("J01 provider preflight performs one semantic inference and stops at read-o
   });
 });
 
-test("J01 provider preflight rejects dirty operational state before provider dispatch", async () => {
+test("J01 provider preflight rejects an unbudgeted provider before dispatch", async () => {
   let calls = 0;
-  const provider = { async completeStructured() { calls += 1; return { value: validProviderOutput(), model: "provider/test-model" }; } };
+  const provider = { async completeStructured() { calls += 1; return { value: validProviderOutput(), model: "provider/test-model", providerNeurons: 10 }; } };
+  const result = await runJ01ProviderSemanticPreflight(baseInput(provider));
+  assert.deepEqual(result, { ok: false, failureCode: "J01_PREFLIGHT_PROVIDER_GUARD_REQUIRED" });
+  assert.equal(calls, 0);
+});
+
+test("J01 provider preflight rejects dirty operational state before provider or budget dispatch", async () => {
+  let calls = 0;
+  const guarded = budgeted({ async completeStructured() { calls += 1; return { value: validProviderOutput(), model: "provider/test-model", providerNeurons: 10 }; } });
   const state = emptyState();
   state.execution = {
     status: "executing",
@@ -122,81 +174,99 @@ test("J01 provider preflight rejects dirty operational state before provider dis
     dependencyFingerprint: "dependency-secret",
   };
 
-  const result = await runJ01ProviderSemanticPreflight(baseInput(provider, state));
+  const result = await runJ01ProviderSemanticPreflight(baseInput(guarded.provider, state));
   assert.deepEqual(result, { ok: false, failureCode: "J01_PREFLIGHT_STATE_NOT_CLEAN" });
   assert.equal(calls, 0);
+  assert.equal(guarded.counters.reserve, 0);
+});
+
+test("J01 provider preflight rejects local invalid input before provider or budget dispatch", async () => {
+  let calls = 0;
+  const guarded = budgeted({ async completeStructured() { calls += 1; return { value: validProviderOutput(), model: "provider/test-model", providerNeurons: 10 }; } });
+  const result = await runJ01ProviderSemanticPreflight(baseInput(guarded.provider, emptyState(), "   "));
+  assert.deepEqual(result, { ok: false, failureCode: "J01_PREFLIGHT_INPUT_INVALID" });
+  assert.equal(calls, 0);
+  assert.equal(guarded.counters.reserve, 0);
 });
 
 test("J01 provider preflight rejects invalid semantic output and never falls back to language parsing", async () => {
   let calls = 0;
-  const provider = {
+  const guarded = budgeted({
     async completeStructured() {
       calls += 1;
       return {
         value: {
           classification: "task",
-          taskSemanticChanges: {
-            requestedGoal: { op: "set", value: "reservation" },
-          },
+          taskSemanticChanges: { requestedGoal: { op: "set", value: "reservation" } },
           toolId: "hms.createReservation",
         },
         model: "provider/test-model",
+        providerNeurons: 25,
       };
     },
-  };
+  });
 
-  const result = await runJ01ProviderSemanticPreflight(baseInput(provider));
+  const result = await runJ01ProviderSemanticPreflight(baseInput(guarded.provider));
   assert.equal(result.ok, false);
   assert.equal(result.failureCode, "J01_PREFLIGHT_SEMANTIC_VALIDATION_FAILED");
   assert.equal(calls, 1);
+  assert.equal(guarded.counters.reserve, 1);
+  assert.equal(guarded.counters.settle, 1);
 });
 
-test("J01 provider preflight never retries provider failure and exposes only bounded provider category", async () => {
+test("J01 provider preflight never retries uncertain provider failure and preserves bounded underlying category", async () => {
   let calls = 0;
-  const provider = {
+  const guarded = budgeted({
     async completeStructured() {
       calls += 1;
       throw new ModelProviderError("secret upstream text", "CloudflareError3036");
     },
-  };
+  });
 
-  const result = await runJ01ProviderSemanticPreflight(baseInput(provider));
+  const result = await runJ01ProviderSemanticPreflight(baseInput(guarded.provider));
   assert.deepEqual(result, {
     ok: false,
     failureCode: "J01_PREFLIGHT_PROVIDER_FAILURE",
-    providerCategory: "CloudflareError3036",
+    providerCategory: "EXPERIMENT_BUDGET_PROVIDER_UNCERTAIN",
+    underlyingProviderCategory: "CloudflareError3036",
   });
   assert.equal(calls, 1);
+  assert.equal(guarded.counters.reserve, 1);
+  assert.equal(guarded.counters.settle, 0);
+  assert.equal(guarded.counters.release, 0);
   assert.equal(JSON.stringify(result).includes("secret upstream text"), false);
 });
 
-test("J01 provider preflight requires provider identity evidence before accepting a semantic result", async () => {
+test("J01 provider preflight requires provider identity evidence before accepting a settled semantic result", async () => {
   let calls = 0;
-  const provider = {
+  const guarded = budgeted({
     async completeStructured() {
       calls += 1;
-      return { value: validProviderOutput() };
+      return { value: validProviderOutput(), providerNeurons: 10 };
     },
-  };
+  });
 
-  const result = await runJ01ProviderSemanticPreflight(baseInput(provider));
+  const result = await runJ01ProviderSemanticPreflight(baseInput(guarded.provider));
   assert.deepEqual(result, { ok: false, failureCode: "J01_PREFLIGHT_PROVIDER_IDENTITY_MISSING" });
   assert.equal(calls, 1);
+  assert.equal(guarded.counters.settle, 1);
 });
 
 test("J01 provider preflight fails closed when valid semantics do not lead to the expected availability read", async () => {
   let calls = 0;
-  const provider = {
+  const guarded = budgeted({
     async completeStructured() {
       calls += 1;
       return {
         value: { classification: "social", directives: { interaction: "social" } },
         model: "provider/test-model",
+        providerNeurons: 10,
       };
     },
-  };
+  });
 
-  const result = await runJ01ProviderSemanticPreflight(baseInput(provider));
+  const result = await runJ01ProviderSemanticPreflight(baseInput(guarded.provider));
   assert.deepEqual(result, { ok: false, failureCode: "J01_PREFLIGHT_UNEXPECTED_NEXT_STEP" });
   assert.equal(calls, 1);
+  assert.equal(guarded.counters.settle, 1);
 });

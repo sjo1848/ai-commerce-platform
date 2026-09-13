@@ -1,9 +1,10 @@
 import type { ModelProvider } from "./model-provider.js";
-import { safeProviderCategory } from "./model-provider.js";
+import { safeProviderCategory, safeUnderlyingProviderCategory } from "./model-provider.js";
+import { DurableExperimentBudgetProvider } from "./neuron-budget.js";
 import type { DeterministicPlanner, DomainCapabilities, HotelTaskDefinition, NextStep } from "./planning.js";
 import type { DialogueAnchor, InterpreterTemporalContext } from "./semantic-interpreter.js";
 import { HOTEL_SEMANTIC_CONTRACT_V1, projectTaskStateForInterpreter } from "./semantic-interpreter.js";
-import { buildSemanticInterpreterRequest } from "./semantic-interpreter-adapter.js";
+import { buildSemanticInterpreterRequest, SemanticInterpreterInputError } from "./semantic-interpreter-adapter.js";
 import { validateInterpreterOutput } from "./semantic-interpreter-validation.js";
 import { applyInterpreterTurnToPlanner } from "./interpreter-turn-boundary.js";
 import type { TaskStateV1 } from "./task-state.js";
@@ -20,7 +21,9 @@ export type J01ProviderPreflightReceipt = Readonly<{
 }>;
 
 export type J01ProviderPreflightFailureCode =
+  | "J01_PREFLIGHT_PROVIDER_GUARD_REQUIRED"
   | "J01_PREFLIGHT_STATE_NOT_CLEAN"
+  | "J01_PREFLIGHT_INPUT_INVALID"
   | "J01_PREFLIGHT_PROVIDER_FAILURE"
   | "J01_PREFLIGHT_PROVIDER_IDENTITY_MISSING"
   | "J01_PREFLIGHT_SEMANTIC_VALIDATION_FAILED"
@@ -40,6 +43,7 @@ export type J01ProviderPreflightResult =
       ok: false;
       failureCode: J01ProviderPreflightFailureCode;
       providerCategory?: string;
+      underlyingProviderCategory?: string;
       validationMessage?: string;
     };
 
@@ -88,16 +92,20 @@ function receipt(result: Awaited<ReturnType<ModelProvider["completeStructured"]>
 /**
  * Validation-only J01 provider preflight.
  *
- * This boundary deliberately stops before Core/Policy admission. It may perform
- * exactly one structured semantic-provider call, validate that output against
- * ACP-3, reduce the semantic patch in memory, and ask the deterministic Planner
- * what would happen next. A successful preflight requires the next action to be
- * the read-only availability capability. No tool invocation, approval issuance,
+ * This boundary deliberately stops before Core/Policy admission. It requires
+ * the existing durable experiment-budget provider, performs at most one
+ * structured semantic-provider call, validates that output against ACP-3,
+ * reduces the semantic patch in memory, and asks the deterministic Planner what
+ * would happen next. A successful preflight requires the next action to be the
+ * read-only availability capability. No tool invocation, approval issuance,
  * approval consumption, persistence, HMS call, or response publication occurs.
  */
 export async function runJ01ProviderSemanticPreflight(
   input: Readonly<J01ProviderPreflightInput>,
 ): Promise<J01ProviderPreflightResult> {
+  if (!(input.provider instanceof DurableExperimentBudgetProvider)) {
+    return { ok: false, failureCode: "J01_PREFLIGHT_PROVIDER_GUARD_REQUIRED" };
+  }
   if (!cleanJ01State(input.state)) return { ok: false, failureCode: "J01_PREFLIGHT_STATE_NOT_CLEAN" };
 
   const interpreterInput = {
@@ -108,15 +116,27 @@ export async function runJ01ProviderSemanticPreflight(
     domainSemanticContract: HOTEL_SEMANTIC_CONTRACT_V1,
   } as const;
 
+  let request;
+  try {
+    request = buildSemanticInterpreterRequest(interpreterInput);
+  } catch (error) {
+    if (error instanceof SemanticInterpreterInputError) {
+      return { ok: false, failureCode: "J01_PREFLIGHT_INPUT_INVALID" };
+    }
+    return { ok: false, failureCode: "J01_PREFLIGHT_INPUT_INVALID" };
+  }
+
   let providerResult: Awaited<ReturnType<ModelProvider["completeStructured"]>>;
   try {
-    providerResult = await input.provider.completeStructured(buildSemanticInterpreterRequest(interpreterInput));
+    providerResult = await input.provider.completeStructured(request);
   } catch (error) {
     const providerCategory = safeProviderCategory(error);
+    const underlyingProviderCategory = safeUnderlyingProviderCategory(error);
     return {
       ok: false,
       failureCode: "J01_PREFLIGHT_PROVIDER_FAILURE",
       ...(providerCategory ? { providerCategory } : {}),
+      ...(underlyingProviderCategory && underlyingProviderCategory !== providerCategory ? { underlyingProviderCategory } : {}),
     };
   }
 
