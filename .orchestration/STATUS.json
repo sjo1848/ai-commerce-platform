@@ -5,8 +5,8 @@
   "active_task": "ACP-3.0.8-IMPLEMENTATION-FOUNDATION",
   "last_completed_task": "ACP-3.0.8.4-SEMANTIC-INTERPRETER-ADAPTER",
   "last_completed_head": "6ecb687f1912003c86f772420759e6d25bce720f",
-  "current_substage": "ACP-3.0.8.5_ORCHESTRATION_INTEGRATION",
-  "next_action": "IMPLEMENT_OFFLINE_VALIDATE_REDUCE_TRIGGER_PLAN_SLICE",
+  "current_substage": "ACP-3.0.8.5_ORCHESTRATION_BOUNDARY_FINAL_CANDIDATE_CI_PENDING",
+  "next_action": "VALIDATE_ORCHESTRATION_BOUNDARY_EXACT_HEAD_THEN_CONTINUE_CORE_POLICY_INTEGRATION",
   "stop_reason": null,
   "baseline": {
     "source_pr": 63,
@@ -18,7 +18,19 @@
     "foundation_contracts": {"status":"FOUNDATION_CONTRACTS_PASS","head":"31d91df9c1b211263245e43860077ca8f36d7aa3","ci":34754506869},
     "deterministic_reducer": {"status":"DETERMINISTIC_REDUCER_PASS","head":"5860202068eb89cce8f7b0e37d5e5dbc4225e987","ci":34755757781},
     "deterministic_planner": {"status":"DETERMINISTIC_PLANNER_IMPLEMENTATION_PASS","head":"a8c91bd67fbcb1125a8f9f5daa4c97e6c6ce5102","ci":34762367166},
-    "semantic_interpreter_adapter": {"status":"SEMANTIC_INTERPRETER_ADAPTER_PASS","head":"6ecb687f1912003c86f772420759e6d25bce720f","ci":34762941975,"runtime_wired":false,"real_provider_calls":false}
+    "semantic_interpreter_adapter": {"status":"SEMANTIC_INTERPRETER_ADAPTER_PASS","head":"6ecb687f1912003c86f772420759e6d25bce720f","ci":34762941975,"runtime_wired":false,"real_provider_calls":false},
+    "orchestration_boundary": {
+      "status": "FINAL_CANDIDATE_CI_PENDING",
+      "runtime_cutover": false,
+      "user_turn_order_enforced": true,
+      "server_selection_grounding": true,
+      "unknown_turn_blocks_business_progression": true,
+      "max_internal_steps": 3,
+      "targeted_cases_authored": 19,
+      "intermediate_non_gate_head": "9e988094c107e593188067fed5790a2b6a85fb51",
+      "repository_ci": null,
+      "evidence": ".orchestration/evidence/ACP-3.0.8.5-ORCHESTRATION-BOUNDARY.md"
+    }
   },
   "constraints": {
     "production": false,
@@ -29,8 +41,8 @@
     "second_vertical": false
   },
   "event": {
-    "id": "ACP-3.0.8.5-ORCHESTRATION-INTEGRATION-START",
-    "type": "SUBSTAGE_START",
-    "seq": 31
+    "id": "ACP-3.0.8.5-ORCHESTRATION-BOUNDARY-FINAL-CANDIDATE",
+    "type": "ORCHESTRATION_BOUNDARY_FINAL_CANDIDATE",
+    "seq": 32
   }
 }

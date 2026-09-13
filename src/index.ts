@@ -21,5 +21,7 @@ export * from "./core/semantic-interpreter.js";
 export * from "./core/semantic-interpreter-schema.js";
 export * from "./core/semantic-interpreter-validation.js";
 export * from "./core/semantic-interpreter-adapter.js";
+export * from "./core/orchestration-trigger.js";
+export * from "./core/interpreter-turn-boundary.js";
 export * from "./adapters/fake-hms.js";
 export * from "./webchat/handler.js";
