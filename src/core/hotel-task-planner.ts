@@ -31,6 +31,22 @@ function ambiguityStep(trigger: OrchestrationPlanningTrigger): NextStep | undefi
   return { kind: "ASK", field, reason: ambiguity.reasonCode, dialogueAnchorSpec: { kind: anchorKind } };
 }
 
+function executionFailureStep(context: PlanningContext): NextStep | undefined {
+  const state = context.state;
+  const trigger = context.trigger as OrchestrationPlanningTrigger;
+  if (state.execution.status !== "failed") return undefined;
+  const explicitReadOrRetry = trigger.readDirective !== undefined
+    || trigger.showOptionsDirective === true
+    || trigger.retryDirective !== undefined;
+  if (explicitReadOrRetry) return undefined;
+  return {
+    kind: "DEGRADE",
+    reasonCode: state.execution.failureCode ?? "OPERATION_EXECUTION_FAILED",
+    recoverable: true,
+    responseIntent: "operation_failed",
+  };
+}
+
 export class HotelTaskPlanner extends BaseHotelTaskPlanner {
   public override plan(context: PlanningContext): NextStep {
     const state = context.state;
@@ -48,6 +64,8 @@ export class HotelTaskPlanner extends BaseHotelTaskPlanner {
     if (trigger.readDirective?.kind === "compare_price") return { kind: "DEGRADE", reasonCode: "COMPARE_PRICE_CAPABILITY_UNAVAILABLE", recoverable: true, responseIntent: "compare_price_unsupported" };
     if (trigger.readDirective?.kind === "booking_lookup") return { kind: "DEGRADE", reasonCode: "BOOKING_LOOKUP_CAPABILITY_UNAVAILABLE", recoverable: true, responseIntent: "booking_lookup_unsupported" };
     if (state.execution.status === "executing") return super.plan(context);
+    const executionFailure = executionFailureStep(context);
+    if (executionFailure) return executionFailure;
     if (state.preparedOperation?.status === "invalidated" && trigger.controlKind === "approval_invalidated") {
       return { kind: "RESPOND", responseIntent: "approval_invalidated", groundedReferences: [{ kind: "operation", operationId: state.preparedOperation.operationId }] };
     }
