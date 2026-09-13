@@ -112,10 +112,11 @@ export async function runJ01ProviderSemanticPreflight(
   try {
     providerResult = await input.provider.completeStructured(buildSemanticInterpreterRequest(interpreterInput));
   } catch (error) {
+    const providerCategory = safeProviderCategory(error);
     return {
       ok: false,
       failureCode: "J01_PREFLIGHT_PROVIDER_FAILURE",
-      ...(safeProviderCategory(error) ? { providerCategory: safeProviderCategory(error) } : {}),
+      ...(providerCategory ? { providerCategory } : {}),
     };
   }
 
