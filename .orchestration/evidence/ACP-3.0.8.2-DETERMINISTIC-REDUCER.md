@@ -1,60 +1,57 @@
 # ACP-3.0.8.2 — Deterministic Reducer Evidence
 
-Status: `REVIEW_02 AMENDED / EXACT-HEAD CI PENDING`
+Status: `REVIEW_03 FINAL CANDIDATE / EXACT-HEAD CI PENDING`
+
+## Prior exact-head evidence
+
+- `d9466599dbaa6af75f986f2faf6d743562ad2627` — core-ci #640 / `34754777914` PASS.
+- `b12751f6baeabfee3014c0e486a59a90786cce17` — core-ci #641 / `34754941366` PASS.
+
+Those green runs did not close the reducer because adversarial review continued after CI.
 
 ## Review 01
 
-Initial candidate `d9466599dbaa6af75f986f2faf6d743562ad2627` passed `core-ci` run `34754777914` / #640.
-
-Review 01 then closed three contract gaps:
+Closed:
 - optimistic revision guards for user/server mutations while tool observations remain dependency-based;
 - terminal task fail-closed behavior;
-- availability refresh invalidation of grounding/prepared operations that depended on the replaced observation.
+- availability refresh invalidation of dependent grounding/prepared operations.
 
-Review 01 amended head `b12751f6baeabfee3014c0e486a59a90786cce17` passed `core-ci` run `34754941366` / #641.
+## Review 02
 
-## Review 02 findings
+Closed:
+- exact PreparedOperation → approval → execution → booking result authority chain;
+- write-commit race: same task cannot rewrite an admitted/confirmed side effect;
+- quote as a separate tool-authoritative observation namespace.
 
-CI green still did not prove that the reducer could represent the full J01 control/result chain.
+## Review 03
 
-### F4 — approval/execution/outcome authority was incomplete
+Closed final state-machine races:
+- the single pending-tool slot rejects a second concurrent tool start instead of orphaning the first invocation;
+- duplicate `execution_started` with a different event id is rejected;
+- a new PreparedOperation cannot overwrite an active approval-bound operation;
+- a task cannot transition terminal while an admitted side effect is still executing;
+- task completion after a confirmed operation preserves the executed operation receipt instead of mislabeling it invalidated.
 
-The reducer now models:
-`PreparedOperation -> approval state -> execution_started -> exact booking outcome`.
+## Invariants
 
-Approval can only advance the exact operationId + operationFingerprint + dependencyFingerprint. Execution cannot start while status is `approval_required`; it requires `prepared` (auto path) or `approved` (HITL path).
-
-Mutation results are accepted only for the exact executing operation.
-
-### F5 — write-commit race
-
-After execution is `executing` or `confirmed`, user semantic mutation in that same task fails closed as `EXECUTION_ALREADY_COMMITTED`. A later change must be represented through a new task/flow rather than pretending to rewrite a side effect already admitted.
-
-### F6 — quote observation missing from TaskState implementation
-
-Quote now has a separate tool-authoritative observation namespace and the same invocation/dependency stale controls as availability.
-
-## Preserved invariants
-
-- Reducer never parses language, chooses tools, decides policy, executes side effects or writes user prose.
-- User/server mutations use optimistic state revision guards.
-- Tool observations do not require global revision equality and remain causal by receipts.
-- Approval authority remains server/Core-owned and exact-operation-bound.
-- Booking outcomes are tool-authoritative.
+- No language parsing, tool selection, policy/approval decision, side-effect execution or response prose in Reducer.
+- User/server mutations use optimistic revision guards.
+- Tool results use causal invocation/dependency receipts and tolerate unrelated global revisions.
+- Approval/execution/results remain exact-operation-bound.
+- Booking facts are tool-authoritative.
 - Failure does not erase requested semantics.
-- Replay protection remains bounded.
+- Replay protection is bounded.
 
 ## Focused pre-push verification
 
 Strict isolated TypeScript build: PASS.
 
-Focused tests:
-- deterministic reducer: 16/16 PASS;
-- compatibility projection: 4/4 PASS;
-- combined: 20/20 PASS.
+- reducer tests: 21/21 PASS;
+- compatibility projection tests: 4/4 PASS;
+- total focused set: 25/25 PASS.
 
 No provider inference, Worker deployment, HMS mutation or approval consumption occurred.
 
 ## Gate
 
-`DETERMINISTIC_REDUCER_PASS` remains pending repository CI on the Review 02 exact head.
+`DETERMINISTIC_REDUCER_PASS` requires the Review 03 exact head to pass repository CI. No additional reducer expansion is planned unless that CI or a new contradiction produces a material finding.

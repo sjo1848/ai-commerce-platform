@@ -26,7 +26,7 @@ export type ReductionResult = {
   materialChange: boolean;
   replayed: boolean;
   invalidations: readonly ReductionInvalidation[];
-  rejectionReason?: "TASK_SCOPE_MISMATCH" | "STATE_REVISION_CONFLICT" | "TASK_NOT_ACTIVE" | "EXECUTION_ALREADY_COMMITTED" | "STALE_DEPENDENCY" | "INVALID_GROUNDING" | "OPERATION_BINDING_MISMATCH" | "INVALID_OPERATION_TRANSITION";
+  rejectionReason?: "TASK_SCOPE_MISMATCH" | "STATE_REVISION_CONFLICT" | "TASK_NOT_ACTIVE" | "EXECUTION_ALREADY_COMMITTED" | "STALE_DEPENDENCY" | "INVALID_GROUNDING" | "OPERATION_BINDING_MISMATCH" | "INVALID_OPERATION_TRANSITION" | "PENDING_TOOL_CONFLICT";
 };
 
 function sameValue(left: unknown, right: unknown): boolean {
@@ -292,6 +292,12 @@ export function reduceTaskState(state: Readonly<TaskStateV1>, event: TaskEvent):
   if (event.kind === "user_semantic") {
     materialChange = reduceUserSemanticEvent(next, event, invalidations);
   } else if (event.kind === "tool_invocation_started") {
+    if (next.pendingToolInvocation?.status === "pending") {
+      return {
+        nextState: structuredClone(state), accepted: false, materialChange: false, replayed: false, invalidations: [],
+        rejectionReason: "PENDING_TOOL_CONFLICT",
+      };
+    }
     next.pendingToolInvocation = {
       invocationId: event.invocationId,
       capabilityId: event.capabilityId,
@@ -429,6 +435,14 @@ export function reduceTaskState(state: Readonly<TaskStateV1>, event: TaskEvent):
     };
     materialChange = true;
   } else if (event.kind === "operation_prepared") {
+    const existingOperationActive = next.preparedOperation && next.preparedOperation.status !== "invalidated";
+    if (next.execution.status === "executing" || next.execution.status === "confirmed"
+      || (existingOperationActive && next.execution.status !== "failed")) {
+      return {
+        nextState: structuredClone(state), accepted: false, materialChange: false, replayed: false, invalidations: [],
+        rejectionReason: "INVALID_OPERATION_TRANSITION",
+      };
+    }
     next.preparedOperation = structuredClone(event.operation);
     next.execution = { status: "not_started" };
     materialChange = true;
@@ -449,6 +463,12 @@ export function reduceTaskState(state: Readonly<TaskStateV1>, event: TaskEvent):
     next.preparedOperation = { ...operation, status: event.status };
     materialChange = true;
   } else if (event.kind === "execution_started") {
+    if (next.execution.status === "executing" || next.execution.status === "confirmed") {
+      return {
+        nextState: structuredClone(state), accepted: false, materialChange: false, replayed: false, invalidations: [],
+        rejectionReason: "INVALID_OPERATION_TRANSITION",
+      };
+    }
     if (!operationMatches(next, event.operationId, event.operationFingerprint, event.dependencyFingerprint)) {
       return {
         nextState: structuredClone(state), accepted: false, materialChange: false, replayed: false, invalidations: [],
@@ -502,6 +522,12 @@ export function reduceTaskState(state: Readonly<TaskStateV1>, event: TaskEvent):
     };
     materialChange = true;
   } else if (event.kind === "lifecycle_changed") {
+    if (event.lifecycle !== "active" && next.execution.status === "executing") {
+      return {
+        nextState: structuredClone(state), accepted: false, materialChange: false, replayed: false, invalidations: [],
+        rejectionReason: "INVALID_OPERATION_TRANSITION",
+      };
+    }
     materialChange = next.lifecycle !== event.lifecycle;
     next.lifecycle = event.lifecycle;
     if (event.lifecycle !== "active") {
@@ -510,7 +536,9 @@ export function reduceTaskState(state: Readonly<TaskStateV1>, event: TaskEvent):
         pushInvalidation(invalidations, "pending_tool_invocation");
         materialChange = true;
       }
-      if (next.preparedOperation && next.preparedOperation.status !== "invalidated") {
+      if (next.execution.status !== "confirmed"
+        && next.preparedOperation
+        && next.preparedOperation.status !== "invalidated") {
         next.preparedOperation = { ...next.preparedOperation, status: "invalidated" };
         pushInvalidation(invalidations, "prepared_operation");
         materialChange = true;

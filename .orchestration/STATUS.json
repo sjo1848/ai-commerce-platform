@@ -5,12 +5,12 @@
   "active_task": "ACP-3.0.8-IMPLEMENTATION-FOUNDATION",
   "last_completed_task": "ACP-3.0.8.1-FOUNDATION-CONTRACTS",
   "last_completed_head": "31d91df9c1b211263245e43860077ca8f36d7aa3",
-  "current_substage": "ACP-3.0.8.2_DETERMINISTIC_REDUCER_REVIEW_02_AMENDED_CI_PENDING",
-  "next_action": "VALIDATE_REVIEW_02_EXACT_HEAD_THEN_GATE_REDUCER",
+  "current_substage": "ACP-3.0.8.2_DETERMINISTIC_REDUCER_REVIEW_03_FINAL_CANDIDATE_CI_PENDING",
+  "next_action": "VALIDATE_REVIEW_03_EXACT_HEAD_THEN_GATE_REDUCER",
   "stop_reason": null,
   "baseline": {
     "source_pr": 63,
-    "source_head": "10c649507b524c44fc4ed4fd1d0dd1e63cd13185"
+    "source_head": "10c649507b524c44fc4ed1d0dd1e63cd13185"
   },
   "active_branch": "feature/acp-3.0.8-implementation-foundation",
   "active_contract": ".orchestration/contracts/ACP-3.0.8-IMPLEMENTATION-FOUNDATION.md",
@@ -29,19 +29,14 @@
     "core_ci_run": 34754506869
   },
   "deterministic_reducer": {
-    "status": "REVIEW_02_AMENDED_CI_PENDING",
-    "initial_candidate_head": "d9466599dbaa6af75f986f2faf6d743562ad2627",
-    "initial_core_ci_run": 34754777914,
-    "review_01_head": "b12751f6baeabfee3014c0e486a59a90786cce17",
-    "review_01_core_ci_run": 34754941366,
-    "review_02_findings": [
-      "EXACT_APPROVAL_EXECUTION_OUTCOME_CHAIN",
-      "WRITE_COMMIT_RACE_BOUNDARY",
-      "QUOTE_OBSERVATION_NAMESPACE"
+    "status": "REVIEW_03_FINAL_CANDIDATE_CI_PENDING",
+    "prior_green_heads": [
+      "d9466599dbaa6af75f986f2faf6d743562ad2627",
+      "b12751f6baeabfee3014c0e486a59a90786cce17"
     ],
-    "local_isolated_reducer_tests": "16/16_PASS",
+    "local_isolated_reducer_tests": "21/21_PASS",
     "local_isolated_projection_tests": "4/4_PASS",
-    "repository_ci_after_review_02": null,
+    "repository_ci_final_candidate": null,
     "evidence": ".orchestration/evidence/ACP-3.0.8.2-DETERMINISTIC-REDUCER.md"
   },
   "constraints": {
@@ -53,8 +48,8 @@
     "second_vertical": false
   },
   "event": {
-    "id": "ACP-3.0.8.2-REVIEW-02-AMENDED",
-    "type": "REDUCER_REVIEW_AMENDMENT",
-    "seq": 26
+    "id": "ACP-3.0.8.2-REVIEW-03-FINAL-CANDIDATE",
+    "type": "REDUCER_FINAL_CANDIDATE",
+    "seq": 27
   }
 }

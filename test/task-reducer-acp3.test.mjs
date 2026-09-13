@@ -209,3 +209,54 @@ test('execution failure is operational truth and does not erase requested semant
   assert.equal(r.nextState.execution.status,'failed');
   assert.equal(r.nextState.requestedStay.guests.value,2);
 });
+
+test('single pending tool slot rejects concurrent tool start instead of orphaning the first invocation', () => {
+  const s = emptyState();
+  s.pendingToolInvocation = {invocationId:'inv-a',capabilityId:'availability',status:'pending',dependencyFingerprint:'fp-a',dependencyKeys:stayDeps,inputSnapshot:{},startedAt:'2026-09-13T00:00:00Z'};
+  s.availability = {status:'pending',dependencyFingerprint:'fp-a',dependencyKeys:stayDeps,rooms:[]};
+  const r = reduceTaskState(s,{...eventBase('second-tool'),expectedStateRevision:0,kind:'tool_invocation_started',invocationId:'inv-b',capabilityId:'quote',dependencyFingerprint:'fp-b',dependencyKeys:['groundedSelection'],inputSnapshot:{},startedAt:'2026-09-13T00:00:01Z'});
+  assert.equal(r.accepted,false);
+  assert.equal(r.rejectionReason,'PENDING_TOOL_CONFLICT');
+  assert.equal(r.nextState.pendingToolInvocation.invocationId,'inv-a');
+});
+
+test('confirmed operation can complete task without being mislabeled invalidated', () => {
+  const s = emptyState();
+  s.preparedOperation = {operationId:'op1',operationType:'reserve',operationFingerprint:'opf1',dependencyFingerprint:'depf1',dependencyKeys:writeDeps,canonicalInputSnapshot:{},status:'approved'};
+  s.execution = {status:'confirmed',operationId:'op1',operationFingerprint:'opf1',dependencyFingerprint:'depf1',outcomeKind:'booking_created'};
+  const r = reduceTaskState(s,{...eventBase('complete'),expectedStateRevision:0,kind:'lifecycle_changed',lifecycle:'completed'});
+  assert.equal(r.accepted,true);
+  assert.equal(r.nextState.lifecycle,'completed');
+  assert.equal(r.nextState.preparedOperation.status,'approved');
+  assert.equal(r.nextState.execution.status,'confirmed');
+  assert.ok(!r.invalidations.includes('prepared_operation'));
+});
+
+test('task cannot terminate while an admitted side effect is still executing', () => {
+  const s = emptyState();
+  s.preparedOperation = {operationId:'op1',operationType:'reserve',operationFingerprint:'opf1',dependencyFingerprint:'depf1',dependencyKeys:writeDeps,canonicalInputSnapshot:{},status:'approved'};
+  s.execution = {status:'executing',operationId:'op1',operationFingerprint:'opf1',dependencyFingerprint:'depf1'};
+  const r = reduceTaskState(s,{...eventBase('premature-complete'),expectedStateRevision:0,kind:'lifecycle_changed',lifecycle:'completed'});
+  assert.equal(r.accepted,false);
+  assert.equal(r.rejectionReason,'INVALID_OPERATION_TRANSITION');
+  assert.equal(r.nextState.lifecycle,'active');
+});
+
+test('duplicate execution admission with a different event id is rejected', () => {
+  const s = emptyState();
+  s.preparedOperation = {operationId:'op1',operationType:'reserve',operationFingerprint:'opf1',dependencyFingerprint:'depf1',dependencyKeys:writeDeps,canonicalInputSnapshot:{},status:'approved'};
+  s.execution = {status:'executing',operationId:'op1',operationFingerprint:'opf1',dependencyFingerprint:'depf1'};
+  const r = reduceTaskState(s,{...eventBase('exec-again'),expectedStateRevision:0,kind:'execution_started',operationId:'op1',operationFingerprint:'opf1',dependencyFingerprint:'depf1'});
+  assert.equal(r.accepted,false);
+  assert.equal(r.rejectionReason,'INVALID_OPERATION_TRANSITION');
+});
+
+test('new prepared operation cannot overwrite an active approval-bound operation', () => {
+  const s = emptyState();
+  s.preparedOperation = {operationId:'op1',operationType:'reserve',operationFingerprint:'opf1',dependencyFingerprint:'depf1',dependencyKeys:writeDeps,canonicalInputSnapshot:{},status:'approval_required'};
+  const nextOp = {operationId:'op2',operationType:'reserve',operationFingerprint:'opf2',dependencyFingerprint:'depf2',dependencyKeys:writeDeps,canonicalInputSnapshot:{},status:'approval_required'};
+  const r = reduceTaskState(s,{...eventBase('prep-overwrite'),expectedStateRevision:0,kind:'operation_prepared',operation:nextOp});
+  assert.equal(r.accepted,false);
+  assert.equal(r.rejectionReason,'INVALID_OPERATION_TRANSITION');
+  assert.equal(r.nextState.preparedOperation.operationId,'op1');
+});
