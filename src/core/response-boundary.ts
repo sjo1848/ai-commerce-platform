@@ -509,7 +509,7 @@ function anchorCandidate(
       },
     };
   }
-  if (entities.length > 0) {
+  if (step.kind === "RESPOND" && entities.length > 0) {
     return {
       responseId,
       responseDependencyFingerprint: fingerprint,

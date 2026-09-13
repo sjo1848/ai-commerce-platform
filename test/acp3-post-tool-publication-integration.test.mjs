@@ -8,7 +8,9 @@ import {
   admitResponseForPublication,
   buildHotelDomainCapabilities,
   buildResponsePublicationCandidate,
+  capabilityPreconditionFingerprint,
   commitAcceptedPublication,
+  hotelCapabilityDependencyProjection,
   renderOperationalResponse,
 } from "../dist/index.js";
 
@@ -24,7 +26,7 @@ const capabilities = buildHotelDomainCapabilities([
 ]);
 
 function pendingAvailabilityState() {
-  return {
+  const state = {
     taskId: "task-e2e-read",
     sessionId: "session-e2e-read",
     taskType: "hotel_reservation_domain",
@@ -40,7 +42,7 @@ function pendingAvailabilityState() {
     preferences: [],
     availability: {
       status: "pending",
-      dependencyFingerprint: "dep-availability-e2e",
+      dependencyFingerprint: "pending",
       dependencyKeys: ["requestedStay.checkIn", "requestedStay.checkOut", "requestedStay.guests"],
       querySnapshot: { checkIn: "2026-10-20", checkOut: "2026-10-22", guests: 2 },
       rooms: [],
@@ -52,13 +54,21 @@ function pendingAvailabilityState() {
       invocationId: "inv-e2e-availability",
       capabilityId: "availability",
       status: "pending",
-      dependencyFingerprint: "dep-availability-e2e",
+      dependencyFingerprint: "pending",
       dependencyKeys: ["requestedStay.checkIn", "requestedStay.checkOut", "requestedStay.guests"],
       inputSnapshot: { checkIn: "2026-10-20", checkOut: "2026-10-22", guests: 2 },
       startedAt: "2026-09-13T17:20:00Z",
     },
     execution: { status: "not_started" },
   };
+  const projection = hotelCapabilityDependencyProjection(state, "availability");
+  const capability = capabilities.availability;
+  assert.ok(projection);
+  assert.ok(capability);
+  const fingerprint = capabilityPreconditionFingerprint(HOTEL_TASK_DEFINITION_V1, capability, projection);
+  state.availability.dependencyFingerprint = fingerprint;
+  state.pendingToolInvocation.dependencyFingerprint = fingerprint;
+  return state;
 }
 
 function executingReservationState() {
