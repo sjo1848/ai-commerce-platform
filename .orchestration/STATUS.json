@@ -3,10 +3,10 @@
   "runtime_status": "IN_PROGRESS",
   "resume_authorized": true,
   "active_task": "ACP-3.0.8-IMPLEMENTATION-FOUNDATION",
-  "last_completed_task": "ACP-3.0.8.3-DETERMINISTIC-PLANNER",
-  "last_completed_head": "a8c91bd67fbcb1125a8f9f5daa4c97e6c6ce5102",
-  "current_substage": "ACP-3.0.8.4_SEMANTIC_INTERPRETER_ADAPTER_FINAL_CANDIDATE_CI_PENDING",
-  "next_action": "VALIDATE_INTERPRETER_ADAPTER_EXACT_HEAD_THEN_GATE_3_0_8_4",
+  "last_completed_task": "ACP-3.0.8.4-SEMANTIC-INTERPRETER-ADAPTER",
+  "last_completed_head": "6ecb687f1912003c86f772420759e6d25bce720f",
+  "current_substage": "ACP-3.0.8.5_ORCHESTRATION_INTEGRATION",
+  "next_action": "IMPLEMENT_OFFLINE_VALIDATE_REDUCE_TRIGGER_PLAN_SLICE",
   "stop_reason": null,
   "baseline": {
     "source_pr": 63,
@@ -14,38 +14,11 @@
   },
   "active_branch": "feature/acp-3.0.8-implementation-foundation",
   "active_contract": ".orchestration/contracts/ACP-3.0.8-IMPLEMENTATION-FOUNDATION.md",
-  "design_gates": {
-    "task_state_engine": "DESIGN_PASS",
-    "deterministic_planner": "DESIGN_PASS",
-    "semantic_interpreter": "DESIGN_PASS",
-    "cognitive_e2e_integration": "DESIGN_PASS",
-    "response_composer": "DESIGN_PASS",
-    "architecture_integration_review": "PASS",
-    "ready_for_implementation": "PASS"
-  },
-  "foundation_contracts": {
-    "status": "FOUNDATION_CONTRACTS_PASS",
-    "exact_head": "31d91df9c1b211263245e43860077ca8f36d7aa3",
-    "core_ci_run": 34754506869
-  },
-  "deterministic_reducer": {
-    "status": "DETERMINISTIC_REDUCER_PASS",
-    "exact_head": "5860202068eb89cce8f7b0e37d5e5dbc4225e987",
-    "core_ci_run": 34755757781
-  },
-  "deterministic_planner": {
-    "status": "DETERMINISTIC_PLANNER_IMPLEMENTATION_PASS",
-    "exact_head": "a8c91bd67fbcb1125a8f9f5daa4c97e6c6ce5102",
-    "core_ci_run": 34762367166,
-    "runtime_wired": false,
-    "booking_target_grounding": "CARRY_FORWARD_REQUIRED_FAIL_CLOSED"
-  },
-  "semantic_interpreter_adapter": {
-    "status": "FINAL_CANDIDATE_CI_PENDING",
-    "runtime_wired": false,
-    "real_provider_calls": false,
-    "focused_local_tests": "23/23_PASS",
-    "strict_typecheck": "PASS"
+  "implementation_gates": {
+    "foundation_contracts": {"status":"FOUNDATION_CONTRACTS_PASS","head":"31d91df9c1b211263245e43860077ca8f36d7aa3","ci":34754506869},
+    "deterministic_reducer": {"status":"DETERMINISTIC_REDUCER_PASS","head":"5860202068eb89cce8f7b0e37d5e5dbc4225e987","ci":34755757781},
+    "deterministic_planner": {"status":"DETERMINISTIC_PLANNER_IMPLEMENTATION_PASS","head":"a8c91bd67fbcb1125a8f9f5daa4c97e6c6ce5102","ci":34762367166},
+    "semantic_interpreter_adapter": {"status":"SEMANTIC_INTERPRETER_ADAPTER_PASS","head":"6ecb687f1912003c86f772420759e6d25bce720f","ci":34762941975,"runtime_wired":false,"real_provider_calls":false}
   },
   "constraints": {
     "production": false,
@@ -56,8 +29,8 @@
     "second_vertical": false
   },
   "event": {
-    "id": "ACP-3.0.8.4-INTERPRETER-FINAL-CANDIDATE",
-    "type": "INTERPRETER_FINAL_CANDIDATE",
-    "seq": 30
+    "id": "ACP-3.0.8.5-ORCHESTRATION-INTEGRATION-START",
+    "type": "SUBSTAGE_START",
+    "seq": 31
   }
 }

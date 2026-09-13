@@ -1,44 +1,38 @@
 # ACP-3.0.8.4 — Semantic Interpreter Adapter Evidence
 
-Status: `FINAL CANDIDATE / EXACT-HEAD CI PENDING`
+Status: `SEMANTIC_INTERPRETER_ADAPTER_PASS`
 
-## Prerequisite
+## Exact gate
 
-`ACP-3.0.8.3 DETERMINISTIC_PLANNER_IMPLEMENTATION_PASS`
-- exact head `a8c91bd67fbcb1125a8f9f5daa4c97e6c6ce5102`
-- core-ci #646 / `34762367166` PASS
+- exact head: `6ecb687f1912003c86f772420759e6d25bce720f`
+- core-ci: #647 / `34762941975`
+- typecheck/tests: PASS
+- staging E2E runner syntax: PASS
+- Cloudflare Worker config: PASS
 
-## Candidate scope
+## Implemented boundary
 
-Implemented without runtime wiring:
-- semantic-only `InterpreterInput` and `InterpreterOutput` contracts;
-- minimal TaskState projection that exposes semantic summaries but not operational room IDs, booking IDs, fingerprints, approval or execution authority;
-- explicit `set | clear`, with omission meaning noChange;
-- RoomReference and BookingReference remain semantic references only;
-- requested goal remains separate from current `operationIntent`;
-- abort-current-operation remains distinct from cancellation of an existing booking;
-- read/retry/show-options/interaction directives are bounded and semantic;
-- temporal normalization provenance must exactly match trusted server temporal context and the semantic date changes it claims to explain;
-- strict validator rejects unknown fields, malformed references, invalid dates, operational authority fields, empty task outputs and outputs outside the supplied domain semantic contract;
-- structured output schema contains semantic vocabulary only;
-- `StructuredSemanticInterpreterAdapter` reuses the existing `ModelProvider` boundary with a compact semantic-only prompt;
-- `ValidatedSemanticInterpreter` fails closed on invalid output or provider failure and performs no fallback NLU or automatic provider retry.
+- semantic-only InterpreterInput/Output;
+- minimal TaskState projection with no operational room/booking IDs;
+- explicit `set | clear`, omission = noChange;
+- semantic RoomReference / BookingReference only;
+- goal and operationIntent separated;
+- abort-current-operation distinct from cancel-booking;
+- bounded read/retry/show-options/interaction directives;
+- trusted temporal provenance bound to server-supplied temporal context and matching date patches;
+- strict validator rejects unknown/operational fields, invalid references/dates, empty task output and semantic values outside the supplied domain contract;
+- semantic-only structured output schema;
+- existing ModelProvider reused through a narrow adapter;
+- invalid output/provider failure fail closed with no fallback NLU or automatic retry.
 
-## Adversarial findings closed before push
+## Verification
 
-1. Empty `{taskSemanticChanges:{}}` / `{directives:{}}` originally counted as a task signal. Closed: empty semantic containers are rejected.
-2. Base provider schema is intentionally broad enough for Hotel v1, but tenant/domain contract may be narrower. Closed: runtime validation enforces the supplied `DomainSemanticContract` for goals, operation intents and read requests.
-3. Temporal provenance cannot forge timezone/locale/trustedNow/policy or describe dates different from the semantic patch.
-4. Provider input is bounded to 4,000 user-message characters and invalid input is rejected before provider invocation.
+Pre-push isolated TypeScript: PASS.
+Focused fake-provider and contract tests: `23/23 PASS`.
+Exact repository CI: PASS.
 
-## Focused pre-push verification
+No real provider inference, runtime routing replacement, deployment, HMS mutation or approval consumption occurred.
 
-Strict isolated TypeScript compile: PASS.
+## Carry-forward
 
-Focused tests: `23/23 PASS`, covering semantic patches, authority-field rejection, semantic references, goal vs commit, abort vs cancel, compositional read+intent, social/help isolation, temporal provenance, date validation, context minimization, schema authority boundaries, domain narrowing, provider failure and no-retry behavior.
-
-All provider behavior tests use fakes. No real provider inference occurred.
-
-## Gate
-
-`SEMANTIC_INTERPRETER_ADAPTER_PASS` requires exact-head repository CI and final contradiction review. Runtime orchestration remains blocked until ACP-3.0.8.5.
+3.0.8.5 must convert validated semantic output into revision-guarded TaskEvent + ephemeral PlanningTrigger deterministically, then reduce and plan offline before any production/runtime cutover.
