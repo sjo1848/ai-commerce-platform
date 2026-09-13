@@ -25,7 +25,7 @@ export type ReductionResult = {
   materialChange: boolean;
   replayed: boolean;
   invalidations: readonly ReductionInvalidation[];
-  rejectionReason?: "TASK_SCOPE_MISMATCH" | "STALE_DEPENDENCY" | "INVALID_GROUNDING";
+  rejectionReason?: "TASK_SCOPE_MISMATCH" | "STATE_REVISION_CONFLICT" | "TASK_NOT_ACTIVE" | "STALE_DEPENDENCY" | "INVALID_GROUNDING";
 };
 
 function sameValue(left: unknown, right: unknown): boolean {
@@ -216,6 +216,28 @@ export function reduceTaskState(state: Readonly<TaskStateV1>, event: TaskEvent):
     };
   }
 
+  if ("expectedStateRevision" in event && event.expectedStateRevision !== state.stateRevision) {
+    return {
+      nextState: structuredClone(state),
+      accepted: false,
+      materialChange: false,
+      replayed: false,
+      invalidations: [],
+      rejectionReason: "STATE_REVISION_CONFLICT",
+    };
+  }
+
+  if (state.lifecycle !== "active") {
+    return {
+      nextState: structuredClone(state),
+      accepted: false,
+      materialChange: false,
+      replayed: false,
+      invalidations: [],
+      rejectionReason: "TASK_NOT_ACTIVE",
+    };
+  }
+
   const next = structuredClone(state) as TaskStateV1;
   const invalidations: ReductionInvalidation[] = [];
   let materialChange = false;
@@ -241,6 +263,7 @@ export function reduceTaskState(state: Readonly<TaskStateV1>, event: TaskEvent):
         querySnapshot: structuredClone(event.inputSnapshot),
         rooms: [],
       };
+      invalidateDependencies(next, new Set<TaskDependencyKey>(["availability"]), invalidations);
     }
   } else if (event.kind === "availability_observed") {
     if (!matchingPending(next, event.invocationId, event.dependencyFingerprint)) {
@@ -320,6 +343,18 @@ export function reduceTaskState(state: Readonly<TaskStateV1>, event: TaskEvent):
   } else if (event.kind === "lifecycle_changed") {
     materialChange = next.lifecycle !== event.lifecycle;
     next.lifecycle = event.lifecycle;
+    if (event.lifecycle !== "active") {
+      if (next.pendingToolInvocation?.status === "pending") {
+        next.pendingToolInvocation = { ...next.pendingToolInvocation, status: "superseded" };
+        pushInvalidation(invalidations, "pending_tool_invocation");
+        materialChange = true;
+      }
+      if (next.preparedOperation && next.preparedOperation.status !== "invalidated") {
+        next.preparedOperation = { ...next.preparedOperation, status: "invalidated" };
+        pushInvalidation(invalidations, "prepared_operation");
+        materialChange = true;
+      }
+    }
   }
 
   addRecentEventId(next, event.eventId);

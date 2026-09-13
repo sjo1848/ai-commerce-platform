@@ -5,8 +5,8 @@
   "active_task": "ACP-3.0.8-IMPLEMENTATION-FOUNDATION",
   "last_completed_task": "ACP-3.0.8.1-FOUNDATION-CONTRACTS",
   "last_completed_head": "31d91df9c1b211263245e43860077ca8f36d7aa3",
-  "current_substage": "ACP-3.0.8.2_DETERMINISTIC_REDUCER",
-  "next_action": "VALIDATE_DETERMINISTIC_REDUCER_ON_EXACT_BRANCH_HEAD",
+  "current_substage": "ACP-3.0.8.2_DETERMINISTIC_REDUCER_REVIEW_01_AMENDED_CI_PENDING",
+  "next_action": "RUN_EXACT_HEAD_REPOSITORY_CI_FOR_REDUCER_REVIEW_01_AMENDMENTS",
   "stop_reason": null,
   "baseline": {
     "source_pr": 63,
@@ -32,21 +32,26 @@
     "exact_head": "31d91df9c1b211263245e43860077ca8f36d7aa3",
     "core_ci_run": 34754506869,
     "repository_typecheck_and_tests": "PASS",
-    "staging_e2_syntax": "PASS",
-    "wrangler_config_validation": "PASS",
-    "runtime_wired": false,
-    "new_parallel_store": false,
-    "legacy_operational_truth_promoted_without_dependency_receipts": false,
     "evidence": ".orchestration/evidence/ACP-3.0.8.1-FOUNDATION-CONTRACTS.md"
   },
   "deterministic_reducer": {
-    "status": "ACTIVE_CANDIDATE",
-    "local_isolated_tests": "7/7_PASS",
-    "repository_ci": null,
+    "status": "REVIEW_01_AMENDED_CI_PENDING",
+    "initial_candidate_head": "d9466599dbaa6af75f986f2faf6d743562ad2627",
+    "initial_core_ci_run": 34754777914,
+    "initial_core_ci": "PASS_NOT_GATE_CLOSURE",
+    "review_findings": [
+      "USER_SERVER_OPTIMISTIC_REVISION_GUARD",
+      "TERMINAL_TASK_FAIL_CLOSED",
+      "AVAILABILITY_REFRESH_CAUSAL_INVALIDATION"
+    ],
+    "local_isolated_reducer_tests": "11/11_PASS",
+    "local_isolated_projection_tests": "4/4_PASS",
+    "repository_ci_after_amendments": null,
     "language_parsing": false,
     "tool_selection": false,
     "policy_decision": false,
-    "side_effect_execution": false
+    "side_effect_execution": false,
+    "evidence": ".orchestration/evidence/ACP-3.0.8.2-DETERMINISTIC-REDUCER.md"
   },
   "constraints": {
     "production": false,
@@ -60,8 +65,8 @@
     "approval_consumption_authorized_for_current_substage": false
   },
   "event": {
-    "id": "ACP-3.0.8.1-PASS-3.0.8.2-ACTIVE",
-    "type": "SUBSTAGE_TRANSITION",
-    "seq": 24
+    "id": "ACP-3.0.8.2-REVIEW-01-AMENDED",
+    "type": "REDUCER_REVIEW_AMENDMENT",
+    "seq": 25
   }
 }

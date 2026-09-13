@@ -13,13 +13,17 @@ export type TaskEventBase = {
   sessionId: string;
 };
 
-export type UserSemanticEvent = TaskEventBase & {
+export type RevisionGuardedTaskEventBase = TaskEventBase & {
+  expectedStateRevision: number;
+};
+
+export type UserSemanticEvent = RevisionGuardedTaskEventBase & {
   kind: "user_semantic";
   sourceRevision: number;
   patch: UserSemanticStatePatch;
 };
 
-export type ToolInvocationStartedEvent = TaskEventBase & {
+export type ToolInvocationStartedEvent = RevisionGuardedTaskEventBase & {
   kind: "tool_invocation_started";
   invocationId: string;
   capabilityId: string;
@@ -44,7 +48,7 @@ export type AvailabilityFailedEvent = TaskEventBase & {
   dependencyFingerprint: DependencyFingerprint;
 };
 
-export type SelectionGroundedEvent = TaskEventBase & {
+export type SelectionGroundedEvent = RevisionGuardedTaskEventBase & {
   kind: "selection_grounded";
   roomIds: readonly string[];
   basedOnAvailabilityRevision: number;
@@ -52,12 +56,12 @@ export type SelectionGroundedEvent = TaskEventBase & {
   dependencyKeys: readonly TaskDependencyKey[];
 };
 
-export type OperationPreparedEvent = TaskEventBase & {
+export type OperationPreparedEvent = RevisionGuardedTaskEventBase & {
   kind: "operation_prepared";
   operation: PreparedOperation;
 };
 
-export type LifecycleChangedEvent = TaskEventBase & {
+export type LifecycleChangedEvent = RevisionGuardedTaskEventBase & {
   kind: "lifecycle_changed";
   lifecycle: TaskLifecycle;
 };
