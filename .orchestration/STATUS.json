@@ -3,10 +3,10 @@
   "runtime_status": "IN_PROGRESS",
   "resume_authorized": true,
   "active_task": "ACP-3.0.8-IMPLEMENTATION-FOUNDATION",
-  "last_completed_task": "ACP-3.0.8.5-ORCHESTRATION-BOUNDARY",
-  "last_completed_head": "1694b0df4aacb1771a9143a73fcba92704a4bd50",
-  "current_substage": "ACP-3.0.8.5_CORE_POLICY_PROPOSAL_ADMISSION_AND_PRECONDITION_REVALIDATION",
-  "next_action": "IMPLEMENT_OFFLINE_CALL_TOOL_ADMISSION_WITH_EXACT_PRECONDITION_REVALIDATION",
+  "last_completed_task": "ACP-3.0.8.5-ORCHESTRATION-INTEGRATION",
+  "last_completed_head": "b6020d62b36481ae4efaa7f0db313997c6e31a0d",
+  "current_substage": "ACP-3.0.8.6_OBSERVATION_MAPPER_RESPONSE_BOUNDARY",
+  "next_action": "IMPLEMENT_OFFLINE_OBSERVATION_MAPPER_RESPONSE_BOUNDARY",
   "stop_reason": null,
   "baseline": {
     "source_pr": 63,
@@ -19,7 +19,8 @@
     "deterministic_reducer": {"status":"DETERMINISTIC_REDUCER_PASS","head":"5860202068eb89cce8f7b0e37d5e5dbc4225e987","ci":34755757781},
     "deterministic_planner": {"status":"DETERMINISTIC_PLANNER_IMPLEMENTATION_PASS","head":"a8c91bd67fbcb1125a8f9f5daa4c97e6c6ce5102","ci":34762367166},
     "semantic_interpreter_adapter": {"status":"SEMANTIC_INTERPRETER_ADAPTER_PASS","head":"6ecb687f1912003c86f772420759e6d25bce720f","ci":34762941975,"runtime_wired":false,"real_provider_calls":false},
-    "orchestration_boundary": {"status":"ORCHESTRATION_BOUNDARY_PASS","head":"1694b0df4aacb1771a9143a73fcba92704a4bd50","ci":34764771302,"runtime_cutover":false,"max_internal_steps":3,"intermediate_non_gate_head":"9e988094c107e593188067fed5790a2b6a85fb51"}
+    "orchestration_boundary": {"status":"ORCHESTRATION_BOUNDARY_PASS","head":"1694b0df4aacb1771a9143a73fcba92704a4bd50","ci":34764771302,"runtime_cutover":false,"max_internal_steps":3,"intermediate_non_gate_head":"9e988094c107e593188067fed5790a2b6a85fb51"},
+    "orchestration_integration": {"status":"ORCHESTRATION_INTEGRATION_PASS","head":"b6020d62b36481ae4efaa7f0db313997c6e31a0d","ci":34769395411,"tests":475,"runtime_cutover":false,"tool_execution":false,"failed_candidate":{"head":"9c1b4a817a173b692e39d5c3493afcdcc8281ff3","ci":34769238836,"reason":"TYPE_NARROWING_ONLY"},"corrected_admission_head":"7276fe562543f402afbd8eb502390c1816c786e1","corrected_admission_ci":34769314148}
   },
   "constraints": {
     "production": false,
@@ -30,8 +31,8 @@
     "second_vertical": false
   },
   "event": {
-    "id": "ACP-3.0.8.5-CORE-POLICY-ADMISSION-START",
+    "id": "ACP-3.0.8.6-OBSERVATION-MAPPER-RESPONSE-BOUNDARY-START",
     "type": "SUBSTAGE_START",
-    "seq": 33
+    "seq": 34
   }
 }

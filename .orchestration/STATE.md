@@ -3,8 +3,8 @@
 Phase: `ACP-3.0 — COGNITIVE ARCHITECTURE REDESIGN / IMPLEMENTATION`
 Task: `ACP-3.0.8 — IMPLEMENTATION FOUNDATION`
 Status: `ACTIVE / IMPLEMENTATION`
-Current sub-stage: `ACP-3.0.8.5 — CORE/POLICY PROPOSAL ADMISSION + PRECONDITION REVALIDATION`
-Last closed sub-gate: `ACP-3.0.8.5 — ORCHESTRATION_BOUNDARY_PASS`
+Current sub-stage: `ACP-3.0.8.6 — OBSERVATION MAPPER + RESPONSE BOUNDARY`
+Last closed sub-stage: `ACP-3.0.8.5 — ORCHESTRATION_INTEGRATION_PASS`
 
 Baseline: PR #63 exact head `10c649507b524c44fc4ed4fd1d0dd1e63cd13185`.
 Active branch: `feature/acp-3.0.8-implementation-foundation`.
@@ -16,27 +16,32 @@ Active branch: `feature/acp-3.0.8-implementation-foundation`.
 - 3.0.8.3 `DETERMINISTIC_PLANNER_IMPLEMENTATION_PASS`: `a8c91bd67fbcb1125a8f9f5daa4c97e6c6ce5102`, core-ci #646 / `34762367166` PASS.
 - 3.0.8.4 `SEMANTIC_INTERPRETER_ADAPTER_PASS`: `6ecb687f1912003c86f772420759e6d25bce720f`, core-ci #647 / `34762941975` PASS.
 - 3.0.8.5 sub-gate `ORCHESTRATION_BOUNDARY_PASS`: `1694b0df4aacb1771a9143a73fcba92704a4bd50`, core-ci #649 / `34764771302` PASS.
+- 3.0.8.5 `ORCHESTRATION_INTEGRATION_PASS`: `b6020d62b36481ae4efaa7f0db313997c6e31a0d`, core-ci #652 / `34769395411` PASS.
 
-## Orchestration boundary closure
+## 3.0.8.5 closure
 
-The offline user-turn path now enforces:
-`validated InterpreterOutput -> UserSemanticEvent -> Reducer -> optional server-owned selection grounding -> normalized PlanningTrigger -> deterministic Planner`.
+The offline cognitive path is now proven through Core/Policy admission:
+`validated InterpreterOutput -> UserSemanticEvent -> Reducer -> optional server-owned selection grounding -> PlanningTrigger -> deterministic Planner -> CALL_TOOL admission -> Policy -> reducer control event`.
 
-It preserves ephemeral ambiguity/read/retry/social signals outside durable state, blocks unknown turns from advancing existing mutations, keeps abort distinct from booking cancellation, grounds room references against authoritative availability/DialogueAnchor, rejects contradictory selection/operation-target semantics, and bounds internal work with `maxInternalSteps=3`.
+The Planner proposal is revalidated against current TaskState before admission. Grounded input tampering and stale preconditions fail closed. Real tool validators canonicalize trusted server-owned input before operation fingerprinting. Prepared writes persist the exact `capabilityId` and `toolId`, so approval resume never re-infers a tool from generic operation type. Execution admission revalidates capability binding, dependency fingerprint, canonical input, operation fingerprint and current Policy before emitting `ExecutionStartedEvent` and an exact executor request.
 
-The intermediate head `9e988094c107e593188067fed5790a2b6a85fb51` is explicitly non-gate even though its CI passed; only `1694b0df4aacb1771a9143a73fcba92704a4bd50` closes this sub-gate.
+No tool execution occurs inside the new admission boundary. The final cross-boundary proof covers both availability-read admission and approval-bound reservation preparation with zero HMS executions.
 
-## Current objective inside 3.0.8.5
+Candidate history is retained in evidence: core-ci #650 failed on two TypeScript narrowing errors only; the corrected #651 passed 473/473 tests, and final integration #652 passed 475/475 tests plus staging runner syntax and Wrangler dry-run.
 
-Continue offline integration from Planner `CALL_TOOL` into the existing Core/Policy/Executor contracts without executing real tools:
-- admit a Planner proposal only if its capability binding and grounded input remain valid;
-- revalidate `preconditionFingerprint` immediately before prepare/execute admission;
-- preserve exact PreparedOperation / approval / operation fingerprint binding;
-- map read/write control outcomes back to TaskEvent/Reducer instead of bypassing state;
-- keep write retry control-plane owned;
-- maintain a finite internal loop.
+## 3.0.8.6 objective
 
-Runtime cutover remains blocked until this path is independently gated.
+Implement the next offline boundary:
+`raw/typed tool result -> Observation Mapper -> TaskEvent -> Reducer -> TaskState -> Planner -> response boundary`.
+
+Requirements:
+- raw HMS/tool payload must never reach the Planner;
+- Observation Mapper validates and normalizes only supported result shapes;
+- malformed or mismatched results fail closed as structured failure/degradation;
+- availability/quote/business-write observations bind to the exact invocation/operation fingerprints already in state;
+- late/stale observations cannot become current operational truth;
+- response construction consumes grounded TaskState/NextStep context, not raw provider/tool prose;
+- no runtime cutover yet.
 
 ## Boundaries
 
