@@ -48,3 +48,9 @@ If GREEN, perform an independent contradiction review and close full `ACP-3.0.8.
 ## Boundaries
 
 No production cutover, real provider inference, Worker deployment, HMS mutation, approval consumption, payment action or second vertical is authorized.
+
+## 3.0.8.7 J01 provider-backed preflight — REWORK
+
+The single authorized authenticated request was executed in GitHub Actions run `34788877608` against exact candidate `038106db1f5e3dce140a35e05578f9a4151cb2e0`. The candidate version was `43da7cc6-4bd4-4e2d-b8ef-a84abb1fe608`; prior version `93516779-815d-4995-a672-2321089610e0` remained at `100%` while the candidate was at `0%`. The credential-free exact-override proof returned `403` from the candidate. The one authenticated preflight returned HTTP `422`, so the semantic gate is `RED / REWORK`; no retry is authorized. The failing internal `failureCode`, token counts and provider-neuron receipt were not captured by the workflow after the RED response and remain unknown.
+
+The `if: always()` restore passed through Cloudflare API verification: exactly one active version, the prior at `100%`. HMS mutations, tool admission, `PreparedOperation` creation and approval consumption were all `0`. Evidence: `.orchestration/evidence/ACP-3.0.8.7-J01-PROVIDER-PREFLIGHT-RED-34788877608.md`.

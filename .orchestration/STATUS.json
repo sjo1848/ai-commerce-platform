@@ -6,8 +6,8 @@
   "last_completed_task": "ACP-3.0.8.7B-J01-PROVIDER-PREFLIGHT-READY",
   "last_completed_head": "6df40c6f850cd5ebcb3c70c5e4c71b3754d4ea27",
   "current_substage": "ACP-3.0.8.7C_PROVIDER_BACKED_J01_EXECUTION_GATE",
-  "next_action": "AWAIT_PROVIDER_CALL_AUTHORIZATION_FOR_ONE_BUDGETED_SEMANTIC_PREFLIGHT",
-  "stop_reason": "PROVIDER_CALLS_NOT_AUTHORIZED",
+  "next_action": "STOP_AFTER_SINGLE_J01_PROVIDER_PREFLIGHT_RED_AND_REWORK",
+  "stop_reason": "J01_PROVIDER_PREFLIGHT_RED_REWORK_NO_RETRY",
   "baseline": {
     "source_pr": 63,
     "source_head": "10c649507b524c44fc4ed4fd1d0dd1e63cd13185"
@@ -25,7 +25,8 @@
     "response_boundary": {"status":"RESPONSE_BOUNDARY_PASS","head":"373bc9c99a5aa74ffff1cfc299c4921b46475a26","ci":34771062223,"tests":501,"runtime_cutover":false,"raw_tool_payload_to_renderer":false,"opaque_response_fingerprint":true,"publication_requires_channel_acceptance":true,"dialogue_anchor_activation":"POST_PUBLICATION_REDUCER_EVENT"},
     "full_offline_observation_publication": {"status":"FULL_OFFLINE_OBSERVATION_TO_PUBLICATION_PASS","head":"50987d0cea718114590317c8263574606591ad9d","ci":34771449532,"runtime_cutover":false,"provider_calls":false,"hms_mutations":false},
     "j01_offline_implementation": {"status":"J01_OFFLINE_IMPLEMENTATION_PASS","head":"6623ff2599c3eb613217f7b0f3567e10c2b5ab63","ci":34776183968,"tests":504,"real_provider_calls":false,"real_hms_calls":false,"real_approval_consumption":false,"failed_candidate":{"head":"2c6a3dee7913052f2a92e334bd4d62f6da9d15eb","ci":34776089467,"reason":"TEST_EXPECTATION_MISMATCH_APPROVAL_WORDING_ONLY"}},
-    "j01_provider_preflight": {"status":"J01_PROVIDER_PREFLIGHT_READY","head":"6df40c6f850cd5ebcb3c70c5e4c71b3754d4ea27","ci":34776673474,"provider_calls_executed":false,"requires_durable_experiment_budget":true,"tool_admission":false,"hms_calls":false,"approval_consumption":false,"failed_candidates":[{"head":"0677220d7709a0dc6f441790e0329a01da695ba8","ci":34776420997,"reason":"EXACT_OPTIONAL_PROPERTY_TYPE_ONLY"},{"head":"a96e127954d772d159ccdd0648e09eb68059b542","ci":34776469990,"reason":"TEST_IMPORT_PATH_ONLY"}]}
+    "j01_provider_preflight": {"status":"J01_PROVIDER_PREFLIGHT_READY","head":"6df40c6f850cd5ebcb3c70c5e4c71b3754d4ea27","ci":34776673474,"provider_calls_executed":false,"requires_durable_experiment_budget":true,"tool_admission":false,"hms_calls":false,"approval_consumption":false,"failed_candidates":[{"head":"0677220d7709a0dc6f441790e0329a01da695ba8","ci":34776420997,"reason":"EXACT_OPTIONAL_PROPERTY_TYPE_ONLY"},{"head":"a96e127954d772d159ccdd0648e09eb68059b542","ci":34776469990,"reason":"TEST_IMPORT_PATH_ONLY"}]},
+    "j01_provider_preflight_execution": {"status":"J01_PROVIDER_PREFLIGHT_RED_REWORK","candidate_sha":"038106db1f5e3dce140a35e05578f9a4151cb2e0","run_id":34788877608,"diagnostic_run_id":34788784371,"provider_calls_executed":1,"authenticated_requests":1,"http_status":422,"prior_version":"93516779-815d-4995-a672-2321089610e0","candidate_version":"43da7cc6-4bd4-4e2d-b8ef-a84abb1fe608","temporary_split":"100/0","restore":"PASS_EXACT_SINGLE_VERSION_100","hms_mutations":0,"approval_consumption":0,"evidence":".orchestration/evidence/ACP-3.0.8.7-J01-PROVIDER-PREFLIGHT-RED-34788877608.md"}
   },
   "constraints": {
     "production": false,
@@ -36,8 +37,8 @@
     "second_vertical": false
   },
   "event": {
-    "id": "ACP-3.0.8.7B-J01-PROVIDER-PREFLIGHT-READY",
-    "type": "SUBGATE_PASS",
-    "seq": 39
+    "id": "ACP-3.0.8.7C-J01-PROVIDER-PREFLIGHT-REWORK",
+    "type": "SUBGATE_REWORK",
+    "seq": 40
   }
 }
