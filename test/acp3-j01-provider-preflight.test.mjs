@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import {
   HotelTaskPlanner,
   HOTEL_TASK_DEFINITION_V1,
-  ModelProviderError,
   buildHotelDomainCapabilities,
   runJ01ProviderSemanticPreflight,
 } from "../dist/index.js";
+import { ModelProviderError } from "../dist/core/model-provider.js";
 
 function emptyState() {
   return {
