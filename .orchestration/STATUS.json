@@ -3,8 +3,10 @@
   "runtime_status": "IN_PROGRESS",
   "resume_authorized": true,
   "active_task": "ACP-3.0.8-IMPLEMENTATION-FOUNDATION",
-  "current_substage": "ACP-3.0.8.1_TASKSTATE_CONTRACTS_AND_COMPATIBILITY_PROJECTION",
-  "next_action": "RUN_EXACT_HEAD_REPOSITORY_QA_THEN_ADVANCE_TO_DETERMINISTIC_REDUCER",
+  "last_completed_task": "ACP-3.0.8.1-FOUNDATION-CONTRACTS",
+  "last_completed_head": "31d91df9c1b211263245e43860077ca8f36d7aa3",
+  "current_substage": "ACP-3.0.8.2_DETERMINISTIC_REDUCER",
+  "next_action": "VALIDATE_DETERMINISTIC_REDUCER_ON_EXACT_BRANCH_HEAD",
   "stop_reason": null,
   "baseline": {
     "source_pr": 63,
@@ -25,26 +27,26 @@
     "architecture_integration_review": "PASS",
     "ready_for_implementation": "PASS"
   },
-  "implementation_foundation": {
-    "status": "ACTIVE",
+  "foundation_contracts": {
+    "status": "FOUNDATION_CONTRACTS_PASS",
+    "exact_head": "31d91df9c1b211263245e43860077ca8f36d7aa3",
+    "core_ci_run": 34754506869,
+    "repository_typecheck_and_tests": "PASS",
+    "staging_e2_syntax": "PASS",
+    "wrangler_config_validation": "PASS",
     "runtime_wired": false,
     "new_parallel_store": false,
-    "task_state_types": true,
-    "conversation_state_read_only_projection": true,
     "legacy_operational_truth_promoted_without_dependency_receipts": false,
-    "local_isolated_strict_typescript_check": "PASS",
-    "local_isolated_adapter_tests": "3/3_PASS",
-    "repository_typecheck": null,
-    "repository_qa": null,
-    "gate": "FOUNDATION_CONTRACTS_PASS_PENDING_REPOSITORY_QA"
+    "evidence": ".orchestration/evidence/ACP-3.0.8.1-FOUNDATION-CONTRACTS.md"
   },
-  "preserved_authority": {
-    "policy_engine": true,
-    "agent_core_executor": true,
-    "hitl_exact_binding": true,
-    "side_effect_idempotency": true,
-    "tenant_actor_session_scope": true,
-    "hms_transactional_truth": true
+  "deterministic_reducer": {
+    "status": "ACTIVE_CANDIDATE",
+    "local_isolated_tests": "7/7_PASS",
+    "repository_ci": null,
+    "language_parsing": false,
+    "tool_selection": false,
+    "policy_decision": false,
+    "side_effect_execution": false
   },
   "constraints": {
     "production": false,
@@ -58,8 +60,8 @@
     "approval_consumption_authorized_for_current_substage": false
   },
   "event": {
-    "id": "ACP-3.0-READY-FOR-IMPLEMENTATION-TO-3.0.8.1-ACTIVE",
-    "type": "ARCHITECTURAL_REWORK_TO_IMPLEMENTATION_TRANSITION",
-    "seq": 23
+    "id": "ACP-3.0.8.1-PASS-3.0.8.2-ACTIVE",
+    "type": "SUBSTAGE_TRANSITION",
+    "seq": 24
   }
 }

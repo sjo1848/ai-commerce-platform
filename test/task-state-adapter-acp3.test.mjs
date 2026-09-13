@@ -50,13 +50,14 @@ test("projects only durable user-owned semantics into ACP-3.0 TaskState", () => 
   assert.equal(result.taskState.requestedStay.checkOut?.value, "2027-01-17");
   assert.equal(result.taskState.requestedStay.guests?.value, 2);
   assert.equal(result.taskState.preferences[0]?.value, "cama doble");
+  assert.deepEqual(result.taskState.recentEventIds, []);
 });
 
 test("does not silently promote legacy operational state without dependency receipts", () => {
   const result = projectConversationStateToTaskStateV1(state(), identity);
 
-  assert.deepEqual(result.taskState.availability, { status: "not_queried", rooms: [] });
-  assert.deepEqual(result.taskState.groundedSelection, { status: "none", roomIds: [] });
+  assert.deepEqual(result.taskState.availability, { status: "not_queried", rooms: [], dependencyKeys: [] });
+  assert.deepEqual(result.taskState.groundedSelection, { status: "none", roomIds: [], dependencyKeys: [] });
   assert.deepEqual(result.taskState.bookings, []);
   assert.equal(result.taskState.requestedRoomCount, undefined);
 

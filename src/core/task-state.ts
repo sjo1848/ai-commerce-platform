@@ -4,6 +4,18 @@ export type OperationKind = "reserve" | "cancel" | "modify";
 export type AuthoritySource = "user" | "tool" | "server" | "legacy";
 export type DependencyFingerprint = string;
 export type OperationFingerprint = string;
+export type TaskDependencyKey =
+  | "requestedGoal"
+  | "requestedStay.checkIn"
+  | "requestedStay.checkOut"
+  | "requestedStay.guests"
+  | "preferences"
+  | "requestedRoomCount"
+  | "requestedSelectionReference"
+  | "bookingReference"
+  | "operationIntent"
+  | "availability"
+  | "groundedSelection";
 
 export type FactProvenance = {
   source: AuthoritySource;
@@ -47,6 +59,8 @@ export type OperationIntent = {
   provenance: FactProvenance;
 };
 
+export type OperationIntentPatchValue = Omit<OperationIntent, "provenance">;
+
 export type UserSemanticStatePatch = {
   requestedGoal?: FieldPatch<TaskGoal>;
   checkIn?: FieldPatch<string>;
@@ -55,7 +69,7 @@ export type UserSemanticStatePatch = {
   requestedRoomCount?: FieldPatch<number>;
   requestedSelectionReference?: FieldPatch<RoomReference>;
   bookingReference?: FieldPatch<BookingReference>;
-  operationIntent?: FieldPatch<OperationIntent>;
+  operationIntent?: FieldPatch<OperationIntentPatchValue>;
   preferences?: FieldPatch<readonly string[]>;
 };
 
@@ -70,6 +84,7 @@ export type AvailabilityObservation = {
   status: "not_queried" | "pending" | "observed" | "failed";
   observationRevision?: number;
   dependencyFingerprint?: DependencyFingerprint;
+  dependencyKeys: readonly TaskDependencyKey[];
   querySnapshot?: Readonly<Record<string, unknown>>;
   rooms: readonly AvailabilityCandidate[];
   observedAt?: string;
@@ -80,6 +95,7 @@ export type GroundedSelection = {
   roomIds: readonly string[];
   basedOnAvailabilityRevision?: number;
   dependencyFingerprint?: DependencyFingerprint;
+  dependencyKeys: readonly TaskDependencyKey[];
 };
 
 export type BookingObservation = {
@@ -94,6 +110,7 @@ export type PendingToolInvocation = {
   capabilityId: string;
   status: "pending" | "succeeded" | "failed" | "superseded";
   dependencyFingerprint: DependencyFingerprint;
+  dependencyKeys: readonly TaskDependencyKey[];
   inputSnapshot: Readonly<Record<string, unknown>>;
   startedAt: string;
 };
@@ -103,6 +120,7 @@ export type PreparedOperation = {
   operationType: OperationKind;
   operationFingerprint: OperationFingerprint;
   dependencyFingerprint: DependencyFingerprint;
+  dependencyKeys: readonly TaskDependencyKey[];
   canonicalInputSnapshot: Readonly<Record<string, unknown>>;
   status: "prepared" | "approval_required" | "approved" | "invalidated";
 };
@@ -113,6 +131,7 @@ export type TaskStateV1 = {
   taskType: "hotel_reservation_domain";
   lifecycle: TaskLifecycle;
   stateRevision: number;
+  recentEventIds: readonly string[];
   requestedGoal?: TaskFact<TaskGoal>;
   requestedStay: RequestedStay;
   preferences: readonly TaskFact<string>[];

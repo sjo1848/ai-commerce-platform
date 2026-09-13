@@ -83,6 +83,7 @@ export function projectConversationStateToTaskStateV1(
     taskType: "hotel_reservation_domain",
     lifecycle: "active",
     stateRevision: 0,
+    recentEventIds: [],
     requestedStay: {
       ...(checkIn ? { checkIn } : {}),
       ...(checkOut ? { checkOut } : {}),
@@ -94,8 +95,8 @@ export function projectConversationStateToTaskStateV1(
         value: item.value,
         provenance: { source: item.source, revision: item.revision },
       })),
-    availability: { status: "not_queried", rooms: [] },
-    groundedSelection: { status: "none", roomIds: [] },
+    availability: { status: "not_queried", rooms: [], dependencyKeys: [] },
+    groundedSelection: { status: "none", roomIds: [], dependencyKeys: [] },
     bookings: [],
     ...(requestedGoal ? { requestedGoal } : {}),
   };

@@ -3,81 +3,74 @@
 Phase: `ACP-3.0 — COGNITIVE ARCHITECTURE REDESIGN / IMPLEMENTATION`
 Task: `ACP-3.0.8 — IMPLEMENTATION FOUNDATION`
 Status: `ACTIVE / IMPLEMENTATION`
-Current sub-stage: `ACP-3.0.8.1 — TASKSTATE CONTRACTS + COMPATIBILITY PROJECTION`
-Implementation: `UNBLOCKED BY DESIGN / NOT YET RUNTIME-WIRED`
+Current sub-stage: `ACP-3.0.8.2 — DETERMINISTIC REDUCER`
+Last closed sub-stage: `ACP-3.0.8.1 — TASKSTATE CONTRACTS + COMPATIBILITY PROJECTION — FOUNDATION_CONTRACTS_PASS`
 
 ## Current source identity
 
 - Baseline: PR #63 `feature/r2.8.4-nlu-boundary-rework` exact head `10c649507b524c44fc4ed4fd1d0dd1e63cd13185`.
 - Active implementation branch: `feature/acp-3.0.8-implementation-foundation`.
 - Active contract: `.orchestration/contracts/ACP-3.0.8-IMPLEMENTATION-FOUNDATION.md`.
-- Do not hardcode the moving execution HEAD here; resolve it from the branch/PR at gate time.
+- Do not hardcode the moving execution HEAD here; resolve it at gate time.
 
-## Why the active path changed
+## ACP-3.0 design authority
 
-R2.8.4 exposed a structural problem rather than a fixture-sized defect: language interpretation, durable conversation state, workflow planning and response wording were too coupled. The project therefore completed an ACP-3.0 design rework before resuming implementation.
+Closed design gates:
+- Journey Specification — PASS
+- Cognitive Contracts — PASS / BASE
+- Task State Engine — DESIGN PASS
+- Deterministic Planner — DESIGN PASS
+- Semantic Interpreter — DESIGN PASS
+- Cognitive E2E Integration — DESIGN PASS
+- Response Composer — DESIGN PASS
+- Architecture Integration Review — PASS
+- READY_FOR_IMPLEMENTATION — PASS
 
-PR #63 remains the historical implementation baseline and evidence source. Its provider-backed R2.8.4 gate is not retroactively declared closed; it is superseded as the active critical path by ACP-3.0 implementation.
-
-## Closed ACP-3.0 design gates
-
-- `ACP-3.0.1 Journey Specification` — PASS
-- `ACP-3.0.2 Cognitive Contracts` — PASS / BASE
-- `ACP-3.0.3 Task State Engine` — DESIGN PASS
-- `ACP-3.0.4 Deterministic Planner` — DESIGN PASS
-- `ACP-3.0.5 Semantic Interpreter` — DESIGN PASS
-- `ACP-3.0.6 Cognitive E2E Integration` — DESIGN PASS
-- `ACP-3.0.7 Response Composer` — DESIGN PASS
-- `ARCHITECTURE_INTEGRATION_REVIEW` — PASS
-- `READY_FOR_IMPLEMENTATION` — PASS
-
-The detailed design artifacts and integration review are backed up in the project's Google Drive. The repository implementation contract is the current execution authority for ACP-3.0.8.
-
-## Governing architecture
+Governing pipeline:
 
 `User -> Interpreter -> validation -> Reducer -> TaskState -> PlanningTrigger -> deterministic Planner -> NextStep -> Core/Policy -> Tool -> Observation Mapper -> Reducer -> Planner -> ResponseContextBuilder -> Renderer -> publication -> DialogueAnchor`
 
-Critical rules:
-- LLM interprets user semantics; it never creates operational truth.
-- State remembers durable task facts; ephemeral directives do not bloat durable state.
-- Planner is deterministic and emits exactly one bounded NextStep.
-- Core/Policy/Executor retain approval, authorization, exact operation binding and side-effect idempotency authority.
-- Tool payloads are normalized by an Observation Mapper before entering TaskState.
-- Staleness is causal through dependency fingerprints, not any unrelated global revision change.
-- Approval resumes the exact PreparedOperation after revalidation; it does not ask Planner to infer the mutation again.
-- Operational responses are deterministic/bounded; response facts and workflow are not LLM-authored.
-- DialogueAnchor/PendingClarification activate only after the corresponding response is actually published.
+## 3.0.8.1 closure
 
-## ACP-3.0.8.1 current work
+`FOUNDATION_CONTRACTS_PASS` on exact head `31d91df9c1b211263245e43860077ca8f36d7aa3`.
 
-Implemented on the active branch:
-- `src/core/task-state.ts` — ACP-3.0 TaskState/authority foundation types;
-- `src/core/task-state-adapter.ts` — read-only compatibility projection from existing ConversationState;
-- `test/task-state-adapter-acp3.test.mjs` — migration/authority/scope tests;
-- root exports for the new foundation.
+Evidence:
+- `core-ci` run `34754506869` / #639 — PASS;
+- repository typecheck + tests — PASS;
+- staging E2E runner syntax — PASS;
+- Wrangler config validation — PASS;
+- `.orchestration/evidence/ACP-3.0.8.1-FOUNDATION-CONTRACTS.md`.
 
-Migration safety decision:
-- only user/legacy-owned requested semantics are promoted into the new requested namespace;
-- existing availability, selected rooms and booking fields are retained only as migration candidates because the legacy state lacks the complete ACP-3.0 dependency receipts;
-- no new store or parallel production truth has been introduced;
-- runtime routing behavior is not wired to ACP-3.0 yet.
+Closed migration decision:
+- only user/legacy-owned requested semantics are projected as requested truth;
+- legacy availability/selection/booking remain migration candidates until ACP-3.0 dependency receipts exist;
+- no parallel durable production store was introduced;
+- runtime behavior remained unwired.
 
-Local isolated verification performed without remote resources:
-- strict TypeScript contract check with `strict`, `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`: PASS;
-- adapter behavioral checks: `3/3 PASS`.
+## 3.0.8.2 active scope
 
-This is not repository-wide QA yet.
+Implement deterministic `TaskState + TaskEvent -> ReductionResult` with:
+- typed authority events;
+- explicit `set | clear | noChange` semantics;
+- causal invalidation through declared dependency keys/fingerprints;
+- stale tool result rejection;
+- exact server-side grounding boundary;
+- bounded recent-event replay protection;
+- no language parsing, tool choice, policy, execution or prose.
 
-## Next gate
+Current reducer candidate is locally validated in isolation with 7/7 focused cases PASS before repository CI.
 
-Before declaring `FOUNDATION_CONTRACTS_PASS`:
-1. run repository typecheck/targeted test/QA on the exact branch head;
-2. repair any compile or cross-repo regression;
-3. record evidence;
-4. then advance to `ACP-3.0.8.2 — DETERMINISTIC REDUCER`.
+## Preserved authority
+
+- LLM interprets user semantics only; it never creates operational truth.
+- Planner will be deterministic and bounded.
+- PolicyEngine/AgentCoreExecutor retain authorization, HITL exact binding and side-effect idempotency.
+- Tool payloads must pass Observation Mapper before TaskState.
+- Staleness is causal, not global stateRevision invalidation.
+- Approval resumes exact PreparedOperation after revalidation.
 
 ## Resource/safety boundary
 
-No Worker deployment, provider inference, HMS mutation, approval consumption, production action, payment action or second vertical is authorized by this checkpoint.
+No provider inference, Worker deployment, HMS mutation, approval consumption, production action, payment action or second vertical is authorized in 3.0.8.2.
 
-GitHub Actions/provider cycles remain protected resources. Do not spend a remote cycle on documentation polish or redundant evidence.
+Batch repo writes per logical block; avoid CI on intermediate commits.
