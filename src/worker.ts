@@ -1,6 +1,7 @@
 import { HmsServiceBindingAdapter, type HmsRpcService } from "./adapters/hms-service-binding.js";
 import { hmsAgentTools } from "./adapters/hms-agent-tools.js";
 import { WorkersAiModelProvider, type WorkersAiBinding } from "./adapters/cloudflare-workers-ai.js";
+import { ACP3_J01_PROVIDER_PREFLIGHT_PATH, handleAcp3J01ProviderPreflightRequest } from "./acp3-j01-validation-route.js";
 import {
   DurableObjectApprovalStore,
   DurableObjectConversationStore,
@@ -14,6 +15,7 @@ import { ConversationBackedStateStore } from "./core/conversation-state.js";
 import { DeterministicModelRouter } from "./core/deterministic-model.js";
 import { LLMModelRouter } from "./core/llm-model.js";
 import { LLMGroundedResponder } from "./core/model-responder.js";
+import type { ModelProvider } from "./core/model-provider.js";
 import { DurableExperimentBudgetProvider, validationExperimentBudget, type ExperimentBudgetTelemetry } from "./core/neuron-budget.js";
 import { AgentCoreRuntime } from "./core/runtime.js";
 import { ConsoleUsageSink } from "./core/usage.js";
@@ -122,6 +124,20 @@ function validationAdmittedResponse(response: Response, env: Env): Response {
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
+function validationAwareProvider(env: Env, validationConfiguration: ValidationConfiguration): ModelProvider {
+  const workersAiProvider = new WorkersAiModelProvider(env.AI, {
+    ...(env.ACP_MODEL_ID ? { model: env.ACP_MODEL_ID } : {}),
+    enableSessionAffinity: validationSessionAffinity(env.ACP_VALIDATION_SESSION_AFFINITY),
+  });
+  if (validationConfiguration.status !== "valid") return workersAiProvider;
+  return new DurableExperimentBudgetProvider(
+    workersAiProvider,
+    new DurableObjectExperimentNeuronBudgetStore(env.SESSIONS, validationConfiguration.experimentId),
+    validationExperimentBudget(validationConfiguration.budget),
+    recordExperimentBudgetTelemetry,
+  );
+}
+
 function handler(env: Env, validationConfiguration: ValidationConfiguration): (request: Request) => Promise<Response> {
   if (handle) return handle;
   const reservationOperations = new DurableObjectReservationOperationStore(env.SESSIONS);
@@ -130,15 +146,7 @@ function handler(env: Env, validationConfiguration: ValidationConfiguration): (r
   }, reservationOperations);
   const usage = new ConsoleUsageSink();
   const audit = new ConsoleAuditSink();
-  const workersAiProvider = new WorkersAiModelProvider(env.AI, {
-    ...(env.ACP_MODEL_ID ? { model: env.ACP_MODEL_ID } : {}),
-    enableSessionAffinity: validationSessionAffinity(env.ACP_VALIDATION_SESSION_AFFINITY),
-  });
-  // Only an explicitly configured validation deployment uses this durable, experiment-scoped guard.
-  const validationBudget = validationConfiguration.status === "valid" ? validationConfiguration.budget : undefined;
-  const provider = validationBudget && validationConfiguration.status === "valid"
-    ? new DurableExperimentBudgetProvider(workersAiProvider, new DurableObjectExperimentNeuronBudgetStore(env.SESSIONS, validationConfiguration.experimentId), validationExperimentBudget(validationBudget), recordExperimentBudgetTelemetry)
-    : workersAiProvider;
+  const provider = validationAwareProvider(env, validationConfiguration);
   const model = new LLMModelRouter(
     provider,
     new DeterministicModelRouter(),
@@ -167,6 +175,25 @@ function handler(env: Env, validationConfiguration: ValidationConfiguration): (r
   return handle;
 }
 
+async function handleAdmittedRequest(
+  request: Request,
+  env: Env,
+  validationConfiguration: ValidationConfiguration,
+): Promise<Response> {
+  const path = new URL(request.url).pathname;
+  if (path === ACP3_J01_PROVIDER_PREFLIGHT_PATH) {
+    if (validationConfiguration.status !== "valid") return new Response("Not Found", { status: 404 });
+    // The validation preflight is intercepted before HMS adapters, AgentCoreRuntime
+    // and approval stores are constructed. Its only remote dependency is the
+    // durable-budget-wrapped semantic provider.
+    return handleAcp3J01ProviderPreflightRequest(
+      request,
+      validationAwareProvider(env, validationConfiguration),
+    );
+  }
+  return handler(env, validationConfiguration)(request);
+}
+
 export default {
   fetch(request: Request, env: Env): Promise<Response> {
     const validationConfiguration = parseValidationConfiguration(env);
@@ -174,7 +201,10 @@ export default {
     return admitValidationRequest(
       request,
       validationConfiguration,
-      async (admittedRequest) => validationAdmittedResponse(await handler(env, validationConfiguration)(admittedRequest), env),
+      async (admittedRequest) => validationAdmittedResponse(
+        await handleAdmittedRequest(admittedRequest, env, validationConfiguration),
+        env,
+      ),
       validationConfiguration.status === "disabled" ? undefined : () => validationDeniedResponse(env),
     );
   },
