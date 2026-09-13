@@ -20,6 +20,7 @@ import { ToolRegistry } from "./tool-registry.js";
 import type { ExecutionContext, ToolExecutionMeta } from "./types.js";
 
 export type PlannerToolCall = Extract<NextStep, { kind: "CALL_TOOL" }>;
+type PreparedCapabilityId = PreparedOperation["capabilityId"];
 
 export type PlannerToolAdmissionMeta = {
   eventId: string;
@@ -93,6 +94,14 @@ function scopeMatches(state: Readonly<TaskStateV1>, context: Readonly<ExecutionC
   return state.sessionId === context.session.id
     && context.session.tenantId === context.tenant.id
     && context.session.actorId === context.actor.id;
+}
+
+function isWriteCapabilityId(capabilityId: HotelCapabilityId): capabilityId is PreparedCapabilityId {
+  return capabilityId === "reserve_single"
+    || capabilityId === "reserve_multi"
+    || capabilityId === "cancel_single"
+    || capabilityId === "cancel_multi"
+    || capabilityId === "modify";
 }
 
 function operationKindForCapability(capabilityId: HotelCapabilityId): OperationKind | undefined {
@@ -237,11 +246,12 @@ export async function admitPlannerToolProposal(
     return { ok: true, kind: "read_started", nextState: reduction.nextState, event, reduction };
   }
 
+  if (!isWriteCapabilityId(call.capabilityId)) return fail(state, "TOOL_ADMISSION_WRITE_OPERATION_KIND_UNSUPPORTED");
   const operationType = operationKindForCapability(call.capabilityId);
   if (!operationType) return fail(state, "TOOL_ADMISSION_WRITE_OPERATION_KIND_UNSUPPORTED");
   if (!meta.operationId) return fail(state, "TOOL_ADMISSION_OPERATION_ID_REQUIRED");
   const fingerprint = await operationFingerprint(binding.toolId, canonicalInput);
-  const preparedOperation: PreparedOperation = {
+  const preparedOperation: OperationPreparedEvent["operation"] = {
     operationId: meta.operationId,
     operationType,
     capabilityId: call.capabilityId,
