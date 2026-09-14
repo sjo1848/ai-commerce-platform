@@ -42,6 +42,13 @@ function json(status: number, body: unknown): Response {
   });
 }
 
+function emitPreflightDiagnostic(event: Record<string, unknown>): void {
+  console.log(JSON.stringify({
+    event: "acp3_j01_provider_preflight_result",
+    ...event,
+  }));
+}
+
 /**
  * Validation-only endpoint. Admission/authentication happens in worker.ts
  * before this function is called. The request cannot choose the prompt, state,
@@ -90,17 +97,23 @@ export async function handleAcp3J01ProviderPreflightRequest(
   if (!result.ok) {
     const status = result.failureCode === "J01_PREFLIGHT_PROVIDER_FAILURE" ? 502 : 422;
     const validationMessage = boundedValidationMessage(result.validationMessage);
-    return json(status, {
+    const responseBody = {
       ok: false,
       failureCode: result.failureCode,
       ...(result.providerCategory ? { providerCategory: result.providerCategory } : {}),
       ...(result.underlyingProviderCategory ? { underlyingProviderCategory: result.underlyingProviderCategory } : {}),
       ...(validationMessage ? { validationMessage } : {}),
       ...(result.receipt ? { receipt: result.receipt } : {}),
+    };
+    emitPreflightDiagnostic({
+      outcome: "RED",
+      httpStatus: status,
+      ...responseBody,
     });
+    return json(status, responseBody);
   }
 
-  return json(200, {
+  const responseBody = {
     ok: true,
     kind: "ACP3_J01_PROVIDER_PREFLIGHT_PASS",
     nextStep: {
@@ -115,5 +128,14 @@ export async function handleAcp3J01ProviderPreflightRequest(
       preparedOperation: false,
       executionStatus: result.nextState.execution.status,
     },
+  };
+  emitPreflightDiagnostic({
+    outcome: "PASS",
+    httpStatus: 200,
+    kind: responseBody.kind,
+    nextStep: responseBody.nextStep,
+    receipt: responseBody.receipt,
+    operationalState: responseBody.operationalState,
   });
+  return json(200, responseBody);
 }
