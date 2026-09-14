@@ -189,7 +189,7 @@ test("J01 provider preflight rejects local invalid input before provider or budg
   assert.equal(guarded.counters.reserve, 0);
 });
 
-test("J01 provider preflight rejects invalid semantic output and never falls back to language parsing", async () => {
+test("J01 provider preflight rejects invalid semantic output, retains safe receipt and never falls back to language parsing", async () => {
   let calls = 0;
   const guarded = budgeted({
     async completeStructured() {
@@ -201,6 +201,8 @@ test("J01 provider preflight rejects invalid semantic output and never falls bac
           toolId: "hms.createReservation",
         },
         model: "provider/test-model",
+        inputTokens: 90,
+        outputTokens: 30,
         providerNeurons: 25,
       };
     },
@@ -209,6 +211,15 @@ test("J01 provider preflight rejects invalid semantic output and never falls bac
   const result = await runJ01ProviderSemanticPreflight(baseInput(guarded.provider));
   assert.equal(result.ok, false);
   assert.equal(result.failureCode, "J01_PREFLIGHT_SEMANTIC_VALIDATION_FAILED");
+  assert.equal(result.validationMessage, "Interpreter output shape is invalid");
+  assert.deepEqual(result.receipt, {
+    inferenceCount: 1,
+    model: "provider/test-model",
+    inputTokens: 90,
+    outputTokens: 30,
+    providerNeurons: 25,
+  });
+  assert.equal(JSON.stringify(result).includes("hms.createReservation"), false);
   assert.equal(calls, 1);
   assert.equal(guarded.counters.reserve, 1);
   assert.equal(guarded.counters.settle, 1);
@@ -252,7 +263,7 @@ test("J01 provider preflight requires provider identity evidence before acceptin
   assert.equal(guarded.counters.settle, 1);
 });
 
-test("J01 provider preflight fails closed when valid semantics do not lead to the expected availability read", async () => {
+test("J01 provider preflight fails closed on unexpected planner step while retaining safe receipt", async () => {
   let calls = 0;
   const guarded = budgeted({
     async completeStructured() {
@@ -260,13 +271,25 @@ test("J01 provider preflight fails closed when valid semantics do not lead to th
       return {
         value: { classification: "social", directives: { interaction: "social" } },
         model: "provider/test-model",
+        inputTokens: 50,
+        outputTokens: 12,
         providerNeurons: 10,
       };
     },
   });
 
   const result = await runJ01ProviderSemanticPreflight(baseInput(guarded.provider));
-  assert.deepEqual(result, { ok: false, failureCode: "J01_PREFLIGHT_UNEXPECTED_NEXT_STEP" });
+  assert.deepEqual(result, {
+    ok: false,
+    failureCode: "J01_PREFLIGHT_UNEXPECTED_NEXT_STEP",
+    receipt: {
+      inferenceCount: 1,
+      model: "provider/test-model",
+      inputTokens: 50,
+      outputTokens: 12,
+      providerNeurons: 10,
+    },
+  });
   assert.equal(calls, 1);
   assert.equal(guarded.counters.settle, 1);
 });
