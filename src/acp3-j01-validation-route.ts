@@ -25,6 +25,13 @@ function cleanState(): TaskStateV1 {
   };
 }
 
+function boundedValidationMessage(value: string | undefined): string | undefined {
+  const message = value?.trim();
+  if (!message || message.length > 160) return undefined;
+  if (!/^[A-Za-z0-9 _-]+$/.test(message)) return undefined;
+  return message;
+}
+
 function json(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -82,11 +89,14 @@ export async function handleAcp3J01ProviderPreflightRequest(
 
   if (!result.ok) {
     const status = result.failureCode === "J01_PREFLIGHT_PROVIDER_FAILURE" ? 502 : 422;
+    const validationMessage = boundedValidationMessage(result.validationMessage);
     return json(status, {
       ok: false,
       failureCode: result.failureCode,
       ...(result.providerCategory ? { providerCategory: result.providerCategory } : {}),
       ...(result.underlyingProviderCategory ? { underlyingProviderCategory: result.underlyingProviderCategory } : {}),
+      ...(validationMessage ? { validationMessage } : {}),
+      ...(result.receipt ? { receipt: result.receipt } : {}),
     });
   }
 
