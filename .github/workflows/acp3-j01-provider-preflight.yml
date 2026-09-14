@@ -266,9 +266,59 @@ jobs:
             -X POST "$AI_COMMERCE_STAGING_URL$PREFLIGHT_PATH" || true)"
           PREFLIGHT_STATUS="$status" CANDIDATE_VERSION_ID="$CANDIDATE_VERSION_ID" EXPECTED_MODEL="$EXPECTED_MODEL" node --input-type=module <<'NODE'
           import { readFileSync, writeFileSync } from "node:fs";
-          const body = JSON.parse(readFileSync("/tmp/acp3-j01-preflight.json", "utf8"));
+          const raw = readFileSync("/tmp/acp3-j01-preflight.json", "utf8");
           const headers = readFileSync("/tmp/acp3-j01-preflight-headers.txt", "utf8");
-          const version = headers.match(/^x-acp-validation-runtime-version:\s*([^\r\n]+)$/im)?.[1]?.trim();
+          const version = headers.match(/^x-acp-validation-runtime-version:\s*([^\r\n]+)$/im)?.[1]?.trim() ?? null;
+          const httpStatus = Number(process.env.PREFLIGHT_STATUS);
+          let body;
+          try {
+            body = JSON.parse(raw);
+          } catch {
+            writeFileSync("/tmp/acp3-j01-preflight-summary.json", JSON.stringify({
+              event: "ACP3_J01_PROVIDER_PREFLIGHT_RESPONSE",
+              httpStatus: Number.isInteger(httpStatus) ? httpStatus : null,
+              runtimeWorkerVersionId: version,
+              responseParse: "INVALID_JSON",
+            }));
+            throw new Error("J01 provider preflight returned invalid JSON");
+          }
+
+          const bounded = (value, pattern, max) => typeof value === "string" && value.length <= max && pattern.test(value) ? value : undefined;
+          const safeFailureCode = bounded(body?.failureCode, /^[A-Z0-9_]+$/, 96);
+          const safeValidationMessage = bounded(body?.validationMessage, /^[A-Za-z0-9 _-]+$/, 160);
+          const safeModel = bounded(body?.receipt?.model, /^[A-Za-z0-9_@./:-]+$/, 160);
+          const finite = (value) => Number.isFinite(value) ? value : undefined;
+          const safeReceipt = body?.receipt && typeof body.receipt === "object" ? {
+            ...(safeModel ? { model: safeModel } : {}),
+            ...(finite(body.receipt.inputTokens) !== undefined ? { inputTokens: finite(body.receipt.inputTokens) } : {}),
+            ...(finite(body.receipt.outputTokens) !== undefined ? { outputTokens: finite(body.receipt.outputTokens) } : {}),
+            ...(finite(body.receipt.providerNeurons) !== undefined ? { providerNeurons: finite(body.receipt.providerNeurons) } : {}),
+            ...(finite(body.receipt.latencyMs) !== undefined ? { latencyMs: finite(body.receipt.latencyMs) } : {}),
+            ...(finite(body.receipt.estimatedCostUsd) !== undefined ? { estimatedCostUsd: finite(body.receipt.estimatedCostUsd) } : {}),
+          } : undefined;
+          const safeNextStep = body?.nextStep && typeof body.nextStep === "object" ? {
+            ...(bounded(body.nextStep.kind, /^[A-Z_]+$/, 32) ? { kind: body.nextStep.kind } : {}),
+            ...(bounded(body.nextStep.capabilityId, /^[a-z0-9_-]+$/, 64) ? { capabilityId: body.nextStep.capabilityId } : {}),
+            ...(bounded(body.nextStep.effectClass, /^(read|write)$/, 8) ? { effectClass: body.nextStep.effectClass } : {}),
+            ...(body.nextStep.groundedInput && typeof body.nextStep.groundedInput === "object" ? {
+              groundedInput: {
+                ...(bounded(body.nextStep.groundedInput.checkIn, /^\d{4}-\d{2}-\d{2}$/, 10) ? { checkIn: body.nextStep.groundedInput.checkIn } : {}),
+                ...(bounded(body.nextStep.groundedInput.checkOut, /^\d{4}-\d{2}-\d{2}$/, 10) ? { checkOut: body.nextStep.groundedInput.checkOut } : {}),
+                ...(Number.isInteger(body.nextStep.groundedInput.guests) ? { guests: body.nextStep.groundedInput.guests } : {}),
+              },
+            } : {}),
+          } : undefined;
+          writeFileSync("/tmp/acp3-j01-preflight-summary.json", JSON.stringify({
+            event: "ACP3_J01_PROVIDER_PREFLIGHT_RESPONSE",
+            httpStatus: Number.isInteger(httpStatus) ? httpStatus : null,
+            runtimeWorkerVersionId: version,
+            ok: body?.ok === true,
+            ...(safeFailureCode ? { failureCode: safeFailureCode } : {}),
+            ...(safeValidationMessage ? { validationMessage: safeValidationMessage } : {}),
+            ...(safeReceipt && Object.keys(safeReceipt).length > 0 ? { receipt: safeReceipt } : {}),
+            ...(safeNextStep && Object.keys(safeNextStep).length > 0 ? { nextStep: safeNextStep } : {}),
+          }));
+
           if (process.env.PREFLIGHT_STATUS !== "200") throw new Error(`J01 provider preflight returned HTTP ${process.env.PREFLIGHT_STATUS}`);
           if (version !== process.env.CANDIDATE_VERSION_ID) throw new Error("preflight response did not come from exact candidate version");
           if (body?.ok !== true || body?.kind !== "ACP3_J01_PROVIDER_PREFLIGHT_PASS") throw new Error("preflight did not return PASS receipt");
@@ -284,16 +334,6 @@ jobs:
           for (const forbidden of ["toolId", "operationFingerprint", "preparedOperation", "bookingId", "roomId", "guestId"]) {
             if (serialized.includes(forbidden)) throw new Error(`preflight response leaked forbidden operational field: ${forbidden}`);
           }
-          writeFileSync("/tmp/acp3-j01-preflight-summary.json", JSON.stringify({
-            event: "ACP3_J01_PROVIDER_PREFLIGHT_PASS",
-            runtimeWorkerVersionId: version,
-            model: body.receipt.model,
-            inputTokens: body.receipt.inputTokens,
-            outputTokens: body.receipt.outputTokens,
-            providerNeurons: body.receipt.providerNeurons,
-            nextStep: body.nextStep,
-            operationalState: body.operationalState,
-          }));
           NODE
 
       - name: Restore exact prior deployment
