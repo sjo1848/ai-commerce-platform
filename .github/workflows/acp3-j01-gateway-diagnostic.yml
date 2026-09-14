@@ -1,0 +1,95 @@
+name: ACP-3 J01 gateway diagnostic read-only
+
+on:
+  push:
+    branches:
+      - feature/acp-3.0.8-implementation-foundation
+    paths:
+      - .github/workflows/acp3-j01-gateway-diagnostic.yml
+
+permissions:
+  contents: read
+
+jobs:
+  recover-existing-log:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_OBSERVABILITY_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVABILITY_API_TOKEN }}
+      GATEWAY_ID: default
+      EXPECTED_MODEL: '@cf/meta/llama-3.3-70b-instruct-fp8-fast'
+      FROM: '2026-09-13T23:08:00Z'
+      TO: '2026-09-13T23:12:00Z'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify read-only observability credential presence
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${CLOUDFLARE_ACCOUNT_ID//[[:space:]]/}"
+          test -n "${CLOUDFLARE_OBSERVABILITY_API_TOKEN//[[:space:]]/}"
+
+      - name: List AI Gateway logs in exact consumed-inference window
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS --get \
+            -H "Authorization: Bearer $CLOUDFLARE_OBSERVABILITY_API_TOKEN" \
+            --data-urlencode "start_date=$FROM" \
+            --data-urlencode "end_date=$TO" \
+            --data-urlencode "per_page=50" \
+            --data-urlencode "order_by=created_at" \
+            --data-urlencode "order_by_direction=asc" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/ai-gateway/gateways/$GATEWAY_ID/logs" \
+            > /tmp/acp3-j01-gateway-list.json
+
+          ACCOUNT_ID="$CLOUDFLARE_ACCOUNT_ID" TOKEN="$CLOUDFLARE_OBSERVABILITY_API_TOKEN" EXPECTED_MODEL="$EXPECTED_MODEL" node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const payload = JSON.parse(readFileSync('/tmp/acp3-j01-gateway-list.json','utf8'));
+          if (payload?.success !== true || !Array.isArray(payload.result)) throw new Error('AI Gateway list query failed');
+          const target = process.env.EXPECTED_MODEL;
+          const candidates = payload.result.filter((x) => {
+            const model = typeof x?.model === 'string' ? x.model : '';
+            const metadata = typeof x?.metadata === 'string' ? x.metadata : JSON.stringify(x?.metadata ?? '');
+            return (model === target || model.includes('llama-3.3-70b-instruct-fp8-fast')) && (metadata.includes('acp.semantic_interpreter.v1') || payload.result.length === 1);
+          });
+          const safe = candidates.map((x) => ({
+            id: x.id,
+            created_at: x.created_at,
+            model: x.model,
+            provider: x.provider,
+            success: x.success,
+            status_code: x.status_code,
+            tokens_in: x.tokens_in,
+            tokens_out: x.tokens_out,
+            duration: x.duration,
+            metadata: x.metadata,
+          }));
+          writeFileSync('/tmp/acp3-j01-gateway-summary.json', JSON.stringify({ success:true, candidateCount:safe.length, candidates:safe }, null, 2));
+          if (safe.length !== 1 || typeof safe[0].id !== 'string' || !safe[0].id) throw new Error(`expected exactly one J01 gateway log, found ${safe.length}`);
+          writeFileSync('/tmp/acp3-j01-log-id.txt', safe[0].id);
+          NODE
+
+      - name: Fetch exact existing log detail and response without new inference
+        shell: bash
+        run: |
+          set -euo pipefail
+          LOG_ID="$(cat /tmp/acp3-j01-log-id.txt)"
+          test -n "$LOG_ID"
+          base="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/ai-gateway/gateways/$GATEWAY_ID/logs/$LOG_ID"
+          curl -fsS -H "Authorization: Bearer $CLOUDFLARE_OBSERVABILITY_API_TOKEN" "$base" > /tmp/acp3-j01-gateway-detail.json
+          curl -fsS -H "Authorization: Bearer $CLOUDFLARE_OBSERVABILITY_API_TOKEN" "$base/response" > /tmp/acp3-j01-gateway-response.json
+
+      - name: Preserve temporary read-only diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: acp3-j01-existing-gateway-log-${{ github.run_id }}
+          path: |
+            /tmp/acp3-j01-gateway-summary.json
+            /tmp/acp3-j01-gateway-detail.json
+            /tmp/acp3-j01-gateway-response.json
+          if-no-files-found: warn
+          retention-days: 1
