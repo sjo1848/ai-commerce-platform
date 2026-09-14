@@ -39,6 +39,27 @@ test("ACP-3 J01 provider workflow executes only the isolated empty-body semantic
   assert.match(preRestore, /preparedOperation !== false/);
 });
 
+test("ACP-3 J01 provider workflow preserves sanitized RED evidence before asserting HTTP 200", () => {
+  const executionStep = workflow.indexOf("Execute exactly one budgeted ACP-3 semantic preflight");
+  const restoreStep = workflow.indexOf("Restore exact prior deployment", executionStep);
+  assert.ok(executionStep > 0 && restoreStep > executionStep);
+  const preflight = workflow.slice(executionStep, restoreStep);
+  const summaryWrite = preflight.indexOf('writeFileSync("/tmp/acp3-j01-preflight-summary.json"');
+  const statusAssertion = preflight.indexOf('if (process.env.PREFLIGHT_STATUS !== "200")');
+  assert.ok(summaryWrite > 0, "preflight must write a sanitized summary");
+  assert.ok(statusAssertion > summaryWrite, "summary must be written before PASS assertions can throw");
+  assert.match(preflight, /ACP3_J01_PROVIDER_PREFLIGHT_RESPONSE/);
+  assert.match(preflight, /responseParse: "INVALID_JSON"/);
+  assert.match(preflight, /safeFailureCode/);
+  assert.match(preflight, /safeValidationMessage/);
+  assert.match(preflight, /safeReceipt/);
+  assert.match(preflight, /providerNeurons/);
+  assert.doesNotMatch(preflight, /writeFileSync\("\/tmp\/acp3-j01-preflight-summary\.json",\s*raw/);
+
+  const evidenceStep = workflow.slice(workflow.indexOf("Preserve sanitized preflight evidence"));
+  assert.match(evidenceStep, /\/tmp\/acp3-j01-preflight-summary\.json/);
+});
+
 test("ACP-3 J01 provider workflow always restores the exact prior 100-percent deployment and removes local credentials", () => {
   assert.match(workflow, /- name: Restore exact prior deployment\n\s+if: always\(\)/);
   assert.match(workflow, /"\$PRIOR_VERSION_ID@100%"/);
