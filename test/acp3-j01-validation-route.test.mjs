@@ -20,7 +20,7 @@ function validProviderOutput() {
   };
 }
 
-function budgetedProvider() {
+function budgetedProvider(outputFactory = validProviderOutput) {
   const counters = { provider: 0, reserve: 0, settle: 0, release: 0 };
   const inner = {
     async completeStructured(request) {
@@ -31,7 +31,7 @@ function budgetedProvider() {
       assert.equal(prompt.includes("hms.checkAvailability"), false);
       assert.equal(prompt.includes("hms.createReservation"), false);
       return {
-        value: validProviderOutput(),
+        value: outputFactory(),
         model: "provider/route-test",
         inputTokens: 100,
         outputTokens: 40,
@@ -101,6 +101,37 @@ test("ACP-3 J01 validation route accepts only fixed empty-body POST and returns 
   assert.deepEqual(guarded.counters, { provider: 1, reserve: 1, settle: 1, release: 0 });
 });
 
+test("ACP-3 J01 validation route returns bounded semantic RED diagnostics and safe provider receipt", async () => {
+  const guarded = budgetedProvider(() => ({
+    classification: "task",
+    taskSemanticChanges: { requestedGoal: { op: "set", value: "reservation" } },
+    toolId: "hms.createReservation",
+  }));
+  const response = await handleAcp3J01ProviderPreflightRequest(
+    new Request(`https://validation.invalid${ACP3_J01_PROVIDER_PREFLIGHT_PATH}`, { method: "POST" }),
+    guarded.provider,
+    "2026-09-13T19:10:00-03:00",
+  );
+  assert.equal(response.status, 422);
+  const body = await response.json();
+  assert.deepEqual(body, {
+    ok: false,
+    failureCode: "J01_PREFLIGHT_SEMANTIC_VALIDATION_FAILED",
+    validationMessage: "Interpreter output shape is invalid",
+    receipt: {
+      inferenceCount: 1,
+      model: "provider/route-test",
+      inputTokens: 100,
+      outputTokens: 40,
+      providerNeurons: 50,
+    },
+  });
+  const serialized = JSON.stringify(body);
+  assert.equal(serialized.includes("hms.createReservation"), false);
+  assert.equal(serialized.includes("toolId"), false);
+  assert.deepEqual(guarded.counters, { provider: 1, reserve: 1, settle: 1, release: 0 });
+});
+
 test("ACP-3 J01 validation route rejects request-body prompt injection before budget/provider dispatch", async () => {
   const guarded = budgetedProvider();
   const response = await handleAcp3J01ProviderPreflightRequest(
@@ -134,9 +165,6 @@ test("worker intercepts the ACP-3 validation route before HMS/runtime constructi
   const hmsConstruction = source.indexOf("new HmsServiceBindingAdapter", admittedHandler);
   assert.ok(admittedHandler >= 0);
   assert.ok(routeGuard > admittedHandler);
-  // The HMS constructor belongs to handler(), which is textually before the
-  // admitted wrapper. The wrapper itself must call the preflight before its
-  // fallback invocation of handler(...).
   const fallback = source.indexOf("return handler(env, validationConfiguration)(request)", admittedHandler);
   const preflightCall = source.indexOf("handleAcp3J01ProviderPreflightRequest", routeGuard);
   assert.ok(preflightCall > routeGuard);
