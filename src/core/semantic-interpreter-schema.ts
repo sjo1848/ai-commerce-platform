@@ -3,13 +3,25 @@ import { HOTEL_SEMANTIC_CONTRACT_V1 } from "./semantic-interpreter.js";
 
 function patchSchema(valueSchema: JsonSchema): JsonSchema {
   return {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      op: { type: "string", enum: ["set", "clear"] },
-      value: valueSchema,
-    },
-    required: ["op"],
+    oneOf: [
+      {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          op: { type: "string", enum: ["set"] },
+          value: valueSchema,
+        },
+        required: ["op", "value"],
+      },
+      {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          op: { type: "string", enum: ["clear"] },
+        },
+        required: ["op"],
+      },
+    ],
   };
 }
 
@@ -136,6 +148,7 @@ export const SEMANTIC_INTERPRETER_OUTPUT_SCHEMA: JsonSchema = {
         normalizedDates: {
           type: "object",
           additionalProperties: false,
+          minProperties: 1,
           properties: {
             checkIn: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
             checkOut: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
