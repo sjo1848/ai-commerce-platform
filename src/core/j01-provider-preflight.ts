@@ -45,6 +45,7 @@ export type J01ProviderPreflightResult =
       providerCategory?: string;
       underlyingProviderCategory?: string;
       validationMessage?: string;
+      receipt?: J01ProviderPreflightReceipt;
     };
 
 export type J01ProviderPreflightInput = {
@@ -149,6 +150,7 @@ export async function runJ01ProviderSemanticPreflight(
       ok: false,
       failureCode: "J01_PREFLIGHT_SEMANTIC_VALIDATION_FAILED",
       validationMessage: validated.message,
+      receipt: providerReceipt,
     };
   }
 
@@ -164,21 +166,25 @@ export async function runJ01ProviderSemanticPreflight(
       ...(input.meta.dialogueAnchor ? { dialogueAnchor: input.meta.dialogueAnchor } : {}),
     },
   });
-  if (!planned.ok) return { ok: false, failureCode: "J01_PREFLIGHT_INTERPRETER_BOUNDARY_REJECTED" };
+  if (!planned.ok) {
+    return { ok: false, failureCode: "J01_PREFLIGHT_INTERPRETER_BOUNDARY_REJECTED", receipt: providerReceipt };
+  }
 
   if (planned.nextStep.kind === "CALL_TOOL" && planned.nextStep.effectClass === "write") {
-    return { ok: false, failureCode: "J01_PREFLIGHT_WRITE_STEP_BLOCKED" };
+    return { ok: false, failureCode: "J01_PREFLIGHT_WRITE_STEP_BLOCKED", receipt: providerReceipt };
   }
   if (planned.nextStep.kind !== "CALL_TOOL"
     || planned.nextStep.capabilityId !== "availability"
     || planned.nextStep.effectClass !== "read") {
-    return { ok: false, failureCode: "J01_PREFLIGHT_UNEXPECTED_NEXT_STEP" };
+    return { ok: false, failureCode: "J01_PREFLIGHT_UNEXPECTED_NEXT_STEP", receipt: providerReceipt };
   }
 
   const operationalStateChanged = planned.nextState.pendingToolInvocation?.status === "pending"
     || (planned.nextState.preparedOperation !== undefined && planned.nextState.preparedOperation.status !== "invalidated")
     || planned.nextState.execution.status !== "not_started";
-  if (operationalStateChanged) return { ok: false, failureCode: "J01_PREFLIGHT_OPERATIONAL_STATE_CHANGED" };
+  if (operationalStateChanged) {
+    return { ok: false, failureCode: "J01_PREFLIGHT_OPERATIONAL_STATE_CHANGED", receipt: providerReceipt };
+  }
 
   return {
     ok: true,
