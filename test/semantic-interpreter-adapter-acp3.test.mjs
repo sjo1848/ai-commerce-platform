@@ -24,6 +24,24 @@ test('request is semantic-only and does not expose tool workflow',()=>{
   assert.match(request.messages[0].content,/Do not select tools/);
 });
 
+test('semantic prompt makes strict patch and temporal provenance rules explicit without adding workflow authority',()=>{
+  const request=buildSemanticInterpreterRequest({
+    ...input,
+    currentUserMessage:'Quiero reservar una habitación del 10 al 12 de febrero de 2027 para 2 personas.',
+  });
+  const prompt=request.messages[0].content;
+  assert.match(prompt,/Every set patch must include value/);
+  assert.match(prompt,/every clear patch must omit value/);
+  assert.match(prompt,/Do not emit empty taskSemanticChanges or directives/);
+  assert.match(prompt,/explicit absolute calendar dates/);
+  assert.match(prompt,/omit temporalResolutionProvenance/);
+  assert.match(prompt,/relative or deictic date language/);
+  assert.match(prompt,/copy trustedNow, timezone and locale exactly/);
+  assert.match(prompt,/calendarPolicyId as resolutionPolicyId/);
+  assert.match(prompt,/temporalPolicyVersion as resolutionPolicyVersion/);
+  assert.match(prompt,/Do not reconstruct a workflow/);
+});
+
 test('structured adapter delegates exactly once and returns raw value',async()=>{
   let calls=0; let captured;
   const provider={completeStructured:async(request)=>{calls++;captured=request;return{value:{classification:'task',taskSemanticChanges:{requestedGoal:{op:'set',value:'availability'}}}}}};
