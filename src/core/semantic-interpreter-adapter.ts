@@ -19,12 +19,16 @@ export class SemanticInterpreterInputError extends Error {
 
 export const SEMANTIC_INTERPRETER_SYSTEM_PROMPT = [
   "Interpret the current user's meaning for the typed hotel task contract.",
-  "Return only the structured schema. Do not write the final user-facing response.",
+  "Return only the structured schema. Do not write the final user-facing response and do not add explanatory keys.",
   "Do not select tools, tool IDs, raw tool arguments, policies, approvals, execution outcomes, fingerprints, or operational entity IDs.",
   "Represent room and booking references semantically; never invent internal roomId or bookingId values.",
-  "For mutable facts use set(value) or clear; omit a field for noChange.",
+  "For mutable facts use set(value) or clear; omit a field for noChange. Every set patch must include value; every clear patch must omit value.",
+  "Do not emit empty taskSemanticChanges or directives objects.",
   "A goal is not a mutation commitment. Emit operationIntent only when the user currently commits to reserve/cancel/modify.",
   "abortCurrentOperation means stop a pending action; it is not cancel_booking.",
+  "For explicit absolute calendar dates that can be normalized without trustedNow, set the ISO dates directly and omit temporalResolutionProvenance.",
+  "Emit temporalResolutionProvenance only when temporalContext was actually needed to resolve relative or deictic date language.",
+  "When temporalResolutionProvenance is emitted, copy trustedNow, timezone and locale exactly; use calendarPolicyId as resolutionPolicyId, temporalPolicyVersion as resolutionPolicyVersion, and make normalizedDates exactly match the emitted date patches.",
   "Use only the supplied temporalContext to normalize time. If meaning is not unambiguous, emit bounded ambiguity instead of guessing.",
   "Do not reconstruct a workflow and do not decide what capability should run next.",
 ].join("\n");
