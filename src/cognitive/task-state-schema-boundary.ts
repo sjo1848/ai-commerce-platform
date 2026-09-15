@@ -68,7 +68,11 @@ function bookingTarget(v: unknown): boolean {
   return rec(v) && keys(v, ["bookingId", "sourceObservationId", "authority", "dependencyFingerprint", "dependencyPaths"]) && dep(v);
 }
 function anchor(v: unknown): boolean {
-  return rec(v) && keys(v, ["anchorId", "kind", "createdAtStateRevision", "dependencyFingerprint", "dependencyPaths", "referencedObservationId", "candidateScope"]) && arr(v.dependencyPaths) && (v.candidateScope === undefined || arr(v.candidateScope));
+  if (!rec(v) || !keys(v, ["anchorId", "kind", "createdAtStateRevision", "dependencyFingerprint", "dependencyPaths", "referencedObservationId", "candidateScope", "focusedCandidate", "selectedCandidates"])) return false;
+  if (!arr(v.dependencyPaths) || (v.candidateScope !== undefined && !arr(v.candidateScope))) return false;
+  if (v.focusedCandidate !== undefined && !str(v.focusedCandidate)) return false;
+  if (v.selectedCandidates !== undefined && (!arr(v.selectedCandidates) || v.selectedCandidates.length === 0 || !v.selectedCandidates.every(str))) return false;
+  return true;
 }
 function execution(v: unknown): boolean {
   return rec(v) && keys(v, ["operationId", "operationType", "status", "observationId"]);
