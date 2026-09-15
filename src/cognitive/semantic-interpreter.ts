@@ -461,12 +461,15 @@ function semanticCombinationValid(output: InterpreterOutput, input: TrustedInter
   }
 
   const temporal = output.temporalResolutionProvenance;
+  const setCheckIn = changes?.stay?.checkIn?.op === "set" ? changes.stay.checkIn.value : undefined;
+  const setCheckOut = changes?.stay?.checkOut?.op === "set" ? changes.stay.checkOut.value : undefined;
+  if ((setCheckIn !== undefined || setCheckOut !== undefined) && !temporal) return "invalid_temporal_provenance";
   if (temporal) {
     if (temporal.trustedNow !== input.temporalContext.trustedNow || temporal.timezone !== input.temporalContext.timezone || temporal.policyId !== input.temporalContext.temporalPolicyId) return "invalid_temporal_provenance";
-    const checkIn = changes?.stay?.checkIn;
-    const checkOut = changes?.stay?.checkOut;
-    if (temporal.normalized.checkIn !== undefined && (checkIn?.op !== "set" || checkIn.value !== temporal.normalized.checkIn)) return "invalid_temporal_provenance";
-    if (temporal.normalized.checkOut !== undefined && (checkOut?.op !== "set" || checkOut.value !== temporal.normalized.checkOut)) return "invalid_temporal_provenance";
+    if (setCheckIn !== undefined && temporal.normalized.checkIn !== setCheckIn) return "invalid_temporal_provenance";
+    if (setCheckOut !== undefined && temporal.normalized.checkOut !== setCheckOut) return "invalid_temporal_provenance";
+    if (temporal.normalized.checkIn !== undefined && setCheckIn === undefined) return "invalid_temporal_provenance";
+    if (temporal.normalized.checkOut !== undefined && setCheckOut === undefined) return "invalid_temporal_provenance";
   }
   return undefined;
 }
