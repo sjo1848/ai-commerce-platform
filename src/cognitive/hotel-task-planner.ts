@@ -1,5 +1,6 @@
 import type { DialogueAnchor, NextStep, PlanningTrigger, TaskState } from "./contracts.js";
 import { dependencyFingerprint } from "./fingerprint.js";
+import type { DependencyValue } from "./fingerprint.js";
 import type {
   DomainCapabilities,
   HotelCapabilityBinding,
@@ -16,6 +17,7 @@ export type HotelPlanningContext = {
 };
 
 type AnchorSpec = Omit<DialogueAnchor, "anchorId" | "createdAtStateRevision">;
+type DependencyProjection = { readonly [key: string]: DependencyValue | undefined };
 
 type CapabilityResolution =
   | { ok: true; binding: HotelCapabilityBinding }
@@ -74,6 +76,16 @@ function contextContractValid(context: HotelPlanningContext): boolean {
   );
 }
 
+function availabilityMatchesRequestedStay(state: Readonly<TaskState>): boolean {
+  const availability = state.observations.availability;
+  if (!availability) return true;
+  return (
+    state.user.stay.checkIn === availability.query.checkIn &&
+    state.user.stay.checkOut === availability.query.checkOut &&
+    state.user.stay.guests === availability.query.guests
+  );
+}
+
 function activePending(state: Readonly<TaskState>) {
   const pending = state.control.pendingToolInvocation;
   return pending && (pending.status === "admitted" || pending.status === "dispatched") ? pending : undefined;
@@ -83,7 +95,7 @@ async function callCapability(
   context: HotelPlanningContext,
   key: HotelCapabilityKey,
   groundedInput: Readonly<Record<string, unknown>>,
-  dependencyProjection: Readonly<Record<string, unknown>>,
+  dependencyProjection: DependencyProjection,
   correlationIntent: string,
 ): Promise<NextStep> {
   const resolved = resolveCapability(context, key);
@@ -427,6 +439,10 @@ export async function planHotelTask(context: HotelPlanningContext): Promise<Next
     };
   }
   if (context.state.lifecycle !== "active") return respond("task_inactive");
+
+  if (!availabilityMatchesRequestedStay(context.state)) {
+    return degrade("availability_dependency_mismatch", false, "state_invariant_violation");
+  }
 
   if (context.trigger.abortDirective) return respond("current_operation_aborted");
   if (context.trigger.interactionDirective) return respond(`interaction_${context.trigger.interactionDirective}`);
