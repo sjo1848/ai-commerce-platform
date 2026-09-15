@@ -66,6 +66,7 @@ export type HotelPlanningCycleResult =
       kind: "already_planned";
       state: TaskState;
       cycle: OrchestrationCycleRecord;
+      nextStep?: NextStep;
     };
 
 function boundedId(value: unknown): value is string {
@@ -96,12 +97,22 @@ function sameJson(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
+function validOrigin(value: unknown): value is PlanningTrigger["origin"] {
+  return value === "user" || value === "tool" || value === "server";
+}
+
 export function createOrchestrationCycleRecord(args: {
   cycleId: string;
   trigger: Readonly<PlanningTrigger>;
   createdAt: string;
 }): OrchestrationCycleRecord {
-  if (!boundedId(args.cycleId) || !boundedId(args.trigger.acceptedEventId) || !validTimestamp(args.createdAt)) {
+  if (
+    !boundedId(args.cycleId) ||
+    !boundedId(args.trigger.acceptedEventId) ||
+    !validOrigin(args.trigger.origin) ||
+    (args.trigger.correlationId !== undefined && !boundedId(args.trigger.correlationId)) ||
+    !validTimestamp(args.createdAt)
+  ) {
     throw new TypeError("Invalid orchestration cycle identity");
   }
   return Object.freeze({
@@ -124,19 +135,45 @@ function updatedCycle(
   return Object.freeze({ ...cycle, status, updatedAt: now });
 }
 
+function plannedCycle(
+  cycle: Readonly<OrchestrationCycleRecord>,
+  nextStep: NextStep,
+  stateRevision: number,
+  now: string,
+): OrchestrationCycleRecord {
+  return Object.freeze({
+    ...cycle,
+    status: "planned" as const,
+    plannedStep: structuredClone(nextStep),
+    plannedAtStateRevision: stateRevision,
+    updatedAt: now,
+  });
+}
+
 function cycleMatches(
   cycle: Readonly<OrchestrationCycleRecord>,
   event: TaskEvent,
   trigger: Readonly<PlanningTrigger> | undefined,
 ): boolean {
   if (cycle.acceptedEventId !== event.eventId || cycle.origin !== primaryOrigin(event)) return false;
-  if (!trigger) return event.kind === "server_control";
+  if (!trigger) return true;
   return (
     trigger.acceptedEventId === event.eventId &&
     trigger.origin === primaryOrigin(event) &&
     cycle.correlationId === trigger.correlationId &&
     sameJson(cycle.directives, directiveSnapshot(trigger))
   );
+}
+
+function triggerFromCycle(cycle: Readonly<OrchestrationCycleRecord>, event: TaskEvent): PlanningTrigger {
+  return {
+    origin: cycle.origin,
+    acceptedEventId: cycle.acceptedEventId,
+    ...(cycle.correlationId ? { correlationId: cycle.correlationId } : {}),
+    ...structuredClone(cycle.directives),
+    ...(event.kind === "tool_observation" ? { observationKind: event.payload.kind } : {}),
+    ...(event.kind === "server_control" ? { controlKind: event.payload.kind } : {}),
+  };
 }
 
 export function serverControlDisposition(payload: ServerControlPayload | unknown): OrchestrationDisposition | undefined {
@@ -227,17 +264,28 @@ function recoveredPrimaryReduction(state: Readonly<TaskState>, event: TaskEvent)
 
 /**
  * Pure ACP-3.0 orchestration kernel for one accepted primary cause. The caller
- * is responsible for durably storing each returned cycle transition before any
- * later external side effect. A recovered `reduced` cycle must be paired with a
- * TaskState that already contains the accepted primary event; historical text
- * is never reinterpreted to reconstruct directives.
+ * durably stores the cycle before entry and each returned transition before a
+ * later external side effect. Accepted/reduced cycles can recover directives
+ * from the cycle itself; planned cycles retain the bounded NextStep so a crash
+ * cannot require a second Planner invocation merely to reconstruct handoff.
  */
 export async function runHotelPlanningCycle(input: HotelPlanningCycleInput): Promise<HotelPlanningCycleResult> {
   if (!validTimestamp(input.now)) return rejected(input.state, input.cycle, input.now, "invalid_cycle_timestamp");
   if (!cycleMatches(input.cycle, input.primaryEvent, input.trigger)) {
     return rejected(input.state, input.cycle, input.now, "cycle_primary_cause_mismatch");
   }
-  if (input.cycle.status === "planned" || input.cycle.status === "completed") {
+  if (input.cycle.status === "planned") {
+    if (!input.cycle.plannedStep || !Number.isInteger(input.cycle.plannedAtStateRevision) || Number(input.cycle.plannedAtStateRevision) < 0) {
+      return rejected(input.state, input.cycle, input.now, "planned_cycle_missing_step");
+    }
+    return {
+      kind: "already_planned",
+      state: input.state as TaskState,
+      cycle: input.cycle as OrchestrationCycleRecord,
+      nextStep: structuredClone(input.cycle.plannedStep),
+    };
+  }
+  if (input.cycle.status === "completed") {
     return { kind: "already_planned", state: input.state as TaskState, cycle: input.cycle as OrchestrationCycleRecord };
   }
   if (input.cycle.status === "failed") return rejected(input.state, input.cycle, input.now, "cycle_already_failed");
@@ -275,9 +323,6 @@ export async function runHotelPlanningCycle(input: HotelPlanningCycleInput): Pro
         disposition: serverDisposition!,
       };
     }
-    if (!input.trigger) return rejected(primaryReduction.state, cycleAfterReduce, input.now, "planning_trigger_missing", primaryReduction);
-  } else if (!input.trigger) {
-    return rejected(primaryReduction.state, cycleAfterReduce, input.now, "planning_trigger_missing", primaryReduction);
   }
 
   let state = primaryReduction.state;
@@ -300,7 +345,8 @@ export async function runHotelPlanningCycle(input: HotelPlanningCycleInput): Pro
     groundingEvents.push(event);
   }
 
-  const trigger = normalizedTrigger(input.primaryEvent, input.trigger!);
+  const recoveredTrigger = input.trigger ?? triggerFromCycle(cycleAfterReduce, input.primaryEvent);
+  const trigger = normalizedTrigger(input.primaryEvent, recoveredTrigger);
   const nextStep = await planHotelTask({
     state,
     trigger,
@@ -310,7 +356,7 @@ export async function runHotelPlanningCycle(input: HotelPlanningCycleInput): Pro
   return {
     kind: "planned",
     state,
-    cycle: updatedCycle(cycleAfterReduce, "planned", input.now),
+    cycle: plannedCycle(cycleAfterReduce, nextStep, state.stateRevision, input.now),
     primaryReduction,
     internalGroundingEvents: groundingEvents,
     groundingDiagnostics: resolution.diagnostics,
