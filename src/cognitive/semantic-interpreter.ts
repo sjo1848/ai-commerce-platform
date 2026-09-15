@@ -101,6 +101,15 @@ export type TrustedInterpreterInput = {
   domainSemanticContract: InterpreterDomainSemanticContract;
 };
 
+type TrustedInterpreterBinding = {
+  sessionId: string;
+  taskId: string;
+  stateRevision: number;
+};
+
+const trustedInputBindings = new WeakMap<TrustedInterpreterInput, TrustedInterpreterBinding>();
+const admittedOutputBindings = new WeakMap<InterpreterOutput, TrustedInterpreterBinding>();
+
 export type PresentedEntityInput = { kind: "room" | "booking" | "hotel"; label: string };
 
 function requireBoundedTrustedInput(args: {
@@ -190,7 +199,13 @@ export function buildTrustedInterpreterInput(args: {
       contextualReferenceRoles: ["focused_entity", "current_selection", "presented_set"],
     },
   };
-  return deepFreeze(projected);
+  deepFreeze(projected);
+  trustedInputBindings.set(projected, {
+    sessionId: args.state.sessionId,
+    taskId: args.state.taskId,
+    stateRevision: args.state.stateRevision,
+  });
+  return projected;
 }
 
 export type InterpreterAdmissionRejection =
@@ -202,8 +217,6 @@ export type InterpreterAdmissionRejection =
 export type InterpreterAdmission =
   | { ok: true; output: InterpreterOutput }
   | { ok: false; rejection: InterpreterAdmissionRejection };
-
-const admittedOutputs = new WeakSet<InterpreterOutput>();
 
 function record(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -424,6 +437,8 @@ function semanticCombinationValid(output: InterpreterOutput, input: TrustedInter
 }
 
 export function admitInterpreterOutput(raw: unknown, input: TrustedInterpreterInput): InterpreterAdmission {
+  const binding = trustedInputBindings.get(input);
+  if (!binding) throw new TypeError("TrustedInterpreterInput must be built by buildTrustedInterpreterInput");
   if (!record(raw) || !exactKeys(raw, ["classification", "taskSemanticChanges", "directives", "temporalResolutionProvenance"])) return { ok: false, rejection: "invalid_output_schema" };
   if (raw.classification !== "task" && raw.classification !== "social" && raw.classification !== "help" && raw.classification !== "unknown") return { ok: false, rejection: "invalid_output_schema" };
   if (raw.taskSemanticChanges !== undefined && !validateSemanticPatch(raw.taskSemanticChanges)) return { ok: false, rejection: "invalid_output_schema" };
@@ -434,7 +449,7 @@ export function admitInterpreterOutput(raw: unknown, input: TrustedInterpreterIn
   const rejection = semanticCombinationValid(output, input);
   if (rejection) return { ok: false, rejection };
   deepFreeze(output);
-  admittedOutputs.add(output);
+  admittedOutputBindings.set(output, binding);
   return { ok: true, output };
 }
 
@@ -464,8 +479,28 @@ function materializedRetryTarget(target: InterpreterRetryTarget | undefined): st
   return target;
 }
 
+function boundedEnvelopeId(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 200;
+}
+
+function assertServerEnvelope(binding: TrustedInterpreterBinding, server: InterpreterServerEnvelope): void {
+  if (!boundedEnvelopeId(server.eventId) || !boundedEnvelopeId(server.sessionId) || !boundedEnvelopeId(server.taskId)) {
+    throw new TypeError("Interpreter server envelope IDs are invalid");
+  }
+  if (server.causationId !== undefined && !boundedEnvelopeId(server.causationId)) throw new TypeError("Interpreter causationId is invalid");
+  if (!Number.isInteger(server.expectedStateRevision) || server.expectedStateRevision < 0) throw new TypeError("Interpreter expectedStateRevision is invalid");
+  if (!server.occurredAt || !Number.isFinite(Date.parse(server.occurredAt))) throw new TypeError("Interpreter occurredAt is invalid");
+  if (
+    server.sessionId !== binding.sessionId ||
+    server.taskId !== binding.taskId ||
+    server.expectedStateRevision !== binding.stateRevision
+  ) throw new TypeError("Interpreter server envelope does not match originating TaskState");
+}
+
 export function materializeInterpreterArtifacts(output: InterpreterOutput, server: InterpreterServerEnvelope): InterpreterArtifacts {
-  if (!admittedOutputs.has(output)) throw new TypeError("InterpreterOutput must pass admission before materialization");
+  const binding = admittedOutputBindings.get(output);
+  if (!binding) throw new TypeError("InterpreterOutput must pass admission before materialization");
+  assertServerEnvelope(binding, server);
   if (output.classification === "unknown") throw new TypeError("Unknown semantic classification cannot become a Planner trigger");
   const directives = output.directives;
   const read = directives?.readRequest;
