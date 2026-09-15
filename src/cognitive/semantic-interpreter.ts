@@ -102,6 +102,31 @@ export type TrustedInterpreterInput = {
 
 export type PresentedEntityInput = { kind: "room" | "booking" | "hotel"; label: string };
 
+function requireBoundedTrustedInput(args: {
+  currentUserMessage: string;
+  temporalContext: InterpreterTemporalContext;
+  presentedEntities?: readonly PresentedEntityInput[];
+  focusedOrdinal?: number;
+}): void {
+  if (typeof args.currentUserMessage !== "string" || args.currentUserMessage.length === 0 || args.currentUserMessage.length > 8000) {
+    throw new RangeError("Interpreter currentUserMessage must contain 1..8000 characters");
+  }
+  if (
+    !args.temporalContext.trustedNow ||
+    !args.temporalContext.timezone ||
+    !args.temporalContext.locale ||
+    !args.temporalContext.temporalPolicyId
+  ) throw new TypeError("Trusted temporal context is incomplete");
+  const entities = args.presentedEntities ?? [];
+  if (entities.length > 20) throw new RangeError("Interpreter presentation context exceeds 20 entities");
+  for (const entity of entities) {
+    if (!entity.label || entity.label.length > 120) throw new RangeError("Interpreter presentation labels must contain 1..120 characters");
+  }
+  if (args.focusedOrdinal !== undefined && (!Number.isInteger(args.focusedOrdinal) || args.focusedOrdinal < 1 || args.focusedOrdinal > entities.length)) {
+    throw new RangeError("focusedOrdinal must identify a presented entity");
+  }
+}
+
 export function buildTrustedInterpreterInput(args: {
   currentUserMessage: string;
   state: Readonly<TaskState>;
@@ -109,16 +134,17 @@ export function buildTrustedInterpreterInput(args: {
   presentedEntities?: readonly PresentedEntityInput[];
   focusedOrdinal?: number;
 }): TrustedInterpreterInput {
-  const entities = (args.presentedEntities ?? []).slice(0, 20).map((entity, index) => ({
+  requireBoundedTrustedInput(args);
+  const entities = (args.presentedEntities ?? []).map((entity, index) => ({
     handle: `presented_${index + 1}`,
     kind: entity.kind,
-    label: entity.label.slice(0, 120),
+    label: entity.label,
     ordinal: index + 1,
   }));
   const focused = args.focusedOrdinal !== undefined ? entities[args.focusedOrdinal - 1] : undefined;
   const anchor = args.state.control.dialogueAnchor;
   return {
-    currentUserMessage: args.currentUserMessage.slice(0, 8000),
+    currentUserMessage: args.currentUserMessage,
     taskContext: {
       lifecycle: args.state.lifecycle,
       ...(args.state.user.requestedGoal !== undefined ? { requestedGoal: args.state.user.requestedGoal } : {}),
@@ -164,8 +190,18 @@ export type InterpreterAdmission =
   | { ok: true; output: InterpreterOutput }
   | { ok: false; rejection: InterpreterAdmissionRejection };
 
+const admittedOutputs = new WeakSet<InterpreterOutput>();
+
 function record(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const nested of Object.values(value as Record<string, unknown>)) deepFreeze(nested);
+    Object.freeze(value);
+  }
+  return value;
 }
 
 function exactKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
@@ -298,6 +334,17 @@ function referenceContextValid(reference: RoomReference | BookingReference, inpu
   return reference.role === "presented_set" && Boolean(input.dialogueAnchor?.hasPresentedSet && input.presentationContext?.entities.length);
 }
 
+function effectivePatch<T>(current: T | undefined, value: { op: "set"; value: T } | { op: "clear" } | undefined): T | undefined {
+  if (!value) return current;
+  return value.op === "set" ? value.value : undefined;
+}
+
+function expectedGoal(intent: OperationIntent): RequestedGoal {
+  if (intent === "reserve") return "reservation";
+  if (intent === "cancel") return "cancellation";
+  return "modification";
+}
+
 function semanticCombinationValid(output: InterpreterOutput, input: TrustedInterpreterInput): InterpreterAdmissionRejection | undefined {
   const changes = output.taskSemanticChanges;
   const directives = output.directives;
@@ -307,21 +354,28 @@ function semanticCombinationValid(output: InterpreterOutput, input: TrustedInter
   if (output.classification === "help" && directives && Object.keys(directives).some((key) => key !== "interaction")) return "invalid_semantic_combination";
   if (output.classification === "task" && changes === undefined && directives === undefined) return "invalid_semantic_combination";
 
-  if (directives?.abortCurrentOperation === true) {
-    if (!changes?.operationIntent || changes.operationIntent.op !== "clear") return "invalid_semantic_combination";
+  if (directives?.abortCurrentOperation === true && (!changes?.operationIntent || changes.operationIntent.op !== "clear")) {
+    return "invalid_semantic_combination";
   }
+
+  const effectiveGoal = effectivePatch(input.taskContext.requestedGoal, changes?.requestedGoal);
+  const effectiveIntent = effectivePatch(input.taskContext.operationIntent, changes?.operationIntent);
+  if (effectiveIntent && (!effectiveGoal || expectedGoal(effectiveIntent) !== effectiveGoal)) return "invalid_semantic_combination";
 
   const selection = changes?.requestedSelectionReference;
   if (selection?.op === "set" && !referenceContextValid(selection.value, input)) return "invalid_contextual_reference";
   const booking = changes?.bookingReference;
   if (booking?.op === "set" && !referenceContextValid(booking.value, input)) return "invalid_contextual_reference";
+
   const occ = changes?.requestedOccupancy;
   if (occ?.op === "set") {
+    const rooms = occ.value.kind === "ordered_distribution" ? occ.value.guestsPerRoom.length : occ.value.assignments.length;
+    const roomCount = effectivePatch(input.taskContext.requestedRoomCount, changes?.requestedRoomCount);
+    if (roomCount !== undefined && rooms !== roomCount) return "invalid_semantic_combination";
     if (occ.value.kind === "ordered_distribution") {
       const anchored = Boolean(input.dialogueAnchor?.kind === "occupancy" || input.taskContext.hasGroundedSelection || input.dialogueAnchor?.hasPresentedSet);
       if (!anchored) return "invalid_contextual_reference";
-      const guestsPatch = changes?.stay?.guests;
-      const effectiveGuests = guestsPatch?.op === "set" ? guestsPatch.value : guestsPatch?.op === "clear" ? undefined : input.taskContext.stay.guests;
+      const effectiveGuests = effectivePatch(input.taskContext.stay.guests, changes?.stay?.guests);
       const total = occ.value.guestsPerRoom.reduce((sum, guests) => sum + guests, 0);
       if (effectiveGuests !== undefined && total !== effectiveGuests) return "invalid_semantic_combination";
     }
@@ -348,14 +402,12 @@ export function admitInterpreterOutput(raw: unknown, input: TrustedInterpreterIn
   if (raw.directives !== undefined && !validateDirectives(raw.directives)) return { ok: false, rejection: "invalid_output_schema" };
   if (raw.temporalResolutionProvenance !== undefined && !validateTemporal(raw.temporalResolutionProvenance)) return { ok: false, rejection: "invalid_output_schema" };
 
-  const output: InterpreterOutput = {
-    classification: raw.classification,
-    ...(raw.taskSemanticChanges !== undefined ? { taskSemanticChanges: raw.taskSemanticChanges as UserSemanticPatch } : {}),
-    ...(raw.directives !== undefined ? { directives: raw.directives as InterpreterDirectives } : {}),
-    ...(raw.temporalResolutionProvenance !== undefined ? { temporalResolutionProvenance: raw.temporalResolutionProvenance as TemporalResolutionProvenance } : {}),
-  };
+  const output = JSON.parse(JSON.stringify(raw)) as InterpreterOutput;
   const rejection = semanticCombinationValid(output, input);
-  return rejection ? { ok: false, rejection } : { ok: true, output };
+  if (rejection) return { ok: false, rejection };
+  deepFreeze(output);
+  admittedOutputs.add(output);
+  return { ok: true, output };
 }
 
 export type InterpreterServerEnvelope = {
@@ -378,6 +430,7 @@ function nonEmptyPatch(patchValue: UserSemanticPatch | undefined): patchValue is
 }
 
 export function materializeInterpreterArtifacts(output: InterpreterOutput, server: InterpreterServerEnvelope): InterpreterArtifacts {
+  if (!admittedOutputs.has(output)) throw new TypeError("InterpreterOutput must pass admission before materialization");
   const directives = output.directives;
   const read = directives?.readRequest;
   const planningTrigger: PlanningTrigger = {
