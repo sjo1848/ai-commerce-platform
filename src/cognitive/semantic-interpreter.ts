@@ -322,6 +322,7 @@ function validateTemporal(value: unknown): value is TemporalResolutionProvenance
   if (value.expressionClass !== "relative" && value.expressionClass !== "day_month" && value.expressionClass !== "month_name" && value.expressionClass !== "yearless_range" && value.expressionClass !== "explicit_date") return false;
   if (!stringValue(value.trustedNow, 80) || !stringValue(value.timezone, 80) || !stringValue(value.policyId, 80)) return false;
   if (!record(value.normalized) || !exactKeys(value.normalized, ["checkIn", "checkOut"])) return false;
+  if (value.normalized.checkIn === undefined && value.normalized.checkOut === undefined) return false;
   if (value.normalized.checkIn !== undefined && !isoDate(value.normalized.checkIn)) return false;
   if (value.normalized.checkOut !== undefined && !isoDate(value.normalized.checkOut)) return false;
   return true;
@@ -357,10 +358,19 @@ function semanticCombinationValid(output: InterpreterOutput, input: TrustedInter
   if (directives?.abortCurrentOperation === true && (!changes?.operationIntent || changes.operationIntent.op !== "clear")) {
     return "invalid_semantic_combination";
   }
+  if (directives?.retry && directives.retry.targetOperation === undefined && input.taskContext.retryableFailureCount !== 1) {
+    return "invalid_semantic_combination";
+  }
 
   const effectiveGoal = effectivePatch(input.taskContext.requestedGoal, changes?.requestedGoal);
   const effectiveIntent = effectivePatch(input.taskContext.operationIntent, changes?.operationIntent);
   if (effectiveIntent && (!effectiveGoal || expectedGoal(effectiveIntent) !== effectiveGoal)) return "invalid_semantic_combination";
+
+  const effectiveCheckIn = effectivePatch(input.taskContext.stay.checkIn, changes?.stay?.checkIn);
+  const effectiveCheckOut = effectivePatch(input.taskContext.stay.checkOut, changes?.stay?.checkOut);
+  if (effectiveCheckIn !== undefined && effectiveCheckOut !== undefined && effectiveCheckIn >= effectiveCheckOut) {
+    return "invalid_semantic_combination";
+  }
 
   const selection = changes?.requestedSelectionReference;
   if (selection?.op === "set" && !referenceContextValid(selection.value, input)) return "invalid_contextual_reference";
@@ -429,14 +439,23 @@ function nonEmptyPatch(patchValue: UserSemanticPatch | undefined): patchValue is
   return Boolean(patchValue && Object.keys(patchValue).length > 0);
 }
 
+function materializedRetryTarget(target: InterpreterRetryTarget | undefined): string | undefined {
+  if (target === "reservation") return "reserve";
+  if (target === "cancellation") return "cancel";
+  if (target === "modification") return "modify";
+  return target;
+}
+
 export function materializeInterpreterArtifacts(output: InterpreterOutput, server: InterpreterServerEnvelope): InterpreterArtifacts {
   if (!admittedOutputs.has(output)) throw new TypeError("InterpreterOutput must pass admission before materialization");
+  if (output.classification === "unknown") throw new TypeError("Unknown semantic classification cannot become a Planner trigger");
   const directives = output.directives;
   const read = directives?.readRequest;
+  const retryTarget = materializedRetryTarget(directives?.retry?.targetOperation);
   const planningTrigger: PlanningTrigger = {
     origin: "user",
     acceptedEventId: server.eventId,
-    ...(directives?.retry ? { retryDirective: { ...(directives.retry.targetOperation ? { targetOperation: directives.retry.targetOperation } : {}) } } : {}),
+    ...(directives?.retry ? { retryDirective: { ...(retryTarget ? { targetOperation: retryTarget } : {}) } } : {}),
     ...(read && read.kind !== "show_options"
       ? { readDirective: { kind: read.kind === "compare_price" ? "compare" : read.kind, ...(read.target ? { target: read.target } : {}) } }
       : {}),
