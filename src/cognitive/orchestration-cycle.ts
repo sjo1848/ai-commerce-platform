@@ -232,30 +232,32 @@ export async function runHotelPlanningCycle(input: HotelPlanningCycleInput): Pro
   }
   if (input.cycle.status === "failed") return rejected(input.state, input.cycle, input.now, "cycle_already_failed");
 
+  let primaryReduction: TaskStateReduction;
+  let cycleAfterReduce: OrchestrationCycleRecord;
+
   if (input.primaryEvent.kind === "server_control") {
     const disposition = serverControlDisposition(input.primaryEvent.payload);
     if (!disposition) return rejected(input.state, input.cycle, input.now, "unknown_server_control_disposition");
     if (disposition === "INTERNAL_PREPLAN") return rejected(input.state, input.cycle, input.now, "internal_preplan_cannot_open_primary_cycle");
 
-    const primaryReduction = reduceTaskState(input.state, input.primaryEvent);
+    primaryReduction = reduceTaskState(input.state, input.primaryEvent);
     if (!primaryReduction.accepted) return rejected(input.state, input.cycle, input.now, `primary_reducer_rejected:${primaryReduction.rejection ?? "unknown"}`, primaryReduction);
-    const reducedCycle = updatedCycle(input.cycle, "reduced", input.now);
+    cycleAfterReduce = updatedCycle(input.cycle, "reduced", input.now);
     if (disposition === "RESUME_EXECUTION") {
-      return { kind: "resume_execution", state: primaryReduction.state, cycle: reducedCycle, primaryReduction, disposition };
+      return { kind: "resume_execution", state: primaryReduction.state, cycle: cycleAfterReduce, primaryReduction, disposition };
     }
     if (disposition !== "PLANNING_TRIGGER") {
-      return { kind: "no_plan", state: primaryReduction.state, cycle: reducedCycle, primaryReduction, disposition };
+      return { kind: "no_plan", state: primaryReduction.state, cycle: cycleAfterReduce, primaryReduction, disposition };
     }
-    if (!input.trigger) return rejected(primaryReduction.state, reducedCycle, input.now, "planning_trigger_missing", primaryReduction);
-  } else if (!input.trigger) {
-    return rejected(input.state, input.cycle, input.now, "planning_trigger_missing");
+    if (!input.trigger) return rejected(primaryReduction.state, cycleAfterReduce, input.now, "planning_trigger_missing", primaryReduction);
+  } else {
+    if (!input.trigger) return rejected(input.state, input.cycle, input.now, "planning_trigger_missing");
+    primaryReduction = reduceTaskState(input.state, input.primaryEvent);
+    if (!primaryReduction.accepted) return rejected(input.state, input.cycle, input.now, `primary_reducer_rejected:${primaryReduction.rejection ?? "unknown"}`, primaryReduction);
+    cycleAfterReduce = updatedCycle(input.cycle, "reduced", input.now);
   }
 
-  const primaryReduction = reduceTaskState(input.state, input.primaryEvent);
-  if (!primaryReduction.accepted) return rejected(input.state, input.cycle, input.now, `primary_reducer_rejected:${primaryReduction.rejection ?? "unknown"}`, primaryReduction);
-
   let state = primaryReduction.state;
-  const cycleAfterReduce = updatedCycle(input.cycle, "reduced", input.now);
   const resolution = await resolveHotelReferences(state);
   if (resolution.instructions.length > MAX_INTERNAL_GROUNDING_STEPS) {
     return rejected(state, cycleAfterReduce, input.now, "internal_grounding_budget_exceeded", primaryReduction);
