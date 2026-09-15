@@ -55,7 +55,7 @@ export type InterpreterTaskContextProjection = {
   groundedSelectionCount: number;
   hasGroundedBookingTarget: boolean;
   pendingOperation?: { operationType: OperationIntent; status: "prepared" | "approval_required" | "approved" | "invalidated" };
-  retryableFailureCount: number;
+  retryableTargets: readonly InterpreterRetryTarget[];
 };
 
 export type InterpreterPresentedEntity = {
@@ -105,6 +105,7 @@ type TrustedInterpreterBinding = {
   sessionId: string;
   taskId: string;
   stateRevision: number;
+  retryableTargets: readonly InterpreterRetryTarget[];
 };
 
 const trustedInputBindings = new WeakMap<TrustedInterpreterInput, TrustedInterpreterBinding>();
@@ -112,11 +113,16 @@ const admittedOutputBindings = new WeakMap<InterpreterOutput, TrustedInterpreter
 
 export type PresentedEntityInput = { kind: "room" | "booking" | "hotel"; label: string };
 
+function validRetryTarget(value: unknown): value is InterpreterRetryTarget {
+  return value === "availability" || value === "quote" || value === "reservation" || value === "cancellation" || value === "modification";
+}
+
 function requireBoundedTrustedInput(args: {
   currentUserMessage: string;
   temporalContext: InterpreterTemporalContext;
   presentedEntities?: readonly PresentedEntityInput[];
   focusedOrdinal?: number;
+  retryableTargets?: readonly InterpreterRetryTarget[];
 }): void {
   if (typeof args.currentUserMessage !== "string" || args.currentUserMessage.length === 0 || args.currentUserMessage.length > 8000) {
     throw new RangeError("Interpreter currentUserMessage must contain 1..8000 characters");
@@ -140,6 +146,10 @@ function requireBoundedTrustedInput(args: {
   if (args.focusedOrdinal !== undefined && (!Number.isInteger(args.focusedOrdinal) || args.focusedOrdinal < 1 || args.focusedOrdinal > entities.length)) {
     throw new RangeError("focusedOrdinal must identify a presented entity");
   }
+  const retryableTargets = args.retryableTargets ?? [];
+  if (retryableTargets.length > 5 || new Set(retryableTargets).size !== retryableTargets.length || retryableTargets.some((target) => !validRetryTarget(target))) {
+    throw new TypeError("Interpreter retryableTargets must be a bounded unique semantic target set");
+  }
 }
 
 export function buildTrustedInterpreterInput(args: {
@@ -148,8 +158,10 @@ export function buildTrustedInterpreterInput(args: {
   temporalContext: InterpreterTemporalContext;
   presentedEntities?: readonly PresentedEntityInput[];
   focusedOrdinal?: number;
+  retryableTargets?: readonly InterpreterRetryTarget[];
 }): TrustedInterpreterInput {
   requireBoundedTrustedInput(args);
+  const retryableTargets = [...(args.retryableTargets ?? [])];
   const entities = (args.presentedEntities ?? []).map((entity, index) => ({
     handle: `presented_${index + 1}`,
     kind: entity.kind,
@@ -172,7 +184,7 @@ export function buildTrustedInterpreterInput(args: {
       ...(args.state.control.preparedOperation
         ? { pendingOperation: { operationType: args.state.control.preparedOperation.operationType, status: args.state.control.preparedOperation.status } }
         : {}),
-      retryableFailureCount: args.state.observations.failures.length,
+      retryableTargets,
     },
     ...(entities.length > 0 ? { presentationContext: { entities, ...(focused ? { focusedHandle: focused.handle } : {}) } } : {}),
     ...(anchor
@@ -204,6 +216,7 @@ export function buildTrustedInterpreterInput(args: {
     sessionId: args.state.sessionId,
     taskId: args.state.taskId,
     stateRevision: args.state.stateRevision,
+    retryableTargets,
   });
   return projected;
 }
@@ -330,7 +343,7 @@ function validateDirectives(value: unknown): value is InterpreterDirectives {
   if (value.retry !== undefined) {
     if (!record(value.retry) || !exactKeys(value.retry, ["targetOperation"])) return false;
     const target = value.retry.targetOperation;
-    if (target !== undefined && target !== "availability" && target !== "quote" && target !== "reservation" && target !== "cancellation" && target !== "modification") return false;
+    if (target !== undefined && !validRetryTarget(target)) return false;
   }
   if (value.readRequest !== undefined) {
     if (!record(value.readRequest) || !exactKeys(value.readRequest, ["kind", "target"])) return false;
@@ -384,7 +397,7 @@ function semanticCombinationValid(output: InterpreterOutput, input: TrustedInter
   if (directives?.abortCurrentOperation === true && (!changes?.operationIntent || changes.operationIntent.op !== "clear")) {
     return "invalid_semantic_combination";
   }
-  if (directives?.retry && directives.retry.targetOperation === undefined && input.taskContext.retryableFailureCount !== 1) {
+  if (directives?.retry && directives.retry.targetOperation === undefined && input.taskContext.retryableTargets.length !== 1) {
     return "invalid_semantic_combination";
   }
 
@@ -504,7 +517,8 @@ export function materializeInterpreterArtifacts(output: InterpreterOutput, serve
   if (output.classification === "unknown") throw new TypeError("Unknown semantic classification cannot become a Planner trigger");
   const directives = output.directives;
   const read = directives?.readRequest;
-  const retryTarget = materializedRetryTarget(directives?.retry?.targetOperation);
+  const semanticRetryTarget = directives?.retry?.targetOperation ?? (directives?.retry ? binding.retryableTargets[0] : undefined);
+  const retryTarget = materializedRetryTarget(semanticRetryTarget);
   const planningTrigger: PlanningTrigger = {
     origin: "user",
     acceptedEventId: server.eventId,
