@@ -71,7 +71,7 @@ test("reduced cycle resumes from cycle-owned directives without historical trigg
   assert.equal(result.primaryReduction.duplicate, true);
   assert.equal(result.planningTrigger.interactionDirective, "help");
   assert.equal(result.nextStep.kind, "RESPOND");
-  assert.equal(result.nextStep.responseIntent, "help");
+  assert.equal(result.nextStep.responseIntent, "interaction_help");
 });
 
 test("planned cycle returns persisted bounded NextStep after crash instead of invoking Planner again to reconstruct it", async () => {
