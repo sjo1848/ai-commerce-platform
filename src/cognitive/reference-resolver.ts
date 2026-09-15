@@ -1,6 +1,7 @@
 import type {
   BookingReference,
   DependencyPath,
+  DialogueAnchor,
   GroundedBookingTarget,
   GroundedSelection,
   RoomReference,
@@ -25,22 +26,42 @@ export type HotelReferenceResolution = {
   diagnostics: readonly GroundingDiagnostic[];
 };
 
-const RESOLVER_CONTRACT = "hotel_reference_resolver_v1@1";
+const RESOLVER_CONTRACT = "hotel_reference_resolver_v1@2";
 const MAX_GROUNDED_ROOMS = 10;
 
 function unique(values: readonly string[]): string[] {
   return [...new Set(values)];
 }
 
+function validAnchorScope(anchor: Readonly<DialogueAnchor>, allowedIds: ReadonlySet<string>, observationId: string): readonly string[] | undefined {
+  if (!anchor.candidateScope?.length || anchor.referencedObservationId !== observationId) return undefined;
+  const scope = unique(anchor.candidateScope);
+  if (scope.length !== anchor.candidateScope.length || scope.some((candidateId) => !allowedIds.has(candidateId))) return undefined;
+  if (anchor.focusedCandidate !== undefined && !scope.includes(anchor.focusedCandidate)) return undefined;
+  if (anchor.selectedCandidates !== undefined) {
+    if (anchor.selectedCandidates.length === 0) return undefined;
+    const selected = unique(anchor.selectedCandidates);
+    if (selected.length !== anchor.selectedCandidates.length || selected.some((candidateId) => !scope.includes(candidateId))) return undefined;
+  }
+  return scope;
+}
+
 function currentRoomScope(state: Readonly<TaskState>): readonly string[] | undefined {
   const availability = state.observations.availability;
   const anchor = state.control.dialogueAnchor;
-  if (!availability || !anchor?.candidateScope?.length) return undefined;
-  if (anchor.referencedObservationId !== availability.observationId) return undefined;
-  const valid = new Set(availability.rooms.map((room) => room.roomId));
-  const scope = unique(anchor.candidateScope);
-  if (scope.length !== anchor.candidateScope.length || scope.some((roomId) => !valid.has(roomId))) return undefined;
-  return scope;
+  if (!availability || !anchor) return undefined;
+  return validAnchorScope(anchor, new Set(availability.rooms.map((room) => room.roomId)), availability.observationId);
+}
+
+function roomAnchorFocus(state: Readonly<TaskState>, scope: readonly string[]): string | undefined {
+  const focus = state.control.dialogueAnchor?.focusedCandidate;
+  return focus && scope.includes(focus) ? focus : undefined;
+}
+
+function roomAnchorSelection(state: Readonly<TaskState>, scope: readonly string[]): readonly string[] | undefined {
+  const selected = state.control.dialogueAnchor?.selectedCandidates;
+  if (!selected?.length || selected.some((candidateId) => !scope.includes(candidateId))) return undefined;
+  return selected;
 }
 
 function resolveRoomIds(state: Readonly<TaskState>, reference: RoomReference): readonly string[] | undefined {
@@ -62,45 +83,56 @@ function resolveRoomIds(state: Readonly<TaskState>, reference: RoomReference): r
     return unique(ids).length === ids.length ? ids : undefined;
   }
   if (reference.kind === "contextual_anchor") {
-    if (reference.role === "presented_set") return scope?.length ? scope : undefined;
-    if (reference.role === "focused_entity") return scope?.length === 1 ? scope : undefined;
-    if (reference.role === "current_selection") {
-      const grounded = state.control.groundedSelection;
-      return grounded && grounded.sourceObservationId === availability.observationId && grounded.roomIds.length
-        ? grounded.roomIds
-        : undefined;
+    if (!scope) return undefined;
+    if (reference.role === "presented_set") return scope;
+    if (reference.role === "focused_entity") {
+      const focused = roomAnchorFocus(state, scope);
+      return focused ? [focused] : undefined;
     }
+    return roomAnchorSelection(state, scope);
   }
   if (reference.kind === "relation") {
-    if (reference.value === "both") return scope?.length === 2 ? scope : undefined;
-    const grounded = state.control.groundedSelection;
-    if (!scope || scope.length !== 2 || !grounded || grounded.roomIds.length !== 1) return undefined;
-    const current = grounded.roomIds[0]!;
-    if (!scope.includes(current)) return undefined;
+    if (!scope) return undefined;
+    if (reference.value === "both") return scope.length === 2 ? scope : undefined;
+    const selected = roomAnchorSelection(state, scope);
+    if (scope.length !== 2 || !selected || selected.length !== 1) return undefined;
+    const current = selected[0]!;
     return [scope[0] === current ? scope[1]! : scope[0]!];
   }
   return undefined;
 }
 
-function bookingAnchorCandidate(state: Readonly<TaskState>): string | undefined {
+function currentBookingScope(state: Readonly<TaskState>): readonly string[] | undefined {
   const booking = state.observations.booking;
   const anchor = state.control.dialogueAnchor;
-  if (!booking || !anchor?.candidateScope || anchor.candidateScope.length !== 1) return undefined;
-  if (anchor.referencedObservationId !== booking.observationId) return undefined;
-  return anchor.candidateScope[0] === booking.bookingId ? booking.bookingId : undefined;
+  if (!booking || !anchor) return undefined;
+  return validAnchorScope(anchor, new Set([booking.bookingId]), booking.observationId);
 }
 
 function resolveBookingId(state: Readonly<TaskState>, reference: BookingReference): string | undefined {
   const booking = state.observations.booking;
   if (!booking) return undefined;
   if (reference.kind === "visible_reference") return reference.value === booking.bookingId ? booking.bookingId : undefined;
-  if (reference.role === "focused_entity") return bookingAnchorCandidate(state);
-  if (reference.role === "current_selection") {
-    const grounded = state.control.groundedBookingTarget;
-    if (grounded && grounded.sourceObservationId === booking.observationId && grounded.bookingId === booking.bookingId) return booking.bookingId;
-    return bookingAnchorCandidate(state);
+
+  const scope = currentBookingScope(state);
+  if (!scope) return undefined;
+  const anchor = state.control.dialogueAnchor;
+  if (reference.role === "focused_entity") {
+    return anchor?.focusedCandidate === booking.bookingId ? booking.bookingId : undefined;
   }
-  return undefined;
+  return anchor?.selectedCandidates?.length === 1 && anchor.selectedCandidates[0] === booking.bookingId
+    ? booking.bookingId
+    : undefined;
+}
+
+function anchorFingerprintProjection(anchor: Readonly<DialogueAnchor> | undefined) {
+  return {
+    anchorId: anchor?.anchorId ?? null,
+    referencedObservationId: anchor?.referencedObservationId ?? null,
+    candidateScope: anchor?.candidateScope ?? [],
+    focusedCandidate: anchor?.focusedCandidate ?? null,
+    selectedCandidates: anchor?.selectedCandidates ?? [],
+  };
 }
 
 async function roomInstruction(
@@ -135,15 +167,7 @@ async function roomInstruction(
     observationId: availability.observationId,
     reference: reference as never,
     roomIds,
-    ...(usesAnchor
-      ? {
-          anchor: {
-            anchorId: state.control.dialogueAnchor?.anchorId ?? null,
-            referencedObservationId: state.control.dialogueAnchor?.referencedObservationId ?? null,
-            candidateScope: state.control.dialogueAnchor?.candidateScope ?? [],
-          },
-        }
-      : {}),
+    ...(usesAnchor ? { anchor: anchorFingerprintProjection(state.control.dialogueAnchor) } : {}),
   });
   const groundedSelection: GroundedSelection = {
     roomIds,
@@ -185,15 +209,7 @@ async function bookingInstruction(
     observationId: booking.observationId,
     reference: reference as never,
     bookingId,
-    ...(usesAnchor
-      ? {
-          anchor: {
-            anchorId: state.control.dialogueAnchor?.anchorId ?? null,
-            referencedObservationId: state.control.dialogueAnchor?.referencedObservationId ?? null,
-            candidateScope: state.control.dialogueAnchor?.candidateScope ?? [],
-          },
-        }
-      : {}),
+    ...(usesAnchor ? { anchor: anchorFingerprintProjection(state.control.dialogueAnchor) } : {}),
   });
   const groundedBookingTarget: GroundedBookingTarget = {
     bookingId,
