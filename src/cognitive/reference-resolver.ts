@@ -29,17 +29,22 @@ export type HotelReferenceResolution = {
 const RESOLVER_CONTRACT = "hotel_reference_resolver_v1@2";
 const MAX_GROUNDED_ROOMS = 10;
 
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
 function unique(values: readonly string[]): string[] {
   return [...new Set(values)];
 }
 
 function validAnchorScope(anchor: Readonly<DialogueAnchor>, allowedIds: ReadonlySet<string>, observationId: string): readonly string[] | undefined {
-  if (!anchor.candidateScope?.length || anchor.referencedObservationId !== observationId) return undefined;
+  if (!Array.isArray(anchor.candidateScope) || anchor.candidateScope.length === 0 || anchor.referencedObservationId !== observationId) return undefined;
+  if (anchor.candidateScope.some((candidateId) => !nonEmptyString(candidateId))) return undefined;
   const scope = unique(anchor.candidateScope);
   if (scope.length !== anchor.candidateScope.length || scope.some((candidateId) => !allowedIds.has(candidateId))) return undefined;
-  if (anchor.focusedCandidate !== undefined && !scope.includes(anchor.focusedCandidate)) return undefined;
+  if (anchor.focusedCandidate !== undefined && (!nonEmptyString(anchor.focusedCandidate) || !scope.includes(anchor.focusedCandidate))) return undefined;
   if (anchor.selectedCandidates !== undefined) {
-    if (anchor.selectedCandidates.length === 0) return undefined;
+    if (!Array.isArray(anchor.selectedCandidates) || anchor.selectedCandidates.length === 0 || anchor.selectedCandidates.some((candidateId) => !nonEmptyString(candidateId))) return undefined;
     const selected = unique(anchor.selectedCandidates);
     if (selected.length !== anchor.selectedCandidates.length || selected.some((candidateId) => !scope.includes(candidateId))) return undefined;
   }
@@ -55,12 +60,12 @@ function currentRoomScope(state: Readonly<TaskState>): readonly string[] | undef
 
 function roomAnchorFocus(state: Readonly<TaskState>, scope: readonly string[]): string | undefined {
   const focus = state.control.dialogueAnchor?.focusedCandidate;
-  return focus && scope.includes(focus) ? focus : undefined;
+  return nonEmptyString(focus) && scope.includes(focus) ? focus : undefined;
 }
 
 function roomAnchorSelection(state: Readonly<TaskState>, scope: readonly string[]): readonly string[] | undefined {
   const selected = state.control.dialogueAnchor?.selectedCandidates;
-  if (!selected?.length || selected.some((candidateId) => !scope.includes(candidateId))) return undefined;
+  if (!Array.isArray(selected) || selected.length === 0 || selected.some((candidateId) => !nonEmptyString(candidateId) || !scope.includes(candidateId))) return undefined;
   return selected;
 }
 
@@ -118,9 +123,9 @@ function resolveBookingId(state: Readonly<TaskState>, reference: BookingReferenc
   if (!scope) return undefined;
   const anchor = state.control.dialogueAnchor;
   if (reference.role === "focused_entity") {
-    return anchor?.focusedCandidate === booking.bookingId ? booking.bookingId : undefined;
+    return anchor && nonEmptyString(anchor.focusedCandidate) && anchor.focusedCandidate === booking.bookingId ? booking.bookingId : undefined;
   }
-  return anchor?.selectedCandidates?.length === 1 && anchor.selectedCandidates[0] === booking.bookingId
+  return anchor && Array.isArray(anchor.selectedCandidates) && anchor.selectedCandidates.length === 1 && anchor.selectedCandidates[0] === booking.bookingId
     ? booking.bookingId
     : undefined;
 }
@@ -129,9 +134,9 @@ function anchorFingerprintProjection(anchor: Readonly<DialogueAnchor> | undefine
   return {
     anchorId: anchor?.anchorId ?? null,
     referencedObservationId: anchor?.referencedObservationId ?? null,
-    candidateScope: anchor?.candidateScope ?? [],
-    focusedCandidate: anchor?.focusedCandidate ?? null,
-    selectedCandidates: anchor?.selectedCandidates ?? [],
+    candidateScope: Array.isArray(anchor?.candidateScope) ? anchor.candidateScope : [],
+    focusedCandidate: nonEmptyString(anchor?.focusedCandidate) ? anchor.focusedCandidate : null,
+    selectedCandidates: Array.isArray(anchor?.selectedCandidates) ? anchor.selectedCandidates : [],
   };
 }
 
