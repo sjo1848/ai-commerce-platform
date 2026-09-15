@@ -157,6 +157,13 @@ export type PreparedOperation = DependencyBound & {
   status: "prepared" | "approval_required" | "approved" | "invalidated";
 };
 
+/**
+ * Published conversational context only. Candidate identifiers are server-owned
+ * handles from the authoritative surface/observation, never model-authored truth.
+ * Focus/selection are stored separately from candidateScope so reduce-before-
+ * ground can resolve "esa" / "la otra" after old operational grounding has
+ * been causally invalidated by the new user reference.
+ */
 export type DialogueAnchor = {
   anchorId: string;
   kind: "dates" | "check_out" | "guests" | "selection" | "occupancy" | "booking_reference" | "confirmation" | "other_bounded";
@@ -165,6 +172,8 @@ export type DialogueAnchor = {
   dependencyPaths: readonly DependencyPath[];
   referencedObservationId?: string;
   candidateScope?: readonly string[];
+  focusedCandidate?: string;
+  selectedCandidates?: readonly string[];
 };
 
 export type ServerControlState = {
