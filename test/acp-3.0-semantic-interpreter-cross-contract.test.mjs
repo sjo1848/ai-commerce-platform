@@ -33,11 +33,12 @@ const temporalContext = {
   temporalPolicyId: "hotel-temporal-v1@1",
 };
 
-function projected(customState = state()) {
+function projected(customState = state(), retryableTargets = []) {
   return buildTrustedInterpreterInput({
     currentUserMessage: "probá de nuevo",
     state: customState,
     temporalContext,
+    retryableTargets,
   });
 }
 
@@ -62,16 +63,35 @@ function failure(id) {
   };
 }
 
-test("targetless retry is admitted only when exactly one retryable failure is visible", () => {
+test("targetless retry requires exactly one server-projected retryable semantic target", () => {
   const raw = { classification: "task", directives: { retry: {} } };
   assert.deepEqual(
-    admitInterpreterOutput(raw, projected(state({ failures: [] }))),
+    admitInterpreterOutput(raw, projected(state({ failures: [failure("historical")] }), [])),
     { ok: false, rejection: "invalid_semantic_combination" },
   );
-  assert.equal(admitInterpreterOutput(raw, projected(state({ failures: [failure("a")] }))).ok, true);
+
+  const admitted = admitInterpreterOutput(
+    raw,
+    projected(state({ failures: [failure("old-a"), failure("old-b")] }), ["availability"]),
+  );
+  assert.equal(admitted.ok, true);
+  const artifacts = materializeInterpreterArtifacts(admitted.output, envelope);
+  assert.deepEqual(artifacts.planningTrigger.retryDirective, { targetOperation: "availability" });
+
   assert.deepEqual(
-    admitInterpreterOutput(raw, projected(state({ failures: [failure("a"), failure("b")] }))),
+    admitInterpreterOutput(raw, projected(state(), ["availability", "quote"])),
     { ok: false, rejection: "invalid_semantic_combination" },
+  );
+});
+
+test("retryable target projection is bounded unique trusted context", () => {
+  assert.throws(
+    () => projected(state(), ["availability", "availability"]),
+    /bounded unique semantic target set/,
+  );
+  assert.throws(
+    () => projected(state(), ["availability", "quote", "reservation", "cancellation", "modification", "availability"]),
+    /bounded unique semantic target set/,
   );
 });
 
