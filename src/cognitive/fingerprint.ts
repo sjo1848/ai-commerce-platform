@@ -6,15 +6,18 @@ export type DependencyValue =
   | readonly DependencyValue[]
   | { readonly [key: string]: DependencyValue | undefined };
 
+type DependencyObject = { readonly [key: string]: DependencyValue | undefined };
+
 function canonicalize(value: DependencyValue): DependencyValue {
   if (typeof value === "number" && !Number.isFinite(value)) {
     throw new TypeError("Dependency projections must contain only finite numbers");
   }
-  if (Array.isArray(value)) return value.map(canonicalize);
+  if (Array.isArray(value)) return value.map((item) => canonicalize(item as DependencyValue));
   if (value !== null && typeof value === "object") {
+    const record = value as DependencyObject;
     const result: Record<string, DependencyValue> = {};
-    for (const key of Object.keys(value).sort()) {
-      const item = value[key];
+    for (const key of Object.keys(record).sort()) {
+      const item = record[key];
       if (item !== undefined) result[key] = canonicalize(item);
     }
     return result;
