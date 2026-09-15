@@ -81,6 +81,7 @@ export type InterpreterTemporalContext = {
   timezone: string;
   locale: string;
   temporalPolicyId: string;
+  bookingWindow?: { minDate: string; maxDate: string };
 };
 
 export type InterpreterDomainSemanticContract = {
@@ -113,10 +114,15 @@ function requireBoundedTrustedInput(args: {
   }
   if (
     !args.temporalContext.trustedNow ||
+    !Number.isFinite(Date.parse(args.temporalContext.trustedNow)) ||
     !args.temporalContext.timezone ||
     !args.temporalContext.locale ||
     !args.temporalContext.temporalPolicyId
-  ) throw new TypeError("Trusted temporal context is incomplete");
+  ) throw new TypeError("Trusted temporal context is incomplete or invalid");
+  if (args.temporalContext.bookingWindow) {
+    const { minDate, maxDate } = args.temporalContext.bookingWindow;
+    if (!isoDate(minDate) || !isoDate(maxDate) || minDate > maxDate) throw new TypeError("Trusted bookingWindow is invalid");
+  }
   const entities = args.presentedEntities ?? [];
   if (entities.length > 20) throw new RangeError("Interpreter presentation context exceeds 20 entities");
   for (const entity of entities) {
@@ -143,7 +149,7 @@ export function buildTrustedInterpreterInput(args: {
   }));
   const focused = args.focusedOrdinal !== undefined ? entities[args.focusedOrdinal - 1] : undefined;
   const anchor = args.state.control.dialogueAnchor;
-  return {
+  const projected: TrustedInterpreterInput = {
     currentUserMessage: args.currentUserMessage,
     taskContext: {
       lifecycle: args.state.lifecycle,
@@ -169,7 +175,13 @@ export function buildTrustedInterpreterInput(args: {
           },
         }
       : {}),
-    temporalContext: { ...args.temporalContext },
+    temporalContext: {
+      trustedNow: args.temporalContext.trustedNow,
+      timezone: args.temporalContext.timezone,
+      locale: args.temporalContext.locale,
+      temporalPolicyId: args.temporalContext.temporalPolicyId,
+      ...(args.temporalContext.bookingWindow ? { bookingWindow: { ...args.temporalContext.bookingWindow } } : {}),
+    },
     domainSemanticContract: {
       contractId: "hotel_semantics_v1@1",
       goals: ["availability", "quote", "reservation", "cancellation", "modification"],
@@ -178,6 +190,7 @@ export function buildTrustedInterpreterInput(args: {
       contextualReferenceRoles: ["focused_entity", "current_selection", "presented_set"],
     },
   };
+  return deepFreeze(projected);
 }
 
 export type InterpreterAdmissionRejection =
@@ -370,6 +383,11 @@ function semanticCombinationValid(output: InterpreterOutput, input: TrustedInter
   const effectiveCheckOut = effectivePatch(input.taskContext.stay.checkOut, changes?.stay?.checkOut);
   if (effectiveCheckIn !== undefined && effectiveCheckOut !== undefined && effectiveCheckIn >= effectiveCheckOut) {
     return "invalid_semantic_combination";
+  }
+  const bookingWindow = input.temporalContext.bookingWindow;
+  if (bookingWindow) {
+    if (effectiveCheckIn !== undefined && effectiveCheckIn < bookingWindow.minDate) return "invalid_semantic_combination";
+    if (effectiveCheckOut !== undefined && effectiveCheckOut > bookingWindow.maxDate) return "invalid_semantic_combination";
   }
 
   const selection = changes?.requestedSelectionReference;
