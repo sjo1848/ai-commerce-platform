@@ -1,9 +1,11 @@
 # ACP-3.0 I3 — HotelTaskDefinition + Deterministic Planner
 
-Status: IMPLEMENTATION CANDIDATE / GATE OPEN
+Status: `I3_DETERMINISTIC_PLANNER_PASS / CLOSED`
 Date: 2026-09-15
 Base: I2 exact PASS SHA `3474ca4a7007516ecc23ca9f50c96741736127d3`
 Branch: `feature/acp-3.0-i3-deterministic-planner`
+Reviewed implementation SHA: `a8c2421ea6504f4c0d16f6462c635fdf2f6a17ab`
+Review evidence: `.orchestration/reviews/ACP-3.0-I3-QA.md`
 
 ## Scope
 
@@ -56,7 +58,7 @@ Planner MUST NOT:
 
 `DomainCapabilities` is a semantic server-provided technical capability view. It is not Policy output and is not actor authorization.
 
-Bindings must match the exact `HotelTaskDefinition` contract identity. A tampered/mismatched capability view fails closed.
+Bindings must match the exact canonical `HotelTaskDefinition` v1 contract. A tampered/mismatched capability view or a self-consistently modified v1 definition fails closed.
 
 ## Fingerprints
 
@@ -71,19 +73,21 @@ Global `stateRevision` is not used as semantic freshness.
 ## Decision rules
 
 1. Terminal lifecycle first.
-2. Explicit abort/interaction/retry/read/show directives before background/pending work.
+2. Current ephemeral business directives (`read`, `retry`, `show`) are handled before presentation-only abort/interaction responses so a multi-intent turn does not lose its actionable directive. Durable state changes are already reduced before Planner invocation.
 3. Blocking semantic ambiguity/missing facts.
 4. Acquire needed operational truth via a declared read capability.
 5. Require server-grounded references for room/booking targets.
 6. Never turn goal into write commit; explicit `operationIntent` is required.
 7. Propose a declared native write capability only when grounded prerequisites exist.
-8. Approval/pending operation waits only when no newer explicit read/social directive must be handled.
-9. No booking lookup or modify capability is fabricated.
-10. Same PlanningContext yields the same NextStep.
+8. Approval/pending operation waits only when no newer explicit business/social directive must be handled.
+9. Completion requires a successful execution result linked to the current authoritative booking observation.
+10. Targetless retry fallback is allowed only for one uniquely eligible failure record; ambiguous retained failure history asks for a target. Write recovery remains Core-owned.
+11. No booking lookup or modify capability is fabricated.
+12. Same PlanningContext yields the same NextStep.
 
 ## I3 test gate
 
-Focused tests must cover at minimum:
+Focused tests cover:
 - real capability IDs/absence of lookup+modify;
 - full J01 synthetic Planner progression;
 - all stay facts supplied at once;
@@ -98,7 +102,13 @@ Focused tests must cover at minimum:
 - bounded retry and Core-owned write recovery;
 - social/ack while business work pending;
 - deterministic output/fingerprint;
-- capability-view tampering fail-closed.
+- capability-view tampering fail-closed;
+- persisted availability query mismatch fail-closed;
+- exact completion observation correlation;
+- ambiguous retained retry failures;
+- correlation-targeted retry;
+- read + abort/interaction multi-intent preservation;
+- self-consistently tampered TaskDefinition + capability view fail-closed.
 
 ## Non-goals
 
@@ -110,4 +120,21 @@ Focused tests must cover at minimum:
 - no Response Composer;
 - no second vertical.
 
-Gate remains open until exact-head `core-ci` and adversarial implementation review both pass.
+## Closure evidence
+
+Initial candidate `2046db09793bc70017b27f75461f6307159dc7cf` — CI RED on dependency projection typing.
+
+Rework `aa3dbfb34dc31d6041bd80571831be6605e1c4e8` — `core-ci` #690 PASS; adversarial review then found under-correlated completion, historical retry ambiguity and transient multi-intent precedence gaps.
+
+Final reviewed implementation `a8c2421ea6504f4c0d16f6462c635fdf2f6a17ab` — `core-ci` #692 / run `34929243570` PASS:
+- typecheck + full tests PASS;
+- staging E2E runner syntax PASS;
+- Cloudflare Worker config validation PASS.
+
+Adversarial QA: PASS, P0=0, P1=0, blocking P2=0.
+
+## Gate
+
+`I3_DETERMINISTIC_PLANNER_PASS = PASS`
+
+I4 Semantic Interpreter may open from the final I3 closure head after documentation-only closure CI is verified. Runtime integration remains blocked.
