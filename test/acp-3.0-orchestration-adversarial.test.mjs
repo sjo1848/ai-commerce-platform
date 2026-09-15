@@ -6,6 +6,10 @@ import { hotelDomainCapabilities } from "../dist/cognitive/hotel-task-definition
 const NOW = "2026-09-15T22:25:00.000Z";
 const capabilities = hotelDomainCapabilities();
 
+function planned(result) {
+  assert.equal(result.kind, "planned", result.kind === "rejected" ? `orchestration rejection: ${result.reason}` : undefined);
+}
+
 function toolPendingState() {
   return {
     schemaVersion: "acp-task-state-v1",
@@ -77,7 +81,7 @@ test("tool observation is the primary cause; fresh availability can ground a pre
     now: NOW,
   });
 
-  assert.equal(result.kind, "planned");
+  planned(result);
   assert.equal(result.primaryReduction.state.observations.availability.observationId, "availability-tool-cycle");
   assert.equal(result.primaryReduction.state.control.groundedSelection, undefined);
   assert.equal(result.internalGroundingEvents.length, 1);
@@ -166,7 +170,7 @@ test("date correction wins before grounding: stale availability/anchor are inval
     now: NOW,
   });
 
-  assert.equal(result.kind, "planned");
+  planned(result);
   assert.equal(result.primaryReduction.state.observations.availability, undefined);
   assert.equal(result.primaryReduction.state.control.groundedSelection, undefined);
   assert.equal(result.internalGroundingEvents.length, 0);
@@ -202,7 +206,7 @@ test("abort + read directives are both preserved through normalization; read rem
     capabilities,
     now: NOW,
   });
-  assert.equal(result.kind, "planned");
+  planned(result);
   assert.equal(result.state.user.operationIntent, undefined);
   assert.equal(result.planningTrigger.abortDirective, true);
   assert.deepEqual(result.planningTrigger.readDirective, { kind: "quote", target: "current_selection" });
