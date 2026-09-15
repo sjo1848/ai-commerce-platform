@@ -106,6 +106,68 @@ test("booking window constrains normalized semantic dates", () => {
   );
 });
 
+test("date normalization without provenance is rejected", () => {
+  const input = projected();
+  const raw = {
+    classification: "task",
+    taskSemanticChanges: {
+      stay: {
+        checkIn: { op: "set", value: "2026-12-28" },
+        checkOut: { op: "set", value: "2027-01-02" },
+      },
+    },
+  };
+  assert.deepEqual(
+    admitInterpreterOutput(raw, input),
+    { ok: false, rejection: "invalid_temporal_provenance" },
+  );
+});
+
+test("temporal provenance must cover every date set by the same output", () => {
+  const input = projected();
+  const partial = {
+    classification: "task",
+    taskSemanticChanges: {
+      stay: {
+        checkIn: { op: "set", value: "2026-12-28" },
+        checkOut: { op: "set", value: "2027-01-02" },
+      },
+    },
+    temporalResolutionProvenance: {
+      expressionClass: "yearless_range",
+      trustedNow: input.temporalContext.trustedNow,
+      timezone: input.temporalContext.timezone,
+      policyId: input.temporalContext.temporalPolicyId,
+      normalized: { checkIn: "2026-12-28" },
+    },
+  };
+  assert.deepEqual(
+    admitInterpreterOutput(partial, input),
+    { ok: false, rejection: "invalid_temporal_provenance" },
+  );
+});
+
+test("temporal provenance cannot claim a date that the semantic patch did not set", () => {
+  const input = projected();
+  const raw = {
+    classification: "task",
+    taskSemanticChanges: {
+      stay: { checkIn: { op: "set", value: "2026-12-28" } },
+    },
+    temporalResolutionProvenance: {
+      expressionClass: "day_month",
+      trustedNow: input.temporalContext.trustedNow,
+      timezone: input.temporalContext.timezone,
+      policyId: input.temporalContext.temporalPolicyId,
+      normalized: { checkIn: "2026-12-28", checkOut: "2027-01-02" },
+    },
+  };
+  assert.deepEqual(
+    admitInterpreterOutput(raw, input),
+    { ok: false, rejection: "invalid_temporal_provenance" },
+  );
+});
+
 test("provider request carries authoritative temporal policy rules as data", async () => {
   const provider = fakeProvider((request) => {
     const payload = JSON.parse(request.messages[1].content);
