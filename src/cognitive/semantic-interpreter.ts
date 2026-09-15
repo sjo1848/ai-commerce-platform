@@ -388,11 +388,14 @@ function expectedGoal(intent: OperationIntent): RequestedGoal {
 function semanticCombinationValid(output: InterpreterOutput, input: TrustedInterpreterInput): InterpreterAdmissionRejection | undefined {
   const changes = output.taskSemanticChanges;
   const directives = output.directives;
+  const hasBusinessDirective = Boolean(
+    directives?.retry || directives?.readRequest || directives?.showOptions === true || directives?.abortCurrentOperation === true,
+  );
   if (output.classification !== "task" && changes !== undefined) return "invalid_semantic_combination";
   if (output.classification === "unknown" && directives !== undefined) return "invalid_semantic_combination";
   if (output.classification === "social" && directives && Object.keys(directives).some((key) => key !== "interaction")) return "invalid_semantic_combination";
   if (output.classification === "help" && directives && Object.keys(directives).some((key) => key !== "interaction")) return "invalid_semantic_combination";
-  if (output.classification === "task" && changes === undefined && directives === undefined) return "invalid_semantic_combination";
+  if (output.classification === "task" && changes === undefined && !hasBusinessDirective) return "invalid_semantic_combination";
 
   if (directives?.abortCurrentOperation === true && (!changes?.operationIntent || changes.operationIntent.op !== "clear")) {
     return "invalid_semantic_combination";
@@ -528,7 +531,7 @@ export function materializeInterpreterArtifacts(output: InterpreterOutput, serve
       : {}),
     ...(directives?.showOptions === true || read?.kind === "show_options" ? { showOptionsDirective: true } : {}),
     ...(directives?.abortCurrentOperation === true ? { abortDirective: true } : {}),
-    ...(directives?.interaction
+    ...(output.classification !== "task" && directives?.interaction
       ? { interactionDirective: directives.interaction }
       : output.classification === "social"
         ? { interactionDirective: "social" }
