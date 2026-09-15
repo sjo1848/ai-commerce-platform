@@ -367,11 +367,30 @@ function validateTemporal(value: unknown): value is TemporalResolutionProvenance
   return true;
 }
 
-function referenceContextValid(reference: RoomReference | BookingReference, input: TrustedInterpreterInput): boolean {
+function focusedPresentationEntity(input: TrustedInterpreterInput): InterpreterPresentedEntity | undefined {
+  const handle = input.presentationContext?.focusedHandle;
+  return handle ? input.presentationContext?.entities.find((entity) => entity.handle === handle) : undefined;
+}
+
+function roomReferenceContextValid(reference: RoomReference, input: TrustedInterpreterInput): boolean {
   if (reference.kind !== "contextual_anchor") return true;
-  if (reference.role === "focused_entity") return Boolean(input.dialogueAnchor?.hasFocusedEntity && input.presentationContext?.focusedHandle);
-  if (reference.role === "current_selection") return input.taskContext.hasGroundedSelection || input.taskContext.hasGroundedBookingTarget;
-  return reference.role === "presented_set" && Boolean(input.dialogueAnchor?.hasPresentedSet && input.presentationContext?.entities.length);
+  if (reference.role === "focused_entity") {
+    return Boolean(input.dialogueAnchor?.hasFocusedEntity && focusedPresentationEntity(input)?.kind === "room");
+  }
+  if (reference.role === "current_selection") return input.taskContext.hasGroundedSelection;
+  return reference.role === "presented_set" && Boolean(
+    input.dialogueAnchor?.hasPresentedSet &&
+    input.presentationContext?.entities.length &&
+    input.presentationContext.entities.every((entity) => entity.kind === "room"),
+  );
+}
+
+function bookingReferenceContextValid(reference: BookingReference, input: TrustedInterpreterInput): boolean {
+  if (reference.kind !== "contextual_anchor") return true;
+  if (reference.role === "focused_entity") {
+    return Boolean(input.dialogueAnchor?.hasFocusedEntity && focusedPresentationEntity(input)?.kind === "booking");
+  }
+  return reference.role === "current_selection" && input.taskContext.hasGroundedBookingTarget;
 }
 
 function effectivePatch<T>(current: T | undefined, value: { op: "set"; value: T } | { op: "clear" } | undefined): T | undefined {
@@ -420,9 +439,9 @@ function semanticCombinationValid(output: InterpreterOutput, input: TrustedInter
   }
 
   const selection = changes?.requestedSelectionReference;
-  if (selection?.op === "set" && !referenceContextValid(selection.value, input)) return "invalid_contextual_reference";
+  if (selection?.op === "set" && !roomReferenceContextValid(selection.value, input)) return "invalid_contextual_reference";
   const booking = changes?.bookingReference;
-  if (booking?.op === "set" && !referenceContextValid(booking.value, input)) return "invalid_contextual_reference";
+  if (booking?.op === "set" && !bookingReferenceContextValid(booking.value, input)) return "invalid_contextual_reference";
 
   const occ = changes?.requestedOccupancy;
   if (occ?.op === "set") {
@@ -436,7 +455,7 @@ function semanticCombinationValid(output: InterpreterOutput, input: TrustedInter
       const total = occ.value.guestsPerRoom.reduce((sum, guests) => sum + guests, 0);
       if (effectiveGuests !== undefined && total !== effectiveGuests) return "invalid_semantic_combination";
     }
-    if (occ.value.kind === "explicit_assignments" && occ.value.assignments.some((assignment) => !referenceContextValid(assignment.room, input))) {
+    if (occ.value.kind === "explicit_assignments" && occ.value.assignments.some((assignment) => !roomReferenceContextValid(assignment.room, input))) {
       return "invalid_contextual_reference";
     }
   }
