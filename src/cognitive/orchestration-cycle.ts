@@ -267,7 +267,13 @@ export async function runHotelPlanningCycle(input: HotelPlanningCycleInput): Pro
       return { kind: "resume_execution", state: primaryReduction.state, cycle: cycleAfterReduce, primaryReduction, disposition: serverDisposition };
     }
     if (serverDisposition !== "PLANNING_TRIGGER") {
-      return { kind: "no_plan", state: primaryReduction.state, cycle: cycleAfterReduce, primaryReduction, disposition: serverDisposition! };
+      return {
+        kind: "no_plan",
+        state: primaryReduction.state,
+        cycle: updatedCycle(cycleAfterReduce, "completed", input.now),
+        primaryReduction,
+        disposition: serverDisposition!,
+      };
     }
     if (!input.trigger) return rejected(primaryReduction.state, cycleAfterReduce, input.now, "planning_trigger_missing", primaryReduction);
   } else if (!input.trigger) {
