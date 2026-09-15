@@ -154,7 +154,7 @@ test("commit may be admitted before final room grounding", () => {
   const noSelectionState = state();
   delete noSelectionState.control.groundedSelection;
   const projected = buildTrustedInterpreterInput({
-    currentUserMessage: "reservame una habitación para dos del 15 al 17",
+    currentUserMessage: "reservame una habitación",
     state: noSelectionState,
     temporalContext: input().temporalContext,
   });
@@ -162,11 +162,6 @@ test("commit may be admitted before final room grounding", () => {
     classification: "task",
     taskSemanticChanges: {
       requestedGoal: { op: "set", value: "reservation" },
-      stay: {
-        checkIn: { op: "set", value: "2027-01-15" },
-        checkOut: { op: "set", value: "2027-01-17" },
-        guests: { op: "set", value: 2 },
-      },
       operationIntent: { op: "set", value: "reserve" },
     },
   };
