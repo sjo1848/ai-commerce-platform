@@ -1,10 +1,20 @@
-function canonicalize(value: unknown): unknown {
+export type DependencyValue =
+  | null
+  | boolean
+  | number
+  | string
+  | readonly DependencyValue[]
+  | { readonly [key: string]: DependencyValue | undefined };
+
+function canonicalize(value: DependencyValue): DependencyValue {
+  if (typeof value === "number" && !Number.isFinite(value)) {
+    throw new TypeError("Dependency projections must contain only finite numbers");
+  }
   if (Array.isArray(value)) return value.map(canonicalize);
   if (value !== null && typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    const result: Record<string, unknown> = {};
-    for (const key of Object.keys(record).sort()) {
-      const item = record[key];
+    const result: Record<string, DependencyValue> = {};
+    for (const key of Object.keys(value).sort()) {
+      const item = value[key];
       if (item !== undefined) result[key] = canonicalize(item);
     }
     return result;
@@ -12,18 +22,21 @@ function canonicalize(value: unknown): unknown {
   return value;
 }
 
+export function canonicalDependencyProjection(value: DependencyValue): string {
+  return JSON.stringify(canonicalize(value));
+}
+
 /**
- * Stable causal fingerprint for bounded server-owned dependency projections.
- * This is intentionally not a security primitive and must never replace
- * authorization, signatures, idempotency tokens or policy checks.
+ * Collision-resistant causal identity for bounded, server-owned dependency
+ * projections. SHA-256 is used because equality of these identities participates
+ * in staleness/pre-write revalidation. It is still NOT authorization, a
+ * signature, an idempotency token, or a policy decision.
  */
-export function dependencyFingerprint(value: unknown): string {
-  const encoded = new TextEncoder().encode(JSON.stringify(canonicalize(value)));
-  let hash = 0xcbf29ce484222325n;
-  const prime = 0x100000001b3n;
-  for (const byte of encoded) {
-    hash ^= BigInt(byte);
-    hash = BigInt.asUintN(64, hash * prime);
-  }
-  return `fp1:${hash.toString(16).padStart(16, "0")}`;
+export async function dependencyFingerprint(value: DependencyValue): Promise<string> {
+  const encoded = new TextEncoder().encode(canonicalDependencyProjection(value));
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", encoded);
+  const hex = [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+  return `fp1:sha256:${hex}`;
 }

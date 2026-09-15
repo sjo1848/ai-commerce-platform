@@ -1,125 +1,92 @@
-import type { ConversationIntent, ConversationState } from "../core/conversation-state.js";
+import type { ConversationIntent, ConversationState, SemanticFactProvenance } from "../core/conversation-state.js";
 import type {
-  AvailabilityObservation,
-  BookingObservation,
+  AvailabilityCandidate,
   RequestedGoal,
-  TaskState,
+  TaskStateMigrationSeed,
 } from "./contracts.js";
-import { dependencyFingerprint } from "./fingerprint.js";
 
-function mapGoal(intent: ConversationIntent | undefined): RequestedGoal | undefined {
-  if (intent === "availability" || intent === "quote" || intent === "reservation" || intent === "cancellation") return intent;
+function mapGoal(state: Readonly<ConversationState>): RequestedGoal | undefined {
+  const intent = state.semanticMemory.activeIntent;
+  if (!intent || (intent.source !== "user" && intent.source !== "legacy")) return undefined;
+  const value: ConversationIntent = intent.value;
+  if (value === "availability" || value === "quote" || value === "reservation" || value === "cancellation") return value;
   return undefined;
 }
 
-function stateRevision(state: Readonly<ConversationState>): number {
-  return Math.max(
-    state.semanticMemory.revision,
-    state.roomSelectionRevision ?? 0,
-    state.bookingStateRevision ?? 0,
-  );
+function isRequestedFact(meta: SemanticFactProvenance | undefined): boolean {
+  return Boolean(meta && !meta.cleared && (meta.source === "user" || meta.source === "legacy"));
 }
 
-function legacyAvailabilityObservation(state: Readonly<ConversationState>): AvailabilityObservation | undefined {
-  const { checkIn, checkOut, guests } = state.stay;
-  if (!checkIn || !checkOut || guests === undefined || state.availabilityRooms.length === 0) return undefined;
+function requestedStay(state: Readonly<ConversationState>): { checkIn?: string; checkOut?: string; guests?: number } {
+  const result: { checkIn?: string; checkOut?: string; guests?: number } = {};
+  if (state.stay.checkIn && isRequestedFact(state.semanticMemory.stay.checkIn)) result.checkIn = state.stay.checkIn;
+  if (state.stay.checkOut && isRequestedFact(state.semanticMemory.stay.checkOut)) result.checkOut = state.stay.checkOut;
+  if (state.stay.guests !== undefined && isRequestedFact(state.semanticMemory.stay.guests)) result.guests = state.stay.guests;
+  return result;
+}
 
-  const query = { checkIn, checkOut, guests };
-  const rooms = state.availabilityRooms.map((room) => ({
+function legacyAvailabilityRooms(state: Readonly<ConversationState>): AvailabilityCandidate[] {
+  return state.availabilityRooms.map((room) => ({
     roomId: room.id,
     ...(room.roomNumber ? { roomNumber: room.roomNumber } : {}),
     ...(room.roomType ? { roomType: room.roomType } : {}),
     ...(room.capacity !== undefined ? { capacity: room.capacity } : {}),
   }));
-  const fingerprint = dependencyFingerprint({ kind: "availability", query });
-  const observationId = `legacy-availability:${dependencyFingerprint({ query, rooms })}`;
-  return {
-    observationId,
-    status: "observed",
-    source: "legacy_migration",
-    query,
-    rooms,
-    dependencyFingerprint: fingerprint,
-  };
-}
-
-function legacyBookingObservation(state: Readonly<ConversationState>): BookingObservation | undefined {
-  if (!state.activeBookingId) return undefined;
-  const status = state.bookingStatus ?? "unknown";
-  const dependency = { kind: "booking", bookingId: state.activeBookingId };
-  return {
-    observationId: `legacy-booking:${dependencyFingerprint({ ...dependency, status })}`,
-    status,
-    source: "legacy_migration",
-    bookingId: state.activeBookingId,
-    dependencyFingerprint: dependencyFingerprint(dependency),
-  };
 }
 
 /**
  * One-way migration adapter for ACP-3.0 entry.
  *
- * It deliberately does not infer operationIntent from legacy activeIntent:
- * goal and executable commit are separate authorities in ACP-3.0.
- * Operational snapshots are marked legacy_migration so later implementation
- * can re-observe/re-ground them without treating migration as fresh tool truth.
+ * Only user/legacy-provenanced requested semantics enter TaskState. Operational
+ * compatibility data is returned OUTSIDE TaskState so it cannot accidentally
+ * satisfy Planner/Core truth requirements. A later migration stage may inspect
+ * legacyCompatibility to decide what needs fresh observation/grounding.
  */
 export function conversationStateToTaskStateSeed(
   state: Readonly<ConversationState>,
   input: { taskId: string },
-): TaskState {
-  const requestedGoal = mapGoal(state.semanticMemory.activeIntent?.value);
-  const availability = legacyAvailabilityObservation(state);
-  const booking = legacyBookingObservation(state);
-  const selectedRoomIds = availability
-    ? state.selectedRoomIds.filter((roomId) => availability.rooms.some((room) => room.roomId === roomId))
-    : [];
-
-  const groundedSelection = availability && selectedRoomIds.length > 0
-    ? {
-        roomIds: selectedRoomIds,
-        sourceObservationId: availability.observationId,
-        dependencyFingerprint: dependencyFingerprint({
-          kind: "selection",
-          observationId: availability.observationId,
-          roomIds: selectedRoomIds,
-        }),
-        authority: "legacy_migration" as const,
-      }
-    : undefined;
-
+): TaskStateMigrationSeed {
+  const requestedGoal = mapGoal(state);
   const roomSelectionRevision = state.roomSelectionRevision;
   const bookingStateRevision = state.bookingStateRevision;
 
   return {
-    schemaVersion: "acp-task-state-v1",
-    taskId: input.taskId,
-    lifecycle: "active",
-    stateRevision: stateRevision(state),
-    user: {
-      ...(requestedGoal ? { requestedGoal } : {}),
+    taskState: {
+      schemaVersion: "acp-task-state-v1",
+      taskId: input.taskId,
+      lifecycle: "active",
+      // ACP-3.0 starts a fresh revision domain. Legacy revisions remain provenance,
+      // not a global semantic freshness counter for the new state engine.
+      stateRevision: 0,
+      user: {
+        ...(requestedGoal ? { requestedGoal } : {}),
+        stay: requestedStay(state),
+        preferences: state.semanticMemory.preferences
+          .filter((preference) => preference.source === "user" || preference.source === "legacy")
+          .map((preference) => preference.value),
+      },
+      observations: { executionResults: [] },
+      control: {},
+      provenance: {
+        migratedFromConversationState: {
+          semanticMemoryRevision: state.semanticMemory.revision,
+          ...(roomSelectionRevision !== undefined ? { roomSelectionRevision } : {}),
+          ...(bookingStateRevision !== undefined ? { bookingStateRevision } : {}),
+        },
+      },
+    },
+    legacyCompatibility: {
       stay: {
         ...(state.stay.checkIn ? { checkIn: state.stay.checkIn } : {}),
         ...(state.stay.checkOut ? { checkOut: state.stay.checkOut } : {}),
         ...(state.stay.guests !== undefined ? { guests: state.stay.guests } : {}),
       },
-      preferences: state.semanticMemory.preferences.map((preference) => preference.value),
+      availabilityRooms: legacyAvailabilityRooms(state),
+      selectedRoomIds: [...state.selectedRoomIds],
       ...(state.requestedRoomCount !== undefined ? { requestedRoomCount: state.requestedRoomCount } : {}),
-    },
-    observations: {
-      ...(availability ? { availability } : {}),
-      ...(booking ? { booking } : {}),
-      executionResults: [],
-    },
-    control: {
-      ...(groundedSelection ? { groundedSelection } : {}),
-    },
-    provenance: {
-      migratedFromConversationState: {
-        semanticMemoryRevision: state.semanticMemory.revision,
-        ...(roomSelectionRevision !== undefined ? { roomSelectionRevision } : {}),
-        ...(bookingStateRevision !== undefined ? { bookingStateRevision } : {}),
-      },
+      roomOccupancy: state.roomOccupancy.map((entry) => ({ ...entry })),
+      ...(state.activeBookingId ? { activeBookingId: state.activeBookingId } : {}),
+      ...(state.bookingStatus ? { bookingStatus: state.bookingStatus } : {}),
     },
   };
 }

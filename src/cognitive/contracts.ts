@@ -42,7 +42,7 @@ export type AvailabilityCandidate = {
 export type AvailabilityObservation = {
   observationId: string;
   status: "observed";
-  source: "tool" | "legacy_migration";
+  source: "tool";
   query: { checkIn: string; checkOut: string; guests: number };
   rooms: readonly AvailabilityCandidate[];
   dependencyFingerprint: string;
@@ -51,7 +51,7 @@ export type AvailabilityObservation = {
 export type QuoteObservation = {
   observationId: string;
   status: "observed";
-  source: "tool" | "legacy_migration";
+  source: "tool";
   roomId: string;
   totalCents: number;
   currency: string;
@@ -61,7 +61,7 @@ export type QuoteObservation = {
 export type BookingObservation = {
   observationId: string;
   status: string;
-  source: "tool" | "legacy_migration";
+  source: "tool";
   bookingId: string;
   dependencyFingerprint: string;
 };
@@ -84,7 +84,7 @@ export type GroundedSelection = {
   roomIds: readonly string[];
   sourceObservationId: string;
   dependencyFingerprint: string;
-  authority: "server" | "legacy_migration";
+  authority: "server";
 };
 
 export type PendingToolInvocation = {
@@ -139,6 +139,27 @@ export type TaskState = {
   observations: ToolObservations;
   control: ServerControlState;
   provenance: TaskStateProvenance;
+};
+
+/**
+ * Compatibility data extracted from the legacy ConversationState boundary.
+ * It is deliberately NOT TaskState and must never be handed to Planner as
+ * current operational truth. Migration code may use it only to decide what
+ * must be re-observed/re-grounded before ACP-3.0 can act on it.
+ */
+export type LegacyCompatibilitySnapshot = {
+  stay: { checkIn?: string; checkOut?: string; guests?: number };
+  availabilityRooms: readonly AvailabilityCandidate[];
+  selectedRoomIds: readonly string[];
+  requestedRoomCount?: number;
+  roomOccupancy: readonly { roomId: string; guests: number }[];
+  activeBookingId?: string;
+  bookingStatus?: string;
+};
+
+export type TaskStateMigrationSeed = {
+  taskState: TaskState;
+  legacyCompatibility: LegacyCompatibilitySnapshot;
 };
 
 export type RetryDirective = { targetOperation?: string; correlationId?: string };
