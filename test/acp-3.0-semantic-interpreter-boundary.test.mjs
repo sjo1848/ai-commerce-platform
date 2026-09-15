@@ -311,20 +311,21 @@ test("provider failure/absence is rejection and creates no semantic fallback", (
   assert.deepEqual(admitInterpreterOutput("reservar", input()), { ok: false, rejection: "invalid_output_schema" });
 });
 
-test("server-owned envelope fields come only from materialization metadata", () => {
+test("server-owned envelope fields come only from materialization metadata while origin identity stays bound", () => {
   const admitted = admitInterpreterOutput(validTask(), input());
   assert.equal(admitted.ok, true);
   const artifacts = materializeInterpreterArtifacts(admitted.output, {
     eventId: "trusted-event",
-    sessionId: "trusted-session",
-    taskId: "trusted-task",
-    expectedStateRevision: 9,
+    sessionId: "session-i4",
+    taskId: "task-i4",
+    expectedStateRevision: 4,
     occurredAt: "2026-09-15T04:43:00.000Z",
     causationId: "ingress-1",
   });
   assert.equal(artifacts.userSemanticEvent.eventId, "trusted-event");
-  assert.equal(artifacts.userSemanticEvent.sessionId, "trusted-session");
-  assert.equal(artifacts.userSemanticEvent.taskId, "trusted-task");
-  assert.equal(artifacts.userSemanticEvent.expectedStateRevision, 9);
+  assert.equal(artifacts.userSemanticEvent.sessionId, "session-i4");
+  assert.equal(artifacts.userSemanticEvent.taskId, "task-i4");
+  assert.equal(artifacts.userSemanticEvent.expectedStateRevision, 4);
+  assert.equal(artifacts.userSemanticEvent.causationId, "ingress-1");
   assert.equal(artifacts.planningTrigger.acceptedEventId, "trusted-event");
 });
