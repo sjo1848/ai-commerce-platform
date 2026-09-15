@@ -7,7 +7,7 @@ import type {
   HotelCapabilityKey,
   HotelTaskDefinition,
 } from "./hotel-task-definition.js";
-import { HOTEL_TASK_DEFINITION_V1 } from "./hotel-task-definition.js";
+import { HOTEL_CAPABILITY_KEYS, HOTEL_TASK_DEFINITION_V1 } from "./hotel-task-definition.js";
 
 export type HotelPlanningContext = {
   state: Readonly<TaskState>;
@@ -46,6 +46,18 @@ function ask(
   };
 }
 
+function bindingMatches(actual: HotelCapabilityBinding | undefined, expected: HotelCapabilityBinding): boolean {
+  return Boolean(
+    actual &&
+    actual.key === expected.key &&
+    actual.capabilityId === expected.capabilityId &&
+    actual.contractIdentity === expected.contractIdentity &&
+    actual.effectClass === expected.effectClass &&
+    actual.dependencyPaths.length === expected.dependencyPaths.length &&
+    actual.dependencyPaths.every((path, index) => path === expected.dependencyPaths[index]),
+  );
+}
+
 function resolveCapability(
   context: HotelPlanningContext,
   key: HotelCapabilityKey,
@@ -53,27 +65,24 @@ function resolveCapability(
   const expected = (context.taskDefinition ?? HOTEL_TASK_DEFINITION_V1).bindings[key];
   const actual = context.capabilities.enabled[key];
   if (!actual) return { ok: false, reason: "unavailable" };
-  if (
-    actual.key !== expected.key ||
-    actual.capabilityId !== expected.capabilityId ||
-    actual.contractIdentity !== expected.contractIdentity ||
-    actual.effectClass !== expected.effectClass ||
-    JSON.stringify(actual.dependencyPaths) !== JSON.stringify(expected.dependencyPaths)
-  ) {
-    return { ok: false, reason: "contract_mismatch" };
-  }
+  if (!bindingMatches(actual, expected)) return { ok: false, reason: "contract_mismatch" };
   return { ok: true, binding: actual };
 }
 
 function contextContractValid(context: HotelPlanningContext): boolean {
   const definition = context.taskDefinition ?? HOTEL_TASK_DEFINITION_V1;
-  return (
-    definition.id === "hotel_task_v1" &&
-    definition.contractIdentity === "hotel_task_v1@1" &&
-    context.capabilities.domain === "hotel" &&
-    context.capabilities.definitionId === definition.id &&
-    context.capabilities.definitionContractIdentity === definition.contractIdentity
-  );
+  if (
+    definition.id !== HOTEL_TASK_DEFINITION_V1.id ||
+    definition.contractIdentity !== HOTEL_TASK_DEFINITION_V1.contractIdentity ||
+    context.capabilities.domain !== "hotel" ||
+    context.capabilities.definitionId !== definition.id ||
+    context.capabilities.definitionContractIdentity !== definition.contractIdentity
+  ) return false;
+
+  for (const key of HOTEL_CAPABILITY_KEYS) {
+    if (!bindingMatches(definition.bindings[key], HOTEL_TASK_DEFINITION_V1.bindings[key])) return false;
+  }
+  return true;
 }
 
 function availabilityMatchesRequestedStay(state: Readonly<TaskState>): boolean {
@@ -239,16 +248,22 @@ async function quoteStep(context: HotelPlanningContext): Promise<NextStep> {
   }, "acquire_quote");
 }
 
-function latestExecutionSucceeded(state: Readonly<TaskState>, operationType: "reserve" | "cancel" | "modify") {
+function latestLinkedExecutionSucceeded(state: Readonly<TaskState>, operationType: "reserve" | "cancel" | "modify") {
+  const booking = state.observations.booking;
+  if (!booking) return undefined;
   for (let index = state.observations.executionResults.length - 1; index >= 0; index -= 1) {
     const result = state.observations.executionResults[index];
-    if (result?.operationType === operationType && result.status === "succeeded") return result;
+    if (
+      result?.operationType === operationType &&
+      result.status === "succeeded" &&
+      result.observationId === booking.observationId
+    ) return result;
   }
   return undefined;
 }
 
 async function reservationStep(context: HotelPlanningContext): Promise<NextStep> {
-  const success = latestExecutionSucceeded(context.state, "reserve");
+  const success = latestLinkedExecutionSucceeded(context.state, "reserve");
   if (success && context.state.observations.booking) {
     return {
       kind: "COMPLETE",
@@ -323,7 +338,7 @@ async function reservationStep(context: HotelPlanningContext): Promise<NextStep>
 }
 
 async function cancellationStep(context: HotelPlanningContext): Promise<NextStep> {
-  const success = latestExecutionSucceeded(context.state, "cancel");
+  const success = latestLinkedExecutionSucceeded(context.state, "cancel");
   if (success && context.state.observations.booking) {
     return {
       kind: "COMPLETE",
@@ -357,9 +372,16 @@ async function cancellationStep(context: HotelPlanningContext): Promise<NextStep
 function retryTarget(context: HotelPlanningContext): string | undefined | null {
   const explicit = context.trigger.retryDirective?.targetOperation?.trim();
   if (explicit) return explicit;
-  const ids = [...new Set(context.state.observations.failures.map((failure) => failure.capabilityId))];
-  if (ids.length === 1) return ids[0];
-  if (ids.length > 1) return null;
+
+  const correlationId = context.trigger.retryDirective?.correlationId?.trim();
+  const failures = correlationId
+    ? context.state.observations.failures.filter(
+        (failure) => failure.authorityId === correlationId || failure.failureId === correlationId,
+      )
+    : context.state.observations.failures;
+
+  if (failures.length === 1) return failures[0]?.capabilityId;
+  if (failures.length > 1) return null;
   return undefined;
 }
 
@@ -444,10 +466,11 @@ export async function planHotelTask(context: HotelPlanningContext): Promise<Next
     return degrade("availability_dependency_mismatch", false, "state_invariant_violation");
   }
 
-  if (context.trigger.abortDirective) return respond("current_operation_aborted");
-  if (context.trigger.interactionDirective) return respond(`interaction_${context.trigger.interactionDirective}`);
-  if (context.trigger.retryDirective) return retryStep(context);
+  // Ephemeral business directives must not be swallowed by acknowledgement or
+  // abort presentation markers. Reducer has already applied durable state
+  // changes (including clearing an aborted operation) before Planner runs.
   if (context.trigger.readDirective) return explicitReadStep(context);
+  if (context.trigger.retryDirective) return retryStep(context);
   if (context.trigger.showOptionsDirective) {
     const availability = context.state.observations.availability;
     if (!availability) return availabilityStep(context);
@@ -456,6 +479,8 @@ export async function planHotelTask(context: HotelPlanningContext): Promise<Next
       ? selectionAsk(context.state)
       : respond("availability_results", [availability.observationId]);
   }
+  if (context.trigger.abortDirective) return respond("current_operation_aborted");
+  if (context.trigger.interactionDirective) return respond(`interaction_${context.trigger.interactionDirective}`);
 
   if (context.state.user.ambiguity) {
     return ask(
