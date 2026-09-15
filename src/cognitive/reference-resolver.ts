@@ -1,5 +1,6 @@
 import type {
   BookingReference,
+  DependencyPath,
   GroundedBookingTarget,
   GroundedSelection,
   RoomReference,
@@ -123,11 +124,11 @@ async function roomInstruction(
   ) return { diagnostic: { target: "room", status: "already_grounded" } };
 
   const usesAnchor = reference.kind !== "room_number";
-  const dependencyPaths = [
+  const dependencyPaths: DependencyPath[] = [
     "observations.availability",
     "user.requestedSelectionReference",
-    ...(usesAnchor ? ["control.dialogueAnchor"] : []),
-  ] as const;
+  ];
+  if (usesAnchor) dependencyPaths.push("control.dialogueAnchor");
   const dependencyFingerprintValue = await dependencyFingerprint({
     resolverContract: RESOLVER_CONTRACT,
     taskId: state.taskId,
@@ -173,11 +174,11 @@ async function bookingInstruction(
   }
 
   const usesAnchor = reference.kind === "contextual_anchor";
-  const dependencyPaths = [
+  const dependencyPaths: DependencyPath[] = [
     "observations.booking",
     "user.bookingReference",
-    ...(usesAnchor ? ["control.dialogueAnchor"] : []),
-  ] as const;
+  ];
+  if (usesAnchor) dependencyPaths.push("control.dialogueAnchor");
   const dependencyFingerprintValue = await dependencyFingerprint({
     resolverContract: RESOLVER_CONTRACT,
     taskId: state.taskId,
