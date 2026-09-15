@@ -118,7 +118,7 @@ test("provider input wraps message and presentation labels as explicitly untrust
     }),
     server,
   );
-  assert.equal(result.kind, "accepted");
+  assert.deepEqual(result, { kind: "degraded", reason: "semantic_unknown" });
 });
 
 test("prompt-injection-like provider output with toolId is rejected as a whole", async () => {
@@ -178,6 +178,26 @@ test("malformed provider value degrades and produces no semantic artifacts", asy
     admissionRejection: "invalid_output_schema",
   });
   assert.equal("artifacts" in result, false);
+});
+
+test("semantic retry targets materialize to Planner operation vocabulary, never tool IDs", async () => {
+  const targets = [
+    ["reservation", "reserve"],
+    ["cancellation", "cancel"],
+    ["modification", "modify"],
+    ["availability", "availability"],
+    ["quote", "quote"],
+  ];
+  for (const [providerTarget, plannerTarget] of targets) {
+    const provider = fakeProvider(() => ({
+      value: { classification: "task", directives: { retry: { targetOperation: providerTarget } } },
+    }));
+    const adapter = new SemanticInterpreterAdapter(provider);
+    const result = await adapter.interpret(input(), server);
+    assert.equal(result.kind, "accepted");
+    assert.deepEqual(result.artifacts.planningTrigger.retryDirective, { targetOperation: plannerTarget });
+    assert.equal(String(result.artifacts.planningTrigger.retryDirective.targetOperation).startsWith("hms."), false);
+  }
 });
 
 test("accepted provider metadata is copied but never becomes semantic state", async () => {
