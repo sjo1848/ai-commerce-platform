@@ -182,12 +182,11 @@ function groundingEvent(
   state: Readonly<TaskState>,
   primaryEvent: TaskEvent,
   payload: Extract<ServerControlPayload, { kind: "reference_grounded" | "booking_reference_grounded" }>,
-  ordinal: number,
   now: string,
 ): ServerControlEvent {
   const suffix = payload.kind === "reference_grounded" ? "room" : "booking";
   return {
-    eventId: `${cycle.cycleId}:ground:${ordinal}:${suffix}`,
+    eventId: `${cycle.cycleId}:ground:${suffix}`,
     kind: "server_control",
     sessionId: state.sessionId,
     taskId: state.taskId,
@@ -214,13 +213,24 @@ function rejected(
   };
 }
 
+function recoveredPrimaryReduction(state: Readonly<TaskState>, event: TaskEvent): TaskStateReduction | undefined {
+  if (event.sessionId !== state.sessionId || event.taskId !== state.taskId) return undefined;
+  if (!state.recentEventIds.includes(event.eventId)) return undefined;
+  return {
+    state: state as TaskState,
+    accepted: true,
+    material: false,
+    duplicate: true,
+    invalidations: [],
+  };
+}
+
 /**
  * Pure ACP-3.0 orchestration kernel for one accepted primary cause. The caller
- * is responsible for durably storing the cycle record before invoking this
- * function and before any later external side effect. The kernel itself only
- * reduces typed events, applies bounded internal grounding through reducer
- * events, normalizes the original trigger, and invokes the deterministic
- * Planner at most once.
+ * is responsible for durably storing each returned cycle transition before any
+ * later external side effect. A recovered `reduced` cycle must be paired with a
+ * TaskState that already contains the accepted primary event; historical text
+ * is never reinterpreted to reconstruct directives.
  */
 export async function runHotelPlanningCycle(input: HotelPlanningCycleInput): Promise<HotelPlanningCycleResult> {
   if (!validTimestamp(input.now)) return rejected(input.state, input.cycle, input.now, "invalid_cycle_timestamp");
@@ -232,29 +242,36 @@ export async function runHotelPlanningCycle(input: HotelPlanningCycleInput): Pro
   }
   if (input.cycle.status === "failed") return rejected(input.state, input.cycle, input.now, "cycle_already_failed");
 
+  let serverDisposition: OrchestrationDisposition | undefined;
+  if (input.primaryEvent.kind === "server_control") {
+    serverDisposition = serverControlDisposition(input.primaryEvent.payload);
+    if (!serverDisposition) return rejected(input.state, input.cycle, input.now, "unknown_server_control_disposition");
+    if (serverDisposition === "INTERNAL_PREPLAN") return rejected(input.state, input.cycle, input.now, "internal_preplan_cannot_open_primary_cycle");
+  }
+
   let primaryReduction: TaskStateReduction;
   let cycleAfterReduce: OrchestrationCycleRecord;
+  if (input.cycle.status === "reduced") {
+    const recovered = recoveredPrimaryReduction(input.state, input.primaryEvent);
+    if (!recovered) return rejected(input.state, input.cycle, input.now, "reduced_cycle_state_mismatch");
+    primaryReduction = recovered;
+    cycleAfterReduce = input.cycle as OrchestrationCycleRecord;
+  } else {
+    primaryReduction = reduceTaskState(input.state, input.primaryEvent);
+    if (!primaryReduction.accepted) return rejected(input.state, input.cycle, input.now, `primary_reducer_rejected:${primaryReduction.rejection ?? "unknown"}`, primaryReduction);
+    cycleAfterReduce = updatedCycle(input.cycle, "reduced", input.now);
+  }
 
   if (input.primaryEvent.kind === "server_control") {
-    const disposition = serverControlDisposition(input.primaryEvent.payload);
-    if (!disposition) return rejected(input.state, input.cycle, input.now, "unknown_server_control_disposition");
-    if (disposition === "INTERNAL_PREPLAN") return rejected(input.state, input.cycle, input.now, "internal_preplan_cannot_open_primary_cycle");
-
-    primaryReduction = reduceTaskState(input.state, input.primaryEvent);
-    if (!primaryReduction.accepted) return rejected(input.state, input.cycle, input.now, `primary_reducer_rejected:${primaryReduction.rejection ?? "unknown"}`, primaryReduction);
-    cycleAfterReduce = updatedCycle(input.cycle, "reduced", input.now);
-    if (disposition === "RESUME_EXECUTION") {
-      return { kind: "resume_execution", state: primaryReduction.state, cycle: cycleAfterReduce, primaryReduction, disposition };
+    if (serverDisposition === "RESUME_EXECUTION") {
+      return { kind: "resume_execution", state: primaryReduction.state, cycle: cycleAfterReduce, primaryReduction, disposition: serverDisposition };
     }
-    if (disposition !== "PLANNING_TRIGGER") {
-      return { kind: "no_plan", state: primaryReduction.state, cycle: cycleAfterReduce, primaryReduction, disposition };
+    if (serverDisposition !== "PLANNING_TRIGGER") {
+      return { kind: "no_plan", state: primaryReduction.state, cycle: cycleAfterReduce, primaryReduction, disposition: serverDisposition! };
     }
     if (!input.trigger) return rejected(primaryReduction.state, cycleAfterReduce, input.now, "planning_trigger_missing", primaryReduction);
-  } else {
-    if (!input.trigger) return rejected(input.state, input.cycle, input.now, "planning_trigger_missing");
-    primaryReduction = reduceTaskState(input.state, input.primaryEvent);
-    if (!primaryReduction.accepted) return rejected(input.state, input.cycle, input.now, `primary_reducer_rejected:${primaryReduction.rejection ?? "unknown"}`, primaryReduction);
-    cycleAfterReduce = updatedCycle(input.cycle, "reduced", input.now);
+  } else if (!input.trigger) {
+    return rejected(primaryReduction.state, cycleAfterReduce, input.now, "planning_trigger_missing", primaryReduction);
   }
 
   let state = primaryReduction.state;
@@ -264,8 +281,8 @@ export async function runHotelPlanningCycle(input: HotelPlanningCycleInput): Pro
   }
 
   const groundingEvents: ServerControlEvent[] = [];
-  for (const [index, instruction] of resolution.instructions.entries()) {
-    const event = groundingEvent(cycleAfterReduce, state, input.primaryEvent, instruction, index + 1, input.now);
+  for (const instruction of resolution.instructions) {
+    const event = groundingEvent(cycleAfterReduce, state, input.primaryEvent, instruction, input.now);
     if (serverControlDisposition(event.payload) !== "INTERNAL_PREPLAN") {
       return rejected(state, cycleAfterReduce, input.now, "grounding_disposition_mismatch", primaryReduction);
     }
