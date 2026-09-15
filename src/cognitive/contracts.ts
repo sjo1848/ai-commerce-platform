@@ -277,6 +277,9 @@ export type OrchestrationCycleRecord = {
   status: "accepted" | "reduced" | "planned" | "completed" | "failed";
   directives: Omit<PlanningTrigger, "origin" | "acceptedEventId" | "correlationId" | "observationKind" | "controlKind">;
   correlationId?: string;
+  /** Bounded deterministic Planner output persisted with status=planned for crash-safe handoff recovery. */
+  plannedStep?: NextStep;
+  plannedAtStateRevision?: number;
   createdAt: string;
   updatedAt: string;
 };
