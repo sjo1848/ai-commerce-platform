@@ -44,7 +44,7 @@ function legacyAvailabilityRooms(state: Readonly<ConversationState>): Availabili
  */
 export function conversationStateToTaskStateSeed(
   state: Readonly<ConversationState>,
-  input: { taskId: string },
+  input: { taskId: string; sessionId: string },
 ): TaskStateMigrationSeed {
   const requestedGoal = mapGoal(state);
   const roomSelectionRevision = state.roomSelectionRevision;
@@ -53,11 +53,13 @@ export function conversationStateToTaskStateSeed(
   return {
     taskState: {
       schemaVersion: "acp-task-state-v1",
+      sessionId: input.sessionId,
       taskId: input.taskId,
       lifecycle: "active",
       // ACP-3.0 starts a fresh revision domain. Legacy revisions remain provenance,
       // not a global semantic freshness counter for the new state engine.
       stateRevision: 0,
+      recentEventIds: [],
       user: {
         ...(requestedGoal ? { requestedGoal } : {}),
         stay: requestedStay(state),
@@ -65,7 +67,7 @@ export function conversationStateToTaskStateSeed(
           .filter((preference) => preference.source === "user" || preference.source === "legacy")
           .map((preference) => preference.value),
       },
-      observations: { executionResults: [] },
+      observations: { executionResults: [], failures: [] },
       control: {},
       provenance: {
         migratedFromConversationState: {

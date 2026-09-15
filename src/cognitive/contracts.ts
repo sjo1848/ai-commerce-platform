@@ -21,6 +21,11 @@ export type RequestedOccupancy =
   | { kind: "ordered_distribution"; guestsPerRoom: readonly number[] }
   | { kind: "explicit_assignments"; assignments: readonly { room: RoomReference; guests: number }[] };
 
+export type UserAmbiguity = {
+  code: string;
+  field?: string;
+};
+
 export type UserRequestedSemantics = {
   requestedGoal?: RequestedGoal;
   stay: { checkIn?: string; checkOut?: string; guests?: number };
@@ -30,6 +35,39 @@ export type UserRequestedSemantics = {
   requestedOccupancy?: RequestedOccupancy;
   operationIntent?: OperationIntent;
   bookingReference?: BookingReference;
+  ambiguity?: UserAmbiguity;
+};
+
+/**
+ * Paths identify causal dependencies; they are not a generic object-path DSL.
+ * Domain contracts select from this bounded vocabulary when creating derived
+ * observations/control artifacts. Reducer invalidation is generic intersection.
+ */
+export type DependencyPath =
+  | "lifecycle"
+  | "user.requestedGoal"
+  | "user.stay.checkIn"
+  | "user.stay.checkOut"
+  | "user.stay.guests"
+  | "user.preferences"
+  | "user.requestedSelectionReference"
+  | "user.requestedRoomCount"
+  | "user.requestedOccupancy"
+  | "user.operationIntent"
+  | "user.bookingReference"
+  | "user.ambiguity"
+  | "observations.availability"
+  | "observations.quote"
+  | "observations.booking"
+  | "control.groundedSelection"
+  | "control.groundedBookingTarget"
+  | "control.pendingToolInvocation"
+  | "control.preparedOperation"
+  | "control.dialogueAnchor";
+
+export type DependencyBound = {
+  dependencyFingerprint: string;
+  dependencyPaths: readonly DependencyPath[];
 };
 
 export type AvailabilityCandidate = {
@@ -39,31 +77,28 @@ export type AvailabilityCandidate = {
   capacity?: number;
 };
 
-export type AvailabilityObservation = {
+export type AvailabilityObservation = DependencyBound & {
   observationId: string;
   status: "observed";
   source: "tool";
   query: { checkIn: string; checkOut: string; guests: number };
   rooms: readonly AvailabilityCandidate[];
-  dependencyFingerprint: string;
 };
 
-export type QuoteObservation = {
+export type QuoteObservation = DependencyBound & {
   observationId: string;
   status: "observed";
   source: "tool";
   roomId: string;
   totalCents: number;
   currency: string;
-  dependencyFingerprint: string;
 };
 
-export type BookingObservation = {
+export type BookingObservation = DependencyBound & {
   observationId: string;
   status: string;
   source: "tool";
   bookingId: string;
-  dependencyFingerprint: string;
 };
 
 export type ExecutionResult = {
@@ -73,35 +108,51 @@ export type ExecutionResult = {
   observationId?: string;
 };
 
+export type ToolFailure = DependencyBound & {
+  failureId: string;
+  capabilityId: string;
+  authorityKind: "invocation" | "operation";
+  authorityId: string;
+  code: string;
+  occurredAt: string;
+};
+
 export type ToolObservations = {
   availability?: AvailabilityObservation;
   quote?: QuoteObservation;
   booking?: BookingObservation;
   executionResults: readonly ExecutionResult[];
+  failures: readonly ToolFailure[];
 };
 
-export type GroundedSelection = {
+export type GroundedSelection = DependencyBound & {
   roomIds: readonly string[];
   sourceObservationId: string;
-  dependencyFingerprint: string;
   authority: "server";
 };
 
-export type PendingToolInvocation = {
-  invocationId: string;
-  capabilityId: string;
-  status: "pending" | "succeeded" | "failed" | "superseded" | "expired";
-  dependencyFingerprint: string;
-  inputSnapshot: Readonly<Record<string, unknown>>;
-  startedAt: string;
-  leaseExpiresAt: string;
+export type GroundedBookingTarget = DependencyBound & {
+  bookingId: string;
+  sourceObservationId: string;
+  authority: "server";
 };
 
-export type PreparedOperation = {
+export type PendingToolInvocation = DependencyBound & {
+  invocationId: string;
+  capabilityId: string;
+  status: "admitted" | "dispatched" | "succeeded" | "failed" | "superseded" | "expired";
+  inputSnapshot: Readonly<Record<string, unknown>>;
+  admittedAt: string;
+  startedAt?: string;
+  leaseExpiresAt: string;
+  dispatchCorrelationId?: string;
+  terminalCorrelationId?: string;
+};
+
+export type PreparedOperation = DependencyBound & {
   operationId: string;
   operationType: OperationIntent;
   operationFingerprint: string;
-  dependencyFingerprint: string;
   inputSnapshot: Readonly<Record<string, unknown>>;
   status: "prepared" | "approval_required" | "approved" | "invalidated";
 };
@@ -111,12 +162,14 @@ export type DialogueAnchor = {
   kind: "dates" | "check_out" | "guests" | "selection" | "occupancy" | "booking_reference" | "confirmation" | "other_bounded";
   createdAtStateRevision: number;
   dependencyFingerprint?: string;
+  dependencyPaths: readonly DependencyPath[];
   referencedObservationId?: string;
   candidateScope?: readonly string[];
 };
 
 export type ServerControlState = {
   groundedSelection?: GroundedSelection;
+  groundedBookingTarget?: GroundedBookingTarget;
   pendingToolInvocation?: PendingToolInvocation;
   preparedOperation?: PreparedOperation;
   dialogueAnchor?: DialogueAnchor;
@@ -132,9 +185,11 @@ export type TaskStateProvenance = {
 
 export type TaskState = {
   schemaVersion: "acp-task-state-v1";
+  sessionId: string;
   taskId: string;
   lifecycle: TaskLifecycle;
   stateRevision: number;
+  recentEventIds: readonly string[];
   user: UserRequestedSemantics;
   observations: ToolObservations;
   control: ServerControlState;
