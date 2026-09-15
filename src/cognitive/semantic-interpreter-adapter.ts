@@ -227,6 +227,7 @@ export const SEMANTIC_INTERPRETER_OUTPUT_SCHEMA: JsonSchema = {
         normalized: {
           type: "object",
           additionalProperties: false,
+          minProperties: 1,
           properties: {
             checkIn: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
             checkOut: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
@@ -241,7 +242,8 @@ export const SEMANTIC_INTERPRETER_OUTPUT_SCHEMA: JsonSchema = {
 
 export type SemanticInterpreterDegradationReason =
   | "provider_error"
-  | "invalid_provider_output";
+  | "invalid_provider_output"
+  | "semantic_unknown";
 
 export type SemanticInterpreterResult =
   | {
@@ -255,10 +257,6 @@ export type SemanticInterpreterResult =
       reason: SemanticInterpreterDegradationReason;
       admissionRejection?: InterpreterAdmissionRejection;
     };
-
-function providerMetadata(result: StructuredModelResult): SemanticInterpreterResult & never {
-  return result as never;
-}
 
 function metadata(result: StructuredModelResult) {
   return {
@@ -315,6 +313,9 @@ export class SemanticInterpreterAdapter {
         reason: "invalid_provider_output",
         admissionRejection: admitted.rejection,
       };
+    }
+    if (admitted.output.classification === "unknown") {
+      return { kind: "degraded", reason: "semantic_unknown" };
     }
 
     return {
