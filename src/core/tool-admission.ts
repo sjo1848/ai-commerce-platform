@@ -26,7 +26,7 @@ export type CoreToolAdmissionResult =
       sideEffect: SideEffect;
       idempotencyMode?: IdempotencyMode;
       operationFingerprint: string;
-      reason: string;
+      reason: "approval_required";
     }
   | ({
       decision: "deny";
@@ -74,7 +74,7 @@ export class CoreToolAdmission {
         sideEffect: tool.sideEffect,
         ...(tool.idempotencyMode ? { idempotencyMode: tool.idempotencyMode } : {}),
         operationFingerprint: fingerprint,
-        reason: policy.reason,
+        reason: "approval_required",
       };
     }
 
