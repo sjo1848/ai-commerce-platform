@@ -38,6 +38,15 @@ export type ToolObservationPayload =
   | { kind: "booking"; authority: ToolAuthorityRef; observation: BookingObservation }
   | { kind: "execution_succeeded"; authority: OperationAuthorityRef; operationType: OperationIntent; observationId?: string }
   | { kind: "failure"; authority: ToolAuthorityRef; failure: ToolFailure };
+
+export type ToolControlFailureReason =
+  | "policy_denied"
+  | "input_rejected"
+  | "lease_expired"
+  | "precondition_superseded"
+  | "admission_error"
+  | "effect_changed";
+
 export type ServerControlPayload =
   | { kind: "reference_grounded"; groundedSelection: GroundedSelection }
   | { kind: "booking_reference_grounded"; groundedBookingTarget: GroundedBookingTarget }
@@ -46,6 +55,7 @@ export type ServerControlPayload =
   | { kind: "invocation_terminal"; invocationId: string; status: "failed" | "superseded" | "expired"; terminalCorrelationId?: string }
   | { kind: "prepared_operation_recorded"; operation: PreparedOperation }
   | { kind: "prepared_operation_status_changed"; operationId: string; operationFingerprint: string; status: "approval_required" | "approved" | "invalidated" }
+  | { kind: "tool_control_failure"; phase: "admission" | "recovery"; capabilityId: string; reasonCode: ToolControlFailureReason }
   | { kind: "dialogue_anchor_set"; anchor: DialogueAnchor }
   | { kind: "dialogue_anchor_clear"; anchorId?: string }
   | { kind: "lifecycle_changed"; lifecycle: TaskLifecycle };
