@@ -9,7 +9,11 @@ import type {
   PreparedOperation,
   TaskState,
 } from "./contracts.js";
-import type { ServerControlEvent, ServerControlPayload } from "./events.js";
+import type {
+  ServerControlEvent,
+  ServerControlPayload,
+  ToolControlFailureReason,
+} from "./events.js";
 import { dependencyFingerprint } from "./fingerprint.js";
 import {
   hotelBindingForCapability,
@@ -72,9 +76,10 @@ export type HotelCoreToolIntegrationResult =
       error: unknown;
     }
   | {
-      kind: "blocked";
+      kind: "control_failure";
       state: TaskState;
-      reason: string;
+      controlEvent: ServerControlEvent;
+      reasonCode: ToolControlFailureReason;
       capabilityId: string;
     }
   | {
@@ -115,9 +120,11 @@ export type PreparedOperationResumeResult =
       reason: string;
     }
   | {
-      kind: "blocked";
+      kind: "control_failure";
       state: TaskState;
-      reason: string;
+      controlEvent: ServerControlEvent;
+      reasonCode: ToolControlFailureReason;
+      capabilityId: string;
     }
   | {
       kind: "rejected";
@@ -149,9 +156,10 @@ export type PendingReadRecoveryResult =
   | {
       kind: "terminal";
       state: TaskState;
-      controlEvent: ServerControlEvent;
+      controlEvents: readonly ServerControlEvent[];
+      planningControlEvent: ServerControlEvent;
       status: "failed" | "superseded" | "expired";
-      reason: string;
+      reasonCode: ToolControlFailureReason;
     }
   | {
       kind: "rejected";
@@ -205,6 +213,38 @@ function applyControl(
   return { ok: true, state: reduction.state };
 }
 
+function controlFailureEvent(
+  state: Readonly<TaskState>,
+  now: string,
+  causationId: string,
+  identity: string,
+  phase: "admission" | "recovery",
+  capabilityId: string,
+  reasonCode: ToolControlFailureReason,
+): ServerControlEvent {
+  return eventFor(
+    state,
+    `i6:${identity}:control:${reasonCode}`,
+    now,
+    causationId,
+    { kind: "tool_control_failure", phase, capabilityId, reasonCode },
+  );
+}
+
+function applyControlFailure(
+  state: Readonly<TaskState>,
+  now: string,
+  causationId: string,
+  identity: string,
+  phase: "admission" | "recovery",
+  capabilityId: string,
+  reasonCode: ToolControlFailureReason,
+): { ok: true; state: TaskState; event: ServerControlEvent } | { ok: false; reason: string } {
+  const event = controlFailureEvent(state, now, causationId, identity, phase, capabilityId, reasonCode);
+  const reduction = applyControl(state, event);
+  return reduction.ok ? { ok: true, state: reduction.state, event } : reduction;
+}
+
 async function stableScopedId(prefix: "inv" | "op", state: Readonly<TaskState>, cycleId: string, step: CallToolStep): Promise<string> {
   const fingerprint = await dependencyFingerprint({
     scope: "acp3_i6_tool_identity_v1",
@@ -220,12 +260,6 @@ async function stableScopedId(prefix: "inv" | "op", state: Readonly<TaskState>, 
 
 function cycleOwnsStep(cycle: Readonly<OrchestrationCycleRecord>, step: CallToolStep): boolean {
   return cycle.status === "planned" && cycle.plannedStep?.kind === "CALL_TOOL" && sameJson(cycle.plannedStep, step);
-}
-
-function admissionBlocked(admission: CoreToolAdmissionResult): string | undefined {
-  if (admission.decision === "deny") return `policy_denied:${admission.reason}`;
-  if (admission.decision === "invalid_input") return `core_input_rejected:${admission.message}`;
-  return undefined;
 }
 
 function activePending(state: Readonly<TaskState>): boolean {
@@ -292,21 +326,27 @@ export async function integrateHotelPlannedToolCall(
   let coreAdmission: CoreToolAdmissionResult;
   try {
     coreAdmission = await admission.admit(step.capabilityId, step.groundedInput, context);
-  } catch (error) {
-    return { kind: "rejected", state: state as TaskState, reason: error instanceof Error ? `core_admission_error:${error.message}` : "core_admission_error" };
+  } catch {
+    const failure = applyControlFailure(state, now, cycle.acceptedEventId, cycle.cycleId, "admission", step.capabilityId, "admission_error");
+    return failure.ok
+      ? { kind: "control_failure", state: failure.state, controlEvent: failure.event, reasonCode: "admission_error", capabilityId: step.capabilityId }
+      : { kind: "rejected", state: state as TaskState, reason: failure.reason };
   }
 
-  const blocked = admissionBlocked(coreAdmission);
-  if (blocked) {
-    return { kind: "blocked", state: state as TaskState, reason: blocked, capabilityId: step.capabilityId };
+  if (coreAdmission.decision === "deny" || coreAdmission.decision === "invalid_input") {
+    const reasonCode: ToolControlFailureReason = coreAdmission.decision === "deny" ? "policy_denied" : "input_rejected";
+    const failure = applyControlFailure(state, now, cycle.acceptedEventId, cycle.cycleId, "admission", step.capabilityId, reasonCode);
+    return failure.ok
+      ? { kind: "control_failure", state: failure.state, controlEvent: failure.event, reasonCode, capabilityId: step.capabilityId }
+      : { kind: "rejected", state: state as TaskState, reason: failure.reason };
   }
 
   if (step.effectClass === "read") {
-    if (coreAdmission.decision === "approval_required") {
-      return { kind: "blocked", state: state as TaskState, reason: "read_approval_required_not_supported_v1", capabilityId: step.capabilityId };
-    }
-    if (coreAdmission.sideEffect !== "none" || !isRecord(coreAdmission.canonicalInput)) {
-      return { kind: "rejected", state: state as TaskState, reason: "read_tool_contract_mismatch" };
+    if (coreAdmission.decision === "approval_required" || coreAdmission.sideEffect !== "none" || !isRecord(coreAdmission.canonicalInput)) {
+      const failure = applyControlFailure(state, now, cycle.acceptedEventId, cycle.cycleId, "admission", step.capabilityId, "effect_changed");
+      return failure.ok
+        ? { kind: "control_failure", state: failure.state, controlEvent: failure.event, reasonCode: "effect_changed", capabilityId: step.capabilityId }
+        : { kind: "rejected", state: state as TaskState, reason: failure.reason };
     }
 
     const expiry = leaseExpiry(now, input.invocationLeaseMs ?? DEFAULT_INVOCATION_LEASE_MS);
@@ -368,7 +408,10 @@ export async function integrateHotelPlannedToolCall(
     return { kind: "rejected", state: state as TaskState, reason: "write_operation_type_missing" };
   }
   if (coreAdmission.sideEffect === "none" || !coreAdmission.operationFingerprint) {
-    return { kind: "rejected", state: state as TaskState, reason: "write_tool_contract_mismatch" };
+    const failure = applyControlFailure(state, now, cycle.acceptedEventId, cycle.cycleId, "admission", step.capabilityId, "effect_changed");
+    return failure.ok
+      ? { kind: "control_failure", state: failure.state, controlEvent: failure.event, reasonCode: "effect_changed", capabilityId: step.capabilityId }
+      : { kind: "rejected", state: state as TaskState, reason: failure.reason };
   }
 
   const prepared = await prepareOperation(
@@ -487,6 +530,19 @@ async function invalidatePrepared(
   return { kind: "invalidated", state: reduction.state, controlEvent: event, reason };
 }
 
+function preparedControlFailure(
+  state: Readonly<TaskState>,
+  operation: PreparedOperation,
+  now: string,
+  reasonCode: ToolControlFailureReason,
+): PreparedOperationResumeResult {
+  const capabilityId = operation.capabilityId ?? "unknown_prepared_capability";
+  const failure = applyControlFailure(state, now, operation.operationId, operation.operationId, "recovery", capabilityId, reasonCode);
+  return failure.ok
+    ? { kind: "control_failure", state: failure.state, controlEvent: failure.event, reasonCode, capabilityId }
+    : { kind: "rejected", state: state as TaskState, reason: failure.reason };
+}
+
 /** Execute only an already-approved exact PreparedOperation. No Planner call occurs. */
 export async function resumeApprovedHotelOperation(
   input: PreparedOperationResumeInput,
@@ -508,11 +564,11 @@ export async function resumeApprovedHotelOperation(
   let coreAdmission: CoreToolAdmissionResult;
   try {
     coreAdmission = await admission.admit(step.capabilityId, operation.inputSnapshot, context);
-  } catch (error) {
-    return { kind: "blocked", state: state as TaskState, reason: error instanceof Error ? `core_admission_error:${error.message}` : "core_admission_error" };
+  } catch {
+    return preparedControlFailure(state, operation, now, "admission_error");
   }
-  const blocked = admissionBlocked(coreAdmission);
-  if (blocked) return { kind: "blocked", state: state as TaskState, reason: blocked };
+  if (coreAdmission.decision === "deny") return preparedControlFailure(state, operation, now, "policy_denied");
+  if (coreAdmission.decision === "invalid_input") return preparedControlFailure(state, operation, now, "input_rejected");
   if (coreAdmission.sideEffect === "none" || !coreAdmission.operationFingerprint) {
     return invalidatePrepared(state, operation, now, "prepared_tool_effect_changed");
   }
@@ -556,18 +612,36 @@ async function terminalizeInvocation(
   invocation: PendingToolInvocation,
   now: string,
   status: "failed" | "superseded" | "expired",
-  reason: string,
+  reasonCode: ToolControlFailureReason,
 ): Promise<PendingReadRecoveryResult> {
-  const event = eventFor(
+  const terminalEvent = eventFor(
     state,
-    `i6:${invocation.invocationId}:terminal:${status}:${reason}`,
+    `i6:${invocation.invocationId}:terminal:${status}:${reasonCode}`,
     now,
     invocation.invocationId,
-    { kind: "invocation_terminal", invocationId: invocation.invocationId, status, terminalCorrelationId: reason },
+    { kind: "invocation_terminal", invocationId: invocation.invocationId, status, terminalCorrelationId: reasonCode },
   );
-  const reduction = applyControl(state, event);
-  if (!reduction.ok) return { kind: "rejected", state: state as TaskState, reason: reduction.reason };
-  return { kind: "terminal", state: reduction.state, controlEvent: event, status, reason };
+  const terminalReduction = applyControl(state, terminalEvent);
+  if (!terminalReduction.ok) return { kind: "rejected", state: state as TaskState, reason: terminalReduction.reason };
+
+  const failure = applyControlFailure(
+    terminalReduction.state,
+    now,
+    terminalEvent.eventId,
+    invocation.invocationId,
+    "recovery",
+    invocation.capabilityId,
+    reasonCode,
+  );
+  if (!failure.ok) return { kind: "rejected", state: terminalReduction.state, reason: failure.reason };
+  return {
+    kind: "terminal",
+    state: failure.state,
+    controlEvents: [terminalEvent, failure.event],
+    planningControlEvent: failure.event,
+    status,
+    reasonCode,
+  };
 }
 
 /**
@@ -592,17 +666,19 @@ export async function recoverPendingHotelRead(
   const step = pendingSyntheticStep(invocation);
   const precondition = await revalidateHotelToolPrecondition(state, step);
   if (!precondition.ok || precondition.binding.effectClass !== "read") {
-    return terminalizeInvocation(state, invocation, now, "superseded", precondition.ok ? "tool_effect_changed" : precondition.reason);
+    return terminalizeInvocation(state, invocation, now, "superseded", precondition.ok ? "effect_changed" : "precondition_superseded");
   }
 
   let coreAdmission: CoreToolAdmissionResult;
   try {
     coreAdmission = await admission.admit(invocation.capabilityId, invocation.inputSnapshot, context);
   } catch {
-    return terminalizeInvocation(state, invocation, now, "failed", "core_admission_error");
+    return terminalizeInvocation(state, invocation, now, "failed", "admission_error");
   }
+  if (coreAdmission.decision === "deny") return terminalizeInvocation(state, invocation, now, "failed", "policy_denied");
+  if (coreAdmission.decision === "invalid_input") return terminalizeInvocation(state, invocation, now, "failed", "input_rejected");
   if (coreAdmission.decision !== "allow" || coreAdmission.sideEffect !== "none" || !isRecord(coreAdmission.canonicalInput)) {
-    return terminalizeInvocation(state, invocation, now, "failed", coreAdmission.decision === "deny" ? `policy_denied_${coreAdmission.reason}` : "read_recovery_admission_blocked");
+    return terminalizeInvocation(state, invocation, now, "failed", "effect_changed");
   }
 
   let working = state as TaskState;
