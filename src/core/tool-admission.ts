@@ -3,6 +3,13 @@ import type { PolicyDecision, PolicyEngine } from "./policy.js";
 import type { ToolRegistry } from "./tool-registry.js";
 import type { ExecutionContext, IdempotencyMode, SideEffect } from "./types.js";
 
+type RejectedAdmissionSurface = {
+  canonicalInput?: never;
+  sideEffect?: never;
+  idempotencyMode?: never;
+  operationFingerprint?: never;
+};
+
 export type CoreToolAdmissionResult =
   | {
       decision: "allow";
@@ -21,16 +28,16 @@ export type CoreToolAdmissionResult =
       operationFingerprint: string;
       reason: string;
     }
-  | {
+  | ({
       decision: "deny";
       toolId: string;
       reason: string;
-    }
-  | {
+    } & RejectedAdmissionSurface)
+  | ({
       decision: "invalid_input";
       toolId: string;
       message: string;
-    };
+    } & RejectedAdmissionSurface);
 
 /**
  * Side-effect-free Core admission. It deliberately reuses the authoritative
