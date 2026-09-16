@@ -59,7 +59,10 @@ function invocation(v: unknown): boolean {
   return rec(v) && keys(v, ["invocationId", "capabilityId", "status", "dependencyFingerprint", "dependencyPaths", "inputSnapshot", "admittedAt", "startedAt", "leaseExpiresAt", "dispatchCorrelationId", "terminalCorrelationId"]) && dep(v) && rec(v.inputSnapshot);
 }
 function operation(v: unknown): boolean {
-  return rec(v) && keys(v, ["operationId", "operationType", "operationFingerprint", "dependencyFingerprint", "dependencyPaths", "inputSnapshot", "status"]) && dep(v) && rec(v.inputSnapshot);
+  if (!rec(v) || !keys(v, ["operationId", "operationType", "operationFingerprint", "capabilityId", "capabilityContractIdentity", "dependencyFingerprint", "dependencyPaths", "inputSnapshot", "status"]) || !dep(v) || !rec(v.inputSnapshot)) return false;
+  if ((v.capabilityId === undefined) !== (v.capabilityContractIdentity === undefined)) return false;
+  if (v.capabilityId !== undefined && (!str(v.capabilityId) || !str(v.capabilityContractIdentity))) return false;
+  return true;
 }
 function selection(v: unknown): boolean {
   return rec(v) && keys(v, ["roomIds", "sourceObservationId", "authority", "dependencyFingerprint", "dependencyPaths"]) && dep(v) && arr(v.roomIds);
