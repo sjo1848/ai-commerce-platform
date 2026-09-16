@@ -13,7 +13,7 @@ import type {
 } from "./events.js";
 import type { DomainCapabilities, HotelTaskDefinition } from "./hotel-task-definition.js";
 import { HOTEL_TASK_DEFINITION_V1 } from "./hotel-task-definition.js";
-import { planHotelTask } from "./hotel-task-planner.js";
+import { planHotelTaskFromCause } from "./hotel-task-planner-entry.js";
 import { resolveHotelReferences, type GroundingDiagnostic } from "./reference-resolver.js";
 import { reduceTaskState } from "./task-state-reducer.js";
 
@@ -190,6 +190,8 @@ export function serverControlDisposition(payload: ServerControlPayload | unknown
     case "dialogue_anchor_set":
     case "dialogue_anchor_clear":
       return "STATE_ONLY";
+    case "tool_control_failure":
+      return "PLANNING_TRIGGER";
     case "prepared_operation_status_changed":
       if (value.status === "approved") return "RESUME_EXECUTION";
       if (value.status === "approval_required" || value.status === "invalidated") return "PLANNING_TRIGGER";
@@ -347,7 +349,7 @@ export async function runHotelPlanningCycle(input: HotelPlanningCycleInput): Pro
 
   const recoveredTrigger = input.trigger ?? triggerFromCycle(cycleAfterReduce, input.primaryEvent);
   const trigger = normalizedTrigger(input.primaryEvent, recoveredTrigger);
-  const nextStep = await planHotelTask({
+  const nextStep = await planHotelTaskFromCause({
     state,
     trigger,
     taskDefinition: input.taskDefinition ?? HOTEL_TASK_DEFINITION_V1,
