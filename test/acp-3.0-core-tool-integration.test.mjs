@@ -9,6 +9,7 @@ import { ToolRegistry } from "../dist/core/tool-registry.js";
 import { InMemoryUsageSink } from "../dist/core/usage.js";
 import { hotelDomainCapabilities } from "../dist/cognitive/hotel-task-definition.js";
 import { planHotelTask } from "../dist/cognitive/hotel-task-planner.js";
+import { planHotelTaskFromCause } from "../dist/cognitive/hotel-task-planner-entry.js";
 import {
   createOrchestrationCycleRecord,
   runHotelPlanningCycle,
@@ -326,20 +327,20 @@ test("Policy deny becomes one typed planning control and cannot auto-retry the t
   assert.equal(planned.kind, "planned");
   assert.equal(planned.nextStep.kind, "DEGRADE");
   assert.equal(planned.nextStep.reasonCode, "tool_control_failure");
-  assert.equal(planned.nextStep.responseIntent, "tool_unavailable");
+  assert.equal(planned.nextStep.responseIntent, "tool_operation_unavailable");
   assert.equal(f.calls.availability, 0);
 });
 
-test("tool observation failure degrades instead of becoming an automatic retry", async () => {
+test("tool observation failure degrades at the cross-boundary planner entry instead of auto-retrying", async () => {
   const state = baseState();
-  const next = await planHotelTask({
+  const next = await planHotelTaskFromCause({
     state,
     trigger: { origin: "tool", acceptedEventId: "tool-failure-i6", observationKind: "failure" },
     capabilities,
   });
   assert.equal(next.kind, "DEGRADE");
-  assert.equal(next.reasonCode, "tool_execution_failure");
-  assert.equal(next.responseIntent, "tool_failure");
+  assert.equal(next.reasonCode, "tool_observation_failure");
+  assert.equal(next.responseIntent, "tool_operation_failed");
 });
 
 test("write proposal stores exact capability + canonical input and requires approval with zero side effects", async () => {
