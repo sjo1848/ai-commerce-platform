@@ -466,13 +466,6 @@ export async function planHotelTask(context: HotelPlanningContext): Promise<Next
     return degrade("availability_dependency_mismatch", false, "state_invariant_violation");
   }
 
-  if (context.trigger.controlKind === "tool_control_failure") {
-    return degrade("tool_control_failure", true, "tool_unavailable");
-  }
-  if (context.trigger.observationKind === "failure") {
-    return degrade("tool_execution_failure", true, "tool_failure");
-  }
-
   // Ephemeral business directives must not be swallowed by acknowledgement or
   // abort presentation markers. Reducer has already applied durable state
   // changes (including clearing an aborted operation) before Planner runs.
