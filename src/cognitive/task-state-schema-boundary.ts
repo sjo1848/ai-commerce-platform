@@ -123,6 +123,11 @@ function serverPayload(v: unknown): boolean {
   if (v.kind === "invocation_terminal") return keys(v, ["kind", "invocationId", "status", "terminalCorrelationId"]);
   if (v.kind === "prepared_operation_recorded") return keys(v, ["kind", "operation"]) && operation(v.operation);
   if (v.kind === "prepared_operation_status_changed") return keys(v, ["kind", "operationId", "operationFingerprint", "status"]);
+  if (v.kind === "tool_control_failure") {
+    if (!keys(v, ["kind", "phase", "capabilityId", "reasonCode"]) || !str(v.capabilityId)) return false;
+    if (v.phase !== "admission" && v.phase !== "recovery") return false;
+    return ["policy_denied", "input_rejected", "lease_expired", "precondition_superseded", "admission_error", "effect_changed"].includes(String(v.reasonCode));
+  }
   if (v.kind === "dialogue_anchor_set") return keys(v, ["kind", "anchor"]) && anchor(v.anchor);
   if (v.kind === "dialogue_anchor_clear") return keys(v, ["kind", "anchorId"]);
   if (v.kind === "lifecycle_changed") return keys(v, ["kind", "lifecycle"]);
