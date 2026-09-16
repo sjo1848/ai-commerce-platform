@@ -178,7 +178,7 @@ test("Core admission canonicalizes without executing a side effect", async () =>
   assert.equal(admission.decision, "approval_required");
   assert.equal(f.calls.reservation, 0);
   assert.equal(admission.canonicalInput.guestId, "guest:tenant-i6:actor-i6");
-  assert.match(admission.operationFingerprint, /^op1:sha256:/);
+  assert.match(admission.operationFingerprint, /^[0-9a-f]{64}$/);
 });
 
 test("read CALL_TOOL is causally revalidated, recorded, dispatched, and raw result stays outside TaskState", async () => {
