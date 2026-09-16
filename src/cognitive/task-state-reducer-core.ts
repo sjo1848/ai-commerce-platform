@@ -219,6 +219,11 @@ function validServerPayloadShape(payload: unknown): boolean {
   if (payload.kind === "invocation_terminal") return hasOnlyKeys(payload, ["kind", "invocationId", "status", "terminalCorrelationId"]) && nonEmptyString(payload.invocationId) && (payload.status === "failed" || payload.status === "superseded" || payload.status === "expired") && (payload.terminalCorrelationId === undefined || nonEmptyString(payload.terminalCorrelationId));
   if (payload.kind === "prepared_operation_recorded") return hasOnlyKeys(payload, ["kind", "operation"]) && isRecord(payload.operation);
   if (payload.kind === "prepared_operation_status_changed") return hasOnlyKeys(payload, ["kind", "operationId", "operationFingerprint", "status"]) && nonEmptyString(payload.operationId) && nonEmptyString(payload.operationFingerprint) && (payload.status === "approval_required" || payload.status === "approved" || payload.status === "invalidated");
+  if (payload.kind === "tool_control_failure") {
+    if (!hasOnlyKeys(payload, ["kind", "phase", "capabilityId", "reasonCode"]) || !nonEmptyString(payload.capabilityId)) return false;
+    if (payload.phase !== "admission" && payload.phase !== "recovery") return false;
+    return ["policy_denied", "input_rejected", "lease_expired", "precondition_superseded", "admission_error", "effect_changed"].includes(String(payload.reasonCode));
+  }
   if (payload.kind === "dialogue_anchor_set") return hasOnlyKeys(payload, ["kind", "anchor"]) && isRecord(payload.anchor);
   if (payload.kind === "dialogue_anchor_clear") return hasOnlyKeys(payload, ["kind", "anchorId"]) && (payload.anchorId === undefined || nonEmptyString(payload.anchorId));
   if (payload.kind === "lifecycle_changed") return hasOnlyKeys(payload, ["kind", "lifecycle"]) && (payload.lifecycle === "active" || payload.lifecycle === "completed" || payload.lifecycle === "abandoned" || payload.lifecycle === "superseded");
@@ -552,6 +557,9 @@ function applyServerEvent(state: TaskState, event: ServerControlEvent): { change
       (current.status === "approved" && payload.status === "invalidated");
     if (!allowed) return null;
     state.control.preparedOperation = { ...current, status: payload.status };
+  } else if (payload.kind === "tool_control_failure") {
+    // Intentionally no business-state mutation. The accepted envelope still
+    // advances the revision and records causal ordering/idempotency.
   } else if (payload.kind === "dialogue_anchor_set") {
     if (!validDialogueAnchor(payload.anchor)) return null;
     state.control.dialogueAnchor = payload.anchor;
