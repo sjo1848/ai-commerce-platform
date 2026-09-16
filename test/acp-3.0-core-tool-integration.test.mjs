@@ -10,6 +10,11 @@ import { InMemoryUsageSink } from "../dist/core/usage.js";
 import { hotelDomainCapabilities } from "../dist/cognitive/hotel-task-definition.js";
 import { planHotelTask } from "../dist/cognitive/hotel-task-planner.js";
 import {
+  createOrchestrationCycleRecord,
+  runHotelPlanningCycle,
+  serverControlDisposition,
+} from "../dist/cognitive/orchestration-cycle.js";
+import {
   integrateHotelPlannedToolCall,
   recoverPendingHotelRead,
   resumeApprovedHotelOperation,
@@ -168,6 +173,39 @@ async function plannedStep(state, acceptedEventId = "user-i6") {
   };
 }
 
+async function approvedReservationFixture(acceptedEventId = "approve-i6") {
+  const state = reservationState();
+  const { step, cycle } = await plannedStep(state, acceptedEventId);
+  const f = fixture({ "hms.createReservation": "approval" });
+  const proposed = await integrateHotelPlannedToolCall({
+    state,
+    cycle,
+    step,
+    context: f.executionContext,
+    admission: f.admission,
+    executor: f.executor,
+    now: NOW,
+  });
+  assert.equal(proposed.kind, "write_approval_required");
+  const operation = proposed.preparedOperation;
+  const approved = reduceTaskState(proposed.state, {
+    eventId: `approval-${acceptedEventId}`,
+    kind: "server_control",
+    sessionId: state.sessionId,
+    taskId: state.taskId,
+    expectedStateRevision: proposed.state.stateRevision,
+    occurredAt: NOW,
+    payload: {
+      kind: "prepared_operation_status_changed",
+      operationId: operation.operationId,
+      operationFingerprint: operation.operationFingerprint,
+      status: "approved",
+    },
+  });
+  assert.equal(approved.accepted, true);
+  return { state, f, operation, approvedState: approved.state };
+}
+
 test("Core admission canonicalizes without executing a side effect", async () => {
   const f = fixture({ "hms.createReservation": "approval" });
   const admission = await f.admission.admit(
@@ -245,7 +283,7 @@ test("tampered or stale CALL_TOOL is rejected before Core dispatch", async () =>
   assert.equal(f.calls.availability, 0);
 });
 
-test("Policy deny blocks before tool execution", async () => {
+test("Policy deny becomes one typed planning control and cannot auto-retry the tool", async () => {
   const state = baseState();
   const { step, cycle } = await plannedStep(state, "deny-i6");
   const f = fixture({ "hms.checkAvailability": "deny" });
@@ -258,10 +296,50 @@ test("Policy deny blocks before tool execution", async () => {
     executor: f.executor,
     now: NOW,
   });
-  assert.equal(result.kind, "blocked");
-  assert.equal(result.reason, "policy_denied:tenant_policy_denies_tool");
+  assert.equal(result.kind, "control_failure");
+  assert.equal(result.reasonCode, "policy_denied");
   assert.equal(f.calls.availability, 0);
   assert.equal(result.state.control.pendingToolInvocation, undefined);
+  assert.equal(result.state.stateRevision, state.stateRevision + 1);
+  assert.deepEqual(result.controlEvent.payload, {
+    kind: "tool_control_failure",
+    phase: "admission",
+    capabilityId: "hms.checkAvailability",
+    reasonCode: "policy_denied",
+  });
+  assert.equal(serverControlDisposition(result.controlEvent.payload), "PLANNING_TRIGGER");
+  assert.equal(result.state.recentEventIds.includes(result.controlEvent.eventId), true);
+
+  const trigger = { origin: "server", acceptedEventId: result.controlEvent.eventId };
+  const failureCycle = createOrchestrationCycleRecord({
+    cycleId: "cycle-policy-failure-i6",
+    trigger,
+    createdAt: NOW,
+  });
+  const planned = await runHotelPlanningCycle({
+    state: result.state,
+    primaryEvent: result.controlEvent,
+    cycle: failureCycle,
+    capabilities,
+    now: NOW,
+  });
+  assert.equal(planned.kind, "planned");
+  assert.equal(planned.nextStep.kind, "DEGRADE");
+  assert.equal(planned.nextStep.reasonCode, "tool_control_failure");
+  assert.equal(planned.nextStep.responseIntent, "tool_unavailable");
+  assert.equal(f.calls.availability, 0);
+});
+
+test("tool observation failure degrades instead of becoming an automatic retry", async () => {
+  const state = baseState();
+  const next = await planHotelTask({
+    state,
+    trigger: { origin: "tool", acceptedEventId: "tool-failure-i6", observationKind: "failure" },
+    capabilities,
+  });
+  assert.equal(next.kind, "DEGRADE");
+  assert.equal(next.reasonCode, "tool_execution_failure");
+  assert.equal(next.responseIntent, "tool_failure");
 });
 
 test("write proposal stores exact capability + canonical input and requires approval with zero side effects", async () => {
@@ -287,38 +365,9 @@ test("write proposal stores exact capability + canonical input and requires appr
 });
 
 test("validated approval resumes the exact PreparedOperation without Planner and executes once", async () => {
-  const state = reservationState();
-  const { step, cycle } = await plannedStep(state, "approve-i6");
-  const f = fixture({ "hms.createReservation": "approval" });
-  const proposed = await integrateHotelPlannedToolCall({
-    state,
-    cycle,
-    step,
-    context: f.executionContext,
-    admission: f.admission,
-    executor: f.executor,
-    now: NOW,
-  });
-  assert.equal(proposed.kind, "write_approval_required");
-  const operation = proposed.preparedOperation;
-  const approvalEvent = {
-    eventId: "approval-i6",
-    kind: "server_control",
-    sessionId: state.sessionId,
-    taskId: state.taskId,
-    expectedStateRevision: proposed.state.stateRevision,
-    occurredAt: NOW,
-    payload: {
-      kind: "prepared_operation_status_changed",
-      operationId: operation.operationId,
-      operationFingerprint: operation.operationFingerprint,
-      status: "approved",
-    },
-  };
-  const approved = reduceTaskState(proposed.state, approvalEvent);
-  assert.equal(approved.accepted, true);
+  const { f, operation, approvedState } = await approvedReservationFixture("approve-i6");
   const resumed = await resumeApprovedHotelOperation({
-    state: approved.state,
+    state: approvedState,
     context: f.executionContext,
     admission: f.admission,
     executor: f.executor,
@@ -330,6 +379,30 @@ test("validated approval resumes the exact PreparedOperation without Planner and
   assert.equal(f.calls.metas[0].approvedOperationFingerprint, operation.operationFingerprint);
   assert.equal(f.calls.metas[0].idempotencyKey, operation.operationId);
   assert.equal(resumed.rawResult.input.guestId, "guest:tenant-i6:actor-i6");
+});
+
+test("replaying the same approved PreparedOperation is Core-idempotent", async () => {
+  const { f, operation, approvedState } = await approvedReservationFixture("replay-i6");
+  const first = await resumeApprovedHotelOperation({
+    state: approvedState,
+    context: f.executionContext,
+    admission: f.admission,
+    executor: f.executor,
+    now: NOW,
+  });
+  const second = await resumeApprovedHotelOperation({
+    state: approvedState,
+    context: f.executionContext,
+    admission: f.admission,
+    executor: f.executor,
+    now: NOW,
+  });
+  assert.equal(first.kind, "executed");
+  assert.equal(second.kind, "executed");
+  assert.equal(f.calls.reservation, 1);
+  assert.equal(first.preparedOperation.operationId, operation.operationId);
+  assert.equal(second.preparedOperation.operationId, operation.operationId);
+  assert.deepEqual(second.rawResult, first.rawResult);
 });
 
 test("approved operation without exact capability identity is invalidated and never executed", async () => {
@@ -354,6 +427,23 @@ test("approved operation without exact capability identity is invalidated and ne
   legacyState.control.preparedOperation = legacyOperation;
   const result = await resumeApprovedHotelOperation({
     state: legacyState,
+    context: f.executionContext,
+    admission: f.admission,
+    executor: f.executor,
+    now: NOW,
+  });
+  assert.equal(result.kind, "invalidated");
+  assert.equal(result.reason, "prepared_capability_identity_missing_or_stale");
+  assert.equal(result.state.control.preparedOperation.status, "invalidated");
+  assert.equal(f.calls.reservation, 0);
+});
+
+test("approved operation with drifted capability contract identity is invalidated before execution", async () => {
+  const { f, approvedState } = await approvedReservationFixture("contract-drift-i6");
+  const drifted = structuredClone(approvedState);
+  drifted.control.preparedOperation.capabilityContractIdentity = "hms.createReservation@drifted";
+  const result = await resumeApprovedHotelOperation({
+    state: drifted,
     context: f.executionContext,
     admission: f.admission,
     executor: f.executor,
@@ -393,7 +483,7 @@ test("pending read recovery redispatches same admitted identity before lease exp
   assert.equal(f.calls.availability, 1);
 });
 
-test("expired read lease terminalizes without dispatch", async () => {
+test("expired read lease terminalizes then emits one recovery planning control without dispatch", async () => {
   const state = baseState();
   const { step } = await plannedStep(state, "expired-i6");
   const pendingState = structuredClone(state);
@@ -417,6 +507,49 @@ test("expired read lease terminalizes without dispatch", async () => {
   });
   assert.equal(result.kind, "terminal");
   assert.equal(result.status, "expired");
+  assert.equal(result.reasonCode, "lease_expired");
   assert.equal(result.state.control.pendingToolInvocation.status, "expired");
+  assert.equal(result.state.stateRevision, pendingState.stateRevision + 2);
+  assert.equal(result.controlEvents.length, 2);
+  assert.equal(result.controlEvents[0].payload.kind, "invocation_terminal");
+  assert.deepEqual(result.planningControlEvent.payload, {
+    kind: "tool_control_failure",
+    phase: "recovery",
+    capabilityId: "hms.checkAvailability",
+    reasonCode: "lease_expired",
+  });
+  assert.equal(serverControlDisposition(result.planningControlEvent.payload), "PLANNING_TRIGGER");
+  assert.equal(f.calls.availability, 0);
+});
+
+test("recovery policy deny terminalizes before emitting bounded planning control", async () => {
+  const state = baseState();
+  const { step } = await plannedStep(state, "recovery-deny-i6");
+  const pendingState = structuredClone(state);
+  pendingState.control.pendingToolInvocation = {
+    invocationId: "inv-recovery-deny-i6",
+    capabilityId: step.capabilityId,
+    status: "admitted",
+    inputSnapshot: structuredClone(step.groundedInput),
+    admittedAt: "2026-09-16T03:44:00.000Z",
+    leaseExpiresAt: "2026-09-16T03:46:00.000Z",
+    dependencyFingerprint: step.preconditionFingerprint,
+    dependencyPaths: ["lifecycle", "user.stay.checkIn", "user.stay.checkOut", "user.stay.guests"],
+  };
+  const f = fixture({ "hms.checkAvailability": "deny" });
+  const result = await recoverPendingHotelRead({
+    state: pendingState,
+    context: f.executionContext,
+    admission: f.admission,
+    executor: f.executor,
+    now: NOW,
+  });
+  assert.equal(result.kind, "terminal");
+  assert.equal(result.status, "failed");
+  assert.equal(result.reasonCode, "policy_denied");
+  assert.equal(result.state.control.pendingToolInvocation.status, "failed");
+  assert.equal(result.controlEvents.length, 2);
+  assert.equal(result.planningControlEvent.payload.kind, "tool_control_failure");
+  assert.equal(result.planningControlEvent.payload.reasonCode, "policy_denied");
   assert.equal(f.calls.availability, 0);
 });
