@@ -153,6 +153,13 @@ export type PreparedOperation = DependencyBound & {
   operationId: string;
   operationType: OperationIntent;
   operationFingerprint: string;
+  /**
+   * Exact Core capability identity selected before approval. Optional only for
+   * compatibility with pre-I6 synthetic state; I6 execution refuses to resume
+   * an approved operation unless both fields are present and current.
+   */
+  capabilityId?: string;
+  capabilityContractIdentity?: string;
   inputSnapshot: Readonly<Record<string, unknown>>;
   status: "prepared" | "approval_required" | "approved" | "invalidated";
 };
